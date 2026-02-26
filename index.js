@@ -18,16 +18,18 @@ app.get("/", (req, res) => {
 });
 
 // ===============================
-// 🔑 GET ACCESS TOKEN
+// 🔑 GET ACCESS TOKEN (FIXED)
 // ===============================
 async function getAccessToken() {
   try {
     const response = await axios.post(
-      "https://api.clickpesa.com/oauth/token",
-      {},
+      "https://api.clickpesa.com/v1/oauth/token",
+      new URLSearchParams({
+        grant_type: "client_credentials"
+      }),
       {
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
           "x-client-id": CLIENT_ID,
           "x-api-key": API_KEY
         }
@@ -35,6 +37,7 @@ async function getAccessToken() {
     );
 
     if (!response.data.access_token) {
+      console.log("Token Response:", response.data);
       throw new Error("No access token received");
     }
 
@@ -62,7 +65,7 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // 1️⃣ Get token
+    // 1️⃣ Get access token
     const token = await getAccessToken();
 
     // 2️⃣ Create payment
@@ -72,7 +75,8 @@ app.post("/create-payment", async (req, res) => {
         amount: amount,
         currency: "TZS",
         phone_number: phone,
-        callback_url: "https://unlockvip-backend.onrender.com/payment-callback"
+        callback_url:
+          "https://unlockvip-backend.onrender.com/payment-callback"
       },
       {
         headers: {
@@ -102,12 +106,6 @@ app.post("/create-payment", async (req, res) => {
 // ===============================
 app.post("/payment-callback", (req, res) => {
   console.log("Payment callback received:", req.body);
-
-  // 👉 Here you can:
-  // - Verify payment status
-  // - Unlock VIP access
-  // - Save transaction in database
-
   res.sendStatus(200);
 });
 
