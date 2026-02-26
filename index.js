@@ -1,25 +1,24 @@
+require("dotenv").config();
+
 const express = require("express");
 const axios = require("axios");
+const cors = require("cors");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+app.use(cors());
 app.use(express.json());
 
-// 🔐 ClickPesa Credentials (from Render Environment Variables)
 const CLIENT_ID = process.env.CLICKPESA_CLIENT_ID;
 const API_KEY = process.env.CLICKPESA_API_KEY;
 
-// ===============================
-// 🚀 ROOT ROUTE
-// ===============================
+// ROOT
 app.get("/", (req, res) => {
   res.send("UnlockVIP Backend is running 🚀");
 });
 
-// ===============================
-// 🔑 GET ACCESS TOKEN
-// ===============================
+// GET TOKEN
 async function getAccessToken() {
   try {
     const response = await axios.post(
@@ -28,92 +27,93 @@ async function getAccessToken() {
       {
         headers: {
           "client-id": CLIENT_ID,
-          "api-key": API_KEY
-        }
+          "api-key": API_KEY,
+          "Content-Type": "application/json",
+        },
       }
     );
 
-    if (!response.data.success) {
-      throw new Error("Token generation failed");
+    let token = response.data.token;
+
+    if (token.startsWith("Bearer ")) {
+      token = token.replace("Bearer ", "");
     }
 
-    // ⚠ ClickPesa already returns "Bearer ..."
-    return response.data.token;
+    return token;
 
   } catch (error) {
-    console.error(
-      "Access Token Error:",
-      error.response ? error.response.data : error.message
-    );
+    console.error("Token Error:", error.response?.data || error.message);
     throw new Error("Failed to get access token");
   }
 }
 
-// ===============================
-// 💳 CREATE PAYMENT
-// ===============================
+// CREATE PAYMENT
 app.post("/create-payment", async (req, res) => {
   try {
-    const { amount, phone } = req.body;
+    let { amount, phone } = req.body;
 
     if (!amount || !phone) {
       return res.status(400).json({
+        success: false,
         error: "Amount and phone are required"
       });
     }
 
-    // 1️⃣ Get JWT Token
+    // Format phone
+    phone = phone.toString().trim();
+
+    if (phone.startsWith("+255")) {
+      phone = phone.replace("+", "");
+    }
+
+    if (phone.startsWith("0")) {
+      phone = "255" + phone.substring(1);
+    }
+
+    if (!phone.startsWith("255") || phone.length !== 12) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid Tanzanian phone number"
+      });
+    }
+
     const token = await getAccessToken();
 
-    // 2️⃣ Create Payment
+    const orderReference = "ORDER" + Date.now();
+
     const paymentResponse = await axios.post(
-      "https://api.clickpesa.com/third-parties/payment",
+      "https://api.clickpesa.com/third-parties/payments/preview-ussd-push-request",
       {
-        amount: amount,
+        amount: amount.toString(),
         currency: "TZS",
-        phone_number: phone,
-        callback_url: "https://unlockvip-backend.onrender.com/payment-callback"
+        orderReference: orderReference,
+        phoneNumber: phone,
+        fetchSenderDetails: false
       },
       {
         headers: {
+          Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
-          Authorization: token   // DO NOT add Bearer again
-        }
+        },
       }
     );
 
-    return res.json(paymentResponse.data);
+    res.json({
+      success: true,
+      orderReference,
+      data: paymentResponse.data
+    });
 
   } catch (error) {
-    console.error(
-      "Payment Error:",
-      error.response ? error.response.data : error.message
-    );
+    console.error("Payment Error:", error.response?.data || error.message);
 
-    return res.status(500).json({
-      error: "Payment request failed",
-      details: error.response ? error.response.data : error.message
+    res.status(500).json({
+      success: false,
+      error: error.response?.data || error.message
     });
   }
 });
 
-// ===============================
-// 🔔 PAYMENT CALLBACK
-// ===============================
-app.post("/payment-callback", (req, res) => {
-  console.log("Payment callback received:", req.body);
-
-  // Here you can:
-  // - Verify payment status
-  // - Unlock VIP access
-  // - Save transaction in database
-
-  res.sendStatus(200);
-});
-
-// ===============================
-// 🟢 START SERVER
-// ===============================
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log("Server running on port", PORT);
 });
