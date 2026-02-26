@@ -1,13 +1,25 @@
-const express = require("express");
-const app = express();
-const PORT = process.env.PORT || 10000;
+app.post("/create-payment", async (req, res) => {
+  try {
+    const { phone } = req.body;
 
-app.use(express.json());
+    const response = await axios.post(
+      "https://api.clickpesa.com/transaction/initiate",
+      {
+        amount: 1500,
+        phone: phone,
+        currency: "TZS"
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.CLICKPESA_API_KEY}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
 
-app.get("/", (req, res) => {
-  res.send("UnlockVIP Backend is running 🚀");
-});
+    res.json(response.data);
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
