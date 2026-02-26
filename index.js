@@ -35,19 +35,23 @@ app.post("/create-payment", async (req, res) => {
     }
 
     // 1️⃣ Get Access Token
-    const authResponse = await axios.post(
-      "https://api.clickpesa.com/auth/token",
-      {},
-      {
-        headers: {
-          "x-client-id": CLIENT_ID,
-          "x-api-key": API_KEY,
-          "Content-Type": "application/json"
-        }
-      }
-    );
+const authResponse = await axios.post(
+  "https://api.clickpesa.com/v1/oauth/token",
+  {
+    grant_type: "client_credentials"
+  },
+  {
+    auth: {
+      username: CLIENT_ID,
+      password: API_KEY
+    },
+    headers: {
+      "Content-Type": "application/json"
+    }
+  }
+);
 
-    const accessToken = authResponse.data.access_token;
+const accessToken = authResponse.data.access_token;
 
     if (!accessToken) {
       return res.status(500).json({
