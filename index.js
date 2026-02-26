@@ -18,43 +18,42 @@ app.get("/", (req, res) => {
 });
 
 // ===============================
-// 🔑 GET ACCESS TOKEN (DEBUG MODE)
+// 🔑 STEP 1: GET JWT TOKEN
 // ===============================
 async function getAccessToken() {
   try {
     const response = await axios.post(
-      "https://api.clickpesa.com/v1/oauth/token",
-      new URLSearchParams({
-        grant_type: "client_credentials"
-      }),
+      "https://api.clickpesa.com/oauth/token",
+      {
+        client_id: CLIENT_ID,
+        api_key: API_KEY
+      },
       {
         headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "x-client-id": CLIENT_ID,
-          "x-api-key": API_KEY
+          "Content-Type": "application/json"
         }
       }
     );
 
-    console.log("FULL TOKEN RESPONSE:", response.data);
+    console.log("TOKEN RESPONSE:", response.data);
 
-    return response.data;
+    if (!response.data.token) {
+      throw new Error("No token received from ClickPesa");
+    }
+
+    return response.data.token;
 
   } catch (error) {
     console.error(
-      "Access Token Error FULL:",
+      "Access Token Error:",
       error.response ? error.response.data : error.message
     );
-
-    return {
-      error: true,
-      details: error.response ? error.response.data : error.message
-    };
+    throw new Error("Failed to get access token");
   }
 }
 
 // ===============================
-// 💳 CREATE PAYMENT
+// 💳 STEP 2: CREATE PAYMENT
 // ===============================
 app.post("/create-payment", async (req, res) => {
   try {
@@ -66,19 +65,10 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // 1️⃣ Get token
-    const tokenResponse = await getAccessToken();
+    // 1️⃣ Get JWT Token
+    const token = await getAccessToken();
 
-    // If token failed, return full debug info
-    if (!tokenResponse.access_token) {
-      return res.status(500).json({
-        token_debug: tokenResponse
-      });
-    }
-
-    const token = tokenResponse.access_token;
-
-    // 2️⃣ Create payment
+    // 2️⃣ Create Payment Request
     const paymentResponse = await axios.post(
       "https://api.clickpesa.com/third-parties/payment",
       {
@@ -100,7 +90,7 @@ app.post("/create-payment", async (req, res) => {
 
   } catch (error) {
     console.error(
-      "Payment Error FULL:",
+      "Payment Error:",
       error.response ? error.response.data : error.message
     );
 
