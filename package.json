@@ -1,7 +1,7 @@
 {
   "name": "unlockvip-backend",
   "version": "1.0.0",
-  "description": "UnlockVIP backend server",
+  "description": "Unlock VIP Backend Server",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
