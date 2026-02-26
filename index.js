@@ -6,40 +6,67 @@ const PORT = process.env.PORT || 10000;
 
 app.use(express.json());
 
-// Test route
+// Environment Variables
+const CLIENT_ID = process.env.CLICKPESA_CLIENT_ID;
+const API_KEY = process.env.CLICKPESA_API_KEY;
+
+// Root test route
 app.get("/", (req, res) => {
   res.send("UnlockVIP Backend is running 🚀");
 });
 
-// Create payment (1500 TZS fixed)
+// ===============================
+// 🔥 CREATE PAYMENT
+// ===============================
 app.post("/create-payment", async (req, res) => {
   try {
-    const { phone } = req.body;
+    const { amount, phone } = req.body;
+
+    if (!amount || !phone) {
+      return res.status(400).json({
+        error: "Amount and phone are required"
+      });
+    }
 
     const response = await axios.post(
-      "https://api.clickpesa.com/transaction/initiate",
+      "https://api.clickpesa.com/third-parties/payment",
       {
-        amount: 1500,
-        phone: phone,
-        currency: "TZS"
+        amount: amount,
+        currency: "TZS",
+        phone_number: phone,
+        callback_url:
+          "https://unlockvip-backend.onrender.com/payment-callback"
       },
       {
         headers: {
-          Authorization: `Bearer ${process.env.CLICKPESA_API_KEY}`,
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "x-client-id": CLIENT_ID,
+          "x-api-key": API_KEY
         }
       }
     );
 
     res.json(response.data);
-
   } catch (error) {
-    console.error(error.response?.data || error.message);
+    console.error(
+      error.response ? error.response.data : error.message
+    );
     res.status(500).json({
-      error: "Payment request failed",
-      details: error.response?.data || error.message
+      error: "Payment request failed"
     });
   }
+});
+
+// ===============================
+// 🔔 PAYMENT CALLBACK
+// ===============================
+app.post("/payment-callback", (req, res) => {
+  console.log("Payment callback received:");
+  console.log(req.body);
+
+  // Here you can update database or unlock user
+
+  res.sendStatus(200);
 });
 
 app.listen(PORT, () => {
