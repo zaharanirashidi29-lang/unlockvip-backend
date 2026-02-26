@@ -6,41 +6,95 @@ const PORT = process.env.PORT || 10000;
 
 app.use(express.json());
 
-// ===============================
-// ENV VARIABLES
-// ===============================
+// 🔐 ClickPesa Credentials (from Render Environment Variables)
 const CLIENT_ID = process.env.CLICKPESA_CLIENT_ID;
 const API_KEY = process.env.CLICKPESA_API_KEY;
 
-// ===============================
-// ROOT ROUTE
-// ===============================
+// Root route
 app.get("/", (req, res) => {
-  res.json({
-    message: "UnlockVIP Backend is running 🚀"
-  });
+  res.send("UnlockVIP Backend is running 🚀");
 });
 
 // ===============================
-// DEBUG ROUTE TEST
+// 🔑 STEP 1: GET ACCESS TOKEN
+// ===============================
+async function getAccessToken() {
+  try {
+    const response = await axios.post(
+      "https://api.clickpesa.com/oauth/token",
+      {},
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "x-client-id": CLIENT_ID,
+          "x-api-key": API_KEY
+        }
+      }
+    );
+
+    return response.data.access_token;
+  } catch (error) {
+    console.error(
+      "Access Token Error:",
+      error.response ? error.response.data : error.message
+    );
+    throw new Error("Failed to get access token");
+  }
+}
+
+// ===============================
+// 💳 STEP 2: CREATE PAYMENT
 // ===============================
 app.post("/create-payment", async (req, res) => {
-  console.log("==== CREATE PAYMENT ROUTE HIT ====");
-  console.log("BODY RECEIVED:", req.body);
-  console.log("CLIENT_ID:", CLIENT_ID ? "EXISTS" : "MISSING");
-  console.log("API_KEY:", API_KEY ? "EXISTS" : "MISSING");
+  try {
+    const { amount, phone } = req.body;
 
-  return res.json({
-    route: "create-payment",
-    received: req.body,
-    env: {
-      client_id: CLIENT_ID ? "OK" : "MISSING",
-      api_key: API_KEY ? "OK" : "MISSING"
+    if (!amount || !phone) {
+      return res.status(400).json({
+        error: "Amount and phone are required"
+      });
     }
-  });
+
+    const token = await getAccessToken();
+
+    const response = await axios.post(
+      "https://api.clickpesa.com/third-parties/payment",
+      {
+        amount: amount,
+        currency: "TZS",
+        phone_number: phone,
+        callback_url:
+          "https://unlockvip-backend.onrender.com/payment-callback"
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`
+        }
+      }
+    );
+
+    res.json(response.data);
+  } catch (error) {
+    console.error(
+      "Payment Error:",
+      error.response ? error.response.data : error.message
+    );
+
+    res.status(500).json({
+      error: "Payment request failed"
+    });
+  }
 });
 
 // ===============================
+// 🔔 PAYMENT CALLBACK
+// ===============================
+app.post("/payment-callback", (req, res) => {
+  console.log("Payment callback received:", req.body);
+  res.sendStatus(200);
+});
+
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
