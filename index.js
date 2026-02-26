@@ -18,7 +18,7 @@ app.get("/", (req, res) => {
 });
 
 // ===============================
-// 🔑 GET ACCESS TOKEN (FIXED)
+// 🔑 GET ACCESS TOKEN (DEBUG MODE)
 // ===============================
 async function getAccessToken() {
   try {
@@ -36,19 +36,20 @@ async function getAccessToken() {
       }
     );
 
-    if (!response.data.access_token) {
-      console.log("Token Response:", response.data);
-      throw new Error("No access token received");
-    }
+    console.log("FULL TOKEN RESPONSE:", response.data);
 
-    return response.data.access_token;
+    return response.data;
 
   } catch (error) {
     console.error(
-      "Access Token Error:",
+      "Access Token Error FULL:",
       error.response ? error.response.data : error.message
     );
-    throw new Error("Failed to get access token");
+
+    return {
+      error: true,
+      details: error.response ? error.response.data : error.message
+    };
   }
 }
 
@@ -65,8 +66,17 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // 1️⃣ Get access token
-    const token = await getAccessToken();
+    // 1️⃣ Get token
+    const tokenResponse = await getAccessToken();
+
+    // If token failed, return full debug info
+    if (!tokenResponse.access_token) {
+      return res.status(500).json({
+        token_debug: tokenResponse
+      });
+    }
+
+    const token = tokenResponse.access_token;
 
     // 2️⃣ Create payment
     const paymentResponse = await axios.post(
@@ -90,7 +100,7 @@ app.post("/create-payment", async (req, res) => {
 
   } catch (error) {
     console.error(
-      "Payment Error:",
+      "Payment Error FULL:",
       error.response ? error.response.data : error.message
     );
 
