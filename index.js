@@ -18,30 +18,26 @@ app.get("/", (req, res) => {
 });
 
 // ===============================
-// 🔑 STEP 1: GET JWT TOKEN
+// 🔑 GENERATE JWT TOKEN (CORRECT ENDPOINT)
 // ===============================
 async function getAccessToken() {
   try {
     const response = await axios.post(
-      "https://api.clickpesa.com/oauth/token",
-      {
-        client_id: CLIENT_ID,
-        api_key: API_KEY
-      },
+      "https://api.clickpesa.com/third-parties/generate-token",
+      {},
       {
         headers: {
-          "Content-Type": "application/json"
+          "client-id": CLIENT_ID,
+          "api-key": API_KEY
         }
       }
     );
 
-    console.log("TOKEN RESPONSE:", response.data);
-
-    if (!response.data.token) {
-      throw new Error("No token received from ClickPesa");
+    if (!response.data.success) {
+      throw new Error("Token generation failed");
     }
 
-    return response.data.token;
+    return response.data.token.replace("Bearer ", "");
 
   } catch (error) {
     console.error(
@@ -53,7 +49,7 @@ async function getAccessToken() {
 }
 
 // ===============================
-// 💳 STEP 2: CREATE PAYMENT
+// 💳 CREATE PAYMENT
 // ===============================
 app.post("/create-payment", async (req, res) => {
   try {
@@ -65,23 +61,20 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // 1️⃣ Get JWT Token
     const token = await getAccessToken();
 
-    // 2️⃣ Create Payment Request
     const paymentResponse = await axios.post(
       "https://api.clickpesa.com/third-parties/payment",
       {
         amount: amount,
         currency: "TZS",
         phone_number: phone,
-        callback_url:
-          "https://unlockvip-backend.onrender.com/payment-callback"
+        callback_url: "https://unlockvip-backend.onrender.com/payment-callback"
       },
       {
         headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json"
         }
       }
     );
