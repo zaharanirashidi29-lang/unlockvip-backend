@@ -18,7 +18,7 @@ app.get("/", (req, res) => {
 });
 
 // ===============================
-// 🔑 GENERATE JWT TOKEN (CORRECT ENDPOINT)
+// 🔑 GET ACCESS TOKEN
 // ===============================
 async function getAccessToken() {
   try {
@@ -37,7 +37,8 @@ async function getAccessToken() {
       throw new Error("Token generation failed");
     }
 
-    return response.data.token.replace("Bearer ", "");
+    // ⚠ ClickPesa already returns "Bearer ..."
+    return response.data.token;
 
   } catch (error) {
     console.error(
@@ -61,8 +62,10 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
+    // 1️⃣ Get JWT Token
     const token = await getAccessToken();
 
+    // 2️⃣ Create Payment
     const paymentResponse = await axios.post(
       "https://api.clickpesa.com/third-parties/payment",
       {
@@ -73,8 +76,8 @@ app.post("/create-payment", async (req, res) => {
       },
       {
         headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          Authorization: token   // DO NOT add Bearer again
         }
       }
     );
@@ -99,6 +102,12 @@ app.post("/create-payment", async (req, res) => {
 // ===============================
 app.post("/payment-callback", (req, res) => {
   console.log("Payment callback received:", req.body);
+
+  // Here you can:
+  // - Verify payment status
+  // - Unlock VIP access
+  // - Save transaction in database
+
   res.sendStatus(200);
 });
 
