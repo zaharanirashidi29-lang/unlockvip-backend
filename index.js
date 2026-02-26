@@ -26,7 +26,13 @@ app.get("/", (req, res) => {
 // 🔥 CREATE PAYMENT (PRODUCTION)
 // ===============================
 app.post("/create-payment", async (req, res) => {
-  try {
+  console.log("BODY RECEIVED:", req.body);
+
+  return res.json({
+    route: "create-payment",
+    body: req.body
+  });
+});
     const { amount, phone } = req.body;
 
     if (!amount || !phone) {
