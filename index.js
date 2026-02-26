@@ -18,7 +18,7 @@ app.get("/", (req, res) => {
   res.send("UnlockVIP Backend is running 🚀");
 });
 
-// GET TOKEN
+// GET TOKEN (DO NOT MODIFY TOKEN FORMAT)
 async function getAccessToken() {
   try {
     const response = await axios.post(
@@ -33,13 +33,8 @@ async function getAccessToken() {
       }
     );
 
-    let token = response.data.token;
-
-    if (token.startsWith("Bearer ")) {
-      token = token.replace("Bearer ", "");
-    }
-
-    return token;
+    // IMPORTANT: Do NOT remove Bearer prefix
+    return response.data.token;
 
   } catch (error) {
     console.error("Token Error:", error.response?.data || error.message);
@@ -47,7 +42,7 @@ async function getAccessToken() {
   }
 }
 
-// CREATE PAYMENT
+// REAL USSD PUSH
 app.post("/create-payment", async (req, res) => {
   try {
     let { amount, phone } = req.body;
@@ -82,17 +77,16 @@ app.post("/create-payment", async (req, res) => {
     const orderReference = "ORDER" + Date.now();
 
     const paymentResponse = await axios.post(
-      "https://api.clickpesa.com/third-parties/payments/preview-ussd-push-request",
+      "https://api.clickpesa.com/third-parties/payments/ussd-push-request",
       {
         amount: amount.toString(),
         currency: "TZS",
         orderReference: orderReference,
-        phoneNumber: phone,
-        fetchSenderDetails: false
+        phoneNumber: phone
       },
       {
         headers: {
-          Authorization: `Bearer ${token}`,
+          Authorization: token, // DO NOT add Bearer again
           "Content-Type": "application/json",
         },
       }
@@ -100,7 +94,6 @@ app.post("/create-payment", async (req, res) => {
 
     res.json({
       success: true,
-      orderReference,
       data: paymentResponse.data
     });
 
