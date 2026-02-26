@@ -10,15 +10,22 @@ const PORT = process.env.PORT || 10000;
 app.use(cors());
 app.use(express.json());
 
+// Load environment variables
 const CLIENT_ID = process.env.CLICKPESA_CLIENT_ID;
 const API_KEY = process.env.CLICKPESA_API_KEY;
 
-// ROOT
+// Debug (REMOVE later after confirming)
+console.log("CLIENT_ID:", CLIENT_ID ? "Loaded ✅" : "Missing ❌");
+console.log("API_KEY:", API_KEY ? "Loaded ✅" : "Missing ❌");
+
+// ROOT ROUTE
 app.get("/", (req, res) => {
   res.send("UnlockVIP Backend is running 🚀");
 });
 
-// GET TOKEN (DO NOT MODIFY TOKEN FORMAT)
+// ===============================
+// GET ACCESS TOKEN
+// ===============================
 async function getAccessToken() {
   try {
     const response = await axios.post(
@@ -33,16 +40,18 @@ async function getAccessToken() {
       }
     );
 
-    // IMPORTANT: Do NOT remove Bearer prefix
+    // ClickPesa already includes Bearer prefix
     return response.data.token;
 
   } catch (error) {
-    console.error("Token Error:", error.response?.data || error.message);
+    console.error("❌ Token Error:", error.response?.data || error.message);
     throw new Error("Failed to get access token");
   }
 }
 
+// ===============================
 // REAL USSD PUSH
+// ===============================
 app.post("/create-payment", async (req, res) => {
   try {
     let { amount, phone } = req.body;
@@ -54,7 +63,7 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // Format phone
+    // Format Tanzania phone number
     phone = phone.toString().trim();
 
     if (phone.startsWith("+255")) {
@@ -68,7 +77,7 @@ app.post("/create-payment", async (req, res) => {
     if (!phone.startsWith("255") || phone.length !== 12) {
       return res.status(400).json({
         success: false,
-        error: "Invalid Tanzanian phone number"
+        error: "Invalid Tanzanian phone number format"
       });
     }
 
@@ -92,13 +101,15 @@ app.post("/create-payment", async (req, res) => {
       }
     );
 
+    console.log("✅ Push Response:", paymentResponse.data);
+
     res.json({
       success: true,
-      data: paymentResponse.data
+      response: paymentResponse.data
     });
 
   } catch (error) {
-    console.error("Payment Error:", error.response?.data || error.message);
+    console.error("❌ Payment Error:", error.response?.data || error.message);
 
     res.status(500).json({
       success: false,
@@ -107,6 +118,9 @@ app.post("/create-payment", async (req, res) => {
   }
 });
 
+// ===============================
+// START SERVER
+// ===============================
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
