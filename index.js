@@ -10,13 +10,15 @@ app.use(express.json());
 const CLIENT_ID = process.env.CLICKPESA_CLIENT_ID;
 const API_KEY = process.env.CLICKPESA_API_KEY;
 
-// Root route
+// ===============================
+// 🚀 ROOT ROUTE
+// ===============================
 app.get("/", (req, res) => {
   res.send("UnlockVIP Backend is running 🚀");
 });
 
 // ===============================
-// 🔑 STEP 1: GET ACCESS TOKEN
+// 🔑 GET ACCESS TOKEN
 // ===============================
 async function getAccessToken() {
   try {
@@ -32,7 +34,12 @@ async function getAccessToken() {
       }
     );
 
+    if (!response.data.access_token) {
+      throw new Error("No access token received");
+    }
+
     return response.data.access_token;
+
   } catch (error) {
     console.error(
       "Access Token Error:",
@@ -43,7 +50,7 @@ async function getAccessToken() {
 }
 
 // ===============================
-// 💳 STEP 2: CREATE PAYMENT
+// 💳 CREATE PAYMENT
 // ===============================
 app.post("/create-payment", async (req, res) => {
   try {
@@ -55,16 +62,17 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
+    // 1️⃣ Get token
     const token = await getAccessToken();
 
-    const response = await axios.post(
+    // 2️⃣ Create payment
+    const paymentResponse = await axios.post(
       "https://api.clickpesa.com/third-parties/payment",
       {
         amount: amount,
         currency: "TZS",
         phone_number: phone,
-        callback_url:
-          "https://unlockvip-backend.onrender.com/payment-callback"
+        callback_url: "https://unlockvip-backend.onrender.com/payment-callback"
       },
       {
         headers: {
@@ -74,15 +82,17 @@ app.post("/create-payment", async (req, res) => {
       }
     );
 
-    res.json(response.data);
+    return res.json(paymentResponse.data);
+
   } catch (error) {
     console.error(
       "Payment Error:",
       error.response ? error.response.data : error.message
     );
 
-    res.status(500).json({
-      error: "Payment request failed"
+    return res.status(500).json({
+      error: "Payment request failed",
+      details: error.response ? error.response.data : error.message
     });
   }
 });
@@ -92,9 +102,18 @@ app.post("/create-payment", async (req, res) => {
 // ===============================
 app.post("/payment-callback", (req, res) => {
   console.log("Payment callback received:", req.body);
+
+  // 👉 Here you can:
+  // - Verify payment status
+  // - Unlock VIP access
+  // - Save transaction in database
+
   res.sendStatus(200);
 });
 
+// ===============================
+// 🟢 START SERVER
+// ===============================
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
