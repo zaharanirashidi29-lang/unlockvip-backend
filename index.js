@@ -1,3 +1,4 @@
+
 const express = require("express");
 const axios = require("axios");
 
@@ -22,7 +23,7 @@ app.get("/", (req, res) => {
 });
 
 // ===============================
-// 🔥 CREATE PAYMENT
+// 🔥 CREATE PAYMENT (PRODUCTION)
 // ===============================
 app.post("/create-payment", async (req, res) => {
   try {
@@ -34,33 +35,13 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // 1️⃣ Get Access Token
-const authResponse = await axios.post(
-  "https://api.clickpesa.com/v1/oauth/token",
-  {
-    grant_type: "client_credentials"
-  },
-  {
-    auth: {
-      username: CLIENT_ID,
-      password: API_KEY
-    },
-    headers: {
-      "Content-Type": "application/json"
-    }
-  }
-);
-
-const accessToken = authResponse.data.access_token;
-
-    if (!accessToken) {
+    if (!CLIENT_ID || !API_KEY) {
       return res.status(500).json({
-        error: "Failed to get access token"
+        error: "ClickPesa credentials missing in environment variables"
       });
     }
 
-    // 2️⃣ Create Payment
-    const paymentResponse = await axios.post(
+    const response = await axios.post(
       "https://api.clickpesa.com/third-parties/payment",
       {
         amount: amount,
@@ -71,21 +52,21 @@ const accessToken = authResponse.data.access_token;
       },
       {
         headers: {
-          "Authorization": `Bearer ${accessToken}`,
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "x-client-id": CLIENT_ID.trim(),
+          "x-api-key": API_KEY.trim()
         }
       }
     );
 
-    res.json(paymentResponse.data);
+    res.json(response.data);
 
   } catch (error) {
-    console.error("Payment Error:");
+    console.error("ClickPesa Error:");
     console.error(error.response?.data || error.message);
 
     res.status(500).json({
-      error: "Payment request failed",
-      details: error.response?.data || error.message
+      error: error.response?.data || "Payment request failed"
     });
   }
 });
@@ -97,11 +78,10 @@ app.post("/payment-callback", (req, res) => {
   console.log("Payment callback received:");
   console.log(req.body);
 
-  // Here you can:
-  // - verify transaction
-  // - update database
+  // TODO:
+  // - verify payment status
   // - unlock VIP
-  // - send confirmation
+  // - store transaction in DB
 
   res.sendStatus(200);
 });
