@@ -35,7 +35,7 @@ async function getAccessToken() {
       }
     );
 
-    // IMPORTANT: token already includes "Bearer "
+    // ClickPesa already returns token with "Bearer "
     return response.data.token;
 
   } catch (error) {
@@ -51,7 +51,7 @@ app.post("/create-payment", async (req, res) => {
   try {
     let { phone } = req.body;
 
-    const amount = 18500;
+    const amount = 3000;   // ✅ price changed here
 
     if (!phone) {
       return res.status(400).json({
@@ -60,7 +60,7 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // Format phone
+    // Format phone number
     phone = phone.toString().trim();
 
     if (phone.startsWith("+255")) {
