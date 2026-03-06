@@ -107,7 +107,11 @@ app.post("/create-payment", async (req, res) => {
 
     res.status(500).json({
       success: false,
-      error: error.response?.data?.message || error.message
+      error:
+        error.response?.data?.detail ||
+        error.response?.data?.message ||
+        error.response?.data?.error ||
+        error.message
     });
   }
 });
