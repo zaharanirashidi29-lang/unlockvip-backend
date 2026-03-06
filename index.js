@@ -49,12 +49,14 @@ async function getAccessToken() {
 // =======================
 app.post("/create-payment", async (req, res) => {
   try {
-    let { amount, phone } = req.body;
+    let { phone } = req.body;
 
-    if (!amount || !phone) {
+    const amount = 18500;
+
+    if (!phone) {
       return res.status(400).json({
         success: false,
-        error: "Amount and phone are required"
+        error: "Phone is required"
       });
     }
 
@@ -89,7 +91,7 @@ app.post("/create-payment", async (req, res) => {
       },
       {
         headers: {
-          Authorization: token, // token already contains Bearer
+          Authorization: token,
           "Content-Type": "application/json",
         },
       }
