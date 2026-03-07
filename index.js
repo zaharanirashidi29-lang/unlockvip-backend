@@ -10,8 +10,9 @@ const PORT = process.env.PORT || 10000;
 app.use(cors());
 app.use(express.json());
 
-const CLIENT_ID = process.env.CLICKPESA_CLIENT_ID;
-const API_KEY = process.env.CLICKPESA_API_KEY;
+// ✅ New ClickPesa Credentials
+const CLIENT_ID = "IDes0my1ZUCZYRfn3LS10UtQKg6yrp91";
+const API_KEY = "SKns62YS6IGfu5y2AG1nEj7Hzka7BmBSXz4T9r0bEf";
 
 // ROOT TEST
 app.get("/", (req, res) => {
