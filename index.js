@@ -10,11 +10,15 @@ const PORT = process.env.PORT || 10000;
 app.use(cors());
 app.use(express.json());
 
-// ✅ New ClickPesa Credentials
-const CLIENT_ID = "IDes0my1ZUCZYRfn3LS10UtQKg6yrp91";
-const API_KEY = "SKns62YS6IGfu5y2AG1nEj7Hzka7BmBSXz4T9r0bEf";
+// =======================
+// 🔑 ClickPesa Credentials
+// =======================
+const CLIENT_ID = "IDX2cqS4w9OUph87SR78OThv0d5m252K";
+const API_KEY = "SK0rAOfMkRWntyUp1At67Ms3V3eOuesGbSqlHm3n40";
 
+// =======================
 // ROOT TEST
+// =======================
 app.get("/", (req, res) => {
   res.send("UnlockVIP Backend is running 🚀");
 });
@@ -24,6 +28,7 @@ app.get("/", (req, res) => {
 // =======================
 async function getAccessToken() {
   try {
+
     const response = await axios.post(
       "https://api.clickpesa.com/third-parties/generate-token",
       {},
@@ -36,23 +41,32 @@ async function getAccessToken() {
       }
     );
 
-    // ClickPesa already returns token with "Bearer "
-    return response.data.token;
+    let token = response.data.token;
+
+    // Ensure Bearer prefix
+    if (!token.startsWith("Bearer")) {
+      token = `Bearer ${token}`;
+    }
+
+    console.log("🔑 Generated Token:", token);
+
+    return token;
 
   } catch (error) {
-    console.error("Token Error:", error.response?.data || error.message);
+    console.error("❌ Token Error:", error.response?.data || error.message);
     throw new Error("Failed to get access token");
   }
 }
 
 // =======================
-// 💳 REAL USSD PUSH
+// 💳 CREATE PAYMENT
 // =======================
 app.post("/create-payment", async (req, res) => {
   try {
+
     let { phone } = req.body;
 
-    const amount = 3000;   // ✅ price changed here
+    const amount = 3000; // ✅ Fixed price
 
     if (!phone) {
       return res.status(400).json({
@@ -61,7 +75,10 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // Format phone number
+    // =======================
+    // FORMAT PHONE NUMBER
+    // =======================
+
     phone = phone.toString().trim();
 
     if (phone.startsWith("+255")) {
@@ -80,7 +97,19 @@ app.post("/create-payment", async (req, res) => {
     }
 
     const token = await getAccessToken();
-    const orderReference = "ORDER" + Date.now();
+
+    // =======================
+    // ORDER REFERENCE
+    // =======================
+
+    const orderReference = "ORD" + Date.now();
+
+    console.log("📦 Payment Request:");
+    console.log({
+      amount,
+      phone,
+      orderReference
+    });
 
     const paymentResponse = await axios.post(
       "https://api.clickpesa.com/third-parties/payments/initiate-ussd-push-request",
@@ -98,13 +127,16 @@ app.post("/create-payment", async (req, res) => {
       }
     );
 
+    console.log("✅ ClickPesa Response:", paymentResponse.data);
+
     res.json({
       success: true,
       payment: paymentResponse.data
     });
 
   } catch (error) {
-    console.error("Payment Error:", error.response?.data || error.message);
+
+    console.error("❌ Payment Error:", error.response?.data || error.message);
 
     res.status(500).json({
       success: false,
@@ -119,5 +151,5 @@ app.post("/create-payment", async (req, res) => {
 
 // =======================
 app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+  console.log("🚀 Server running on port", PORT);
 });
