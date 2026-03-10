@@ -13,8 +13,8 @@ app.use(express.json());
 // =======================
 // 🔑 ClickPesa Credentials
 // =======================
-const CLIENT_ID = "IDkaU3UZdz3kOHv4z0GBbsEKiJdQ0eI2";
-const API_KEY = "SKdzcni5OS5WiVEBlsFHmfZVKokINVVL1j4eKPhGgH";
+const CLIENT_ID = "IDg2xH1zjro80S4O0FNtdYGd5XDvaL0f";
+const API_KEY = "SKwxRZMRTrdD9t4VA5nghb9F988dGTl63Lmgjcihoj";
 
 // =======================
 // ROOT TEST
@@ -43,7 +43,6 @@ async function getAccessToken() {
 
     let token = response.data.token;
 
-    // Ensure Bearer prefix
     if (!token.startsWith("Bearer")) {
       token = `Bearer ${token}`;
     }
@@ -66,7 +65,7 @@ app.post("/create-payment", async (req, res) => {
 
     let { phone } = req.body;
 
-    const amount = 3000; // ✅ Fixed price
+    const amount = 3000;
 
     if (!phone) {
       return res.status(400).json({
@@ -74,10 +73,6 @@ app.post("/create-payment", async (req, res) => {
         error: "Phone is required"
       });
     }
-
-    // =======================
-    // FORMAT PHONE NUMBER
-    // =======================
 
     phone = phone.toString().trim();
 
@@ -97,10 +92,6 @@ app.post("/create-payment", async (req, res) => {
     }
 
     const token = await getAccessToken();
-
-    // =======================
-    // ORDER REFERENCE
-    // =======================
 
     const orderReference = "ORD" + Date.now();
 
