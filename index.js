@@ -13,8 +13,8 @@ app.use(express.json());
 // =======================
 // 🔑 ClickPesa Credentials
 // =======================
-const CLIENT_ID = "IDg2xH1zjro80S4O0FNtdYGd5XDvaL0f";
-const API_KEY = "SKwxRZMRTrdD9t4VA5nghb9F988dGTl63Lmgjcihoj";
+const CLIENT_ID = "ID2ZWZgC0wCzH4H76aIrCgz5V1uGMxY3";
+const API_KEY = "SKIBLDXTAp2WtrIeKimrFLa27ObErxiZhzvb2Y1Ofx";
 
 // =======================
 // ROOT TEST
