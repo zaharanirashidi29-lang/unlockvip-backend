@@ -18,8 +18,8 @@ let payments = [];
 // =======================
 // 🔑 ClickPesa Credentials
 // =======================
-const CLIENT_ID = "ID2ZWZgC0wCzH4H76aIrCgz5V1uGMxY3";
-const API_KEY = "SKIBLDXTAp2WtrIeKimrFLa27ObErxiZhzvb2Y1Ofx";
+const CLIENT_ID = "IDGG7esAa8NxA4a8QKQZQtF8jANvbyWv";
+const API_KEY = "SK6AKepmgISgHgWC5RMlWVfWw57p7BMv4bXozBIFaF";
 
 // =======================
 // ROOT TEST
