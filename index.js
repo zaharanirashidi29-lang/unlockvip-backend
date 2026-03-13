@@ -11,7 +11,9 @@ const PORT = process.env.PORT || 10000;
 // =======================
 // 🗄️ MONGODB CONNECTION
 // =======================
-mongoose.connect("mongodb+srv://zaharanirashidi29_db_user:oQgtq3g1JHIgtIT2@cluster0.a6wjozy.mongodb.net/?appName=Cluster0")
+mongoose.connect(
+  "mongodb+srv://zaharanirashidi29_db_user:oQgtq3g1JHIgtIT2@cluster0.a6wjozy.mongodb.net/unlockvip?retryWrites=true&w=majority"
+)
 .then(() => console.log("MongoDB Connected"))
 .catch(err => console.log("MongoDB Error:", err));
 
@@ -174,7 +176,6 @@ app.post("/create-payment", async (req, res) => {
 // 📊 ADMIN DASHBOARD DATA
 // =======================
 app.get("/admin/payments", async (req, res) => {
-
   try {
 
     const data = await Payment.find().sort({ _id: -1 });
@@ -186,7 +187,6 @@ app.get("/admin/payments", async (req, res) => {
     res.status(500).json({ error: error.message });
 
   }
-
 });
 
 // =======================
