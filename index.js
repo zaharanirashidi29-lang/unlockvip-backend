@@ -35,8 +35,8 @@ const Payment = mongoose.model("Payment", paymentSchema);
 // =======================
 // 🔑 ClickPesa Credentials
 // =======================
-const CLIENT_ID = "IDGG7esAa8NxA4a8QKQZQtF8jANvbyWv";
-const API_KEY = "SK6AKepmgISgHgWC5RMlWVfWw57p7BMv4bXozBIFaF";
+const CLIENT_ID = "ID4H1iQHXDo0yyUqEaBISuYrSecymUt1";
+const API_KEY = "SKSyvc8cxpUHhPdNrHVhmGZsDsbTCNA88j6ynPqdAY";
 
 // =======================
 // ROOT TEST
