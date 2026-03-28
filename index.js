@@ -45,10 +45,10 @@ const paymentSchema = new mongoose.Schema({
 const Payment = mongoose.model("Payment", paymentSchema);
 
 // =======================
-// 🔑 CLICKPESA KEYS (UPDATED)
+// 🔑 CLICKPESA KEYS (FROM RENDER)
 // =======================
-const CLIENT_ID = "IDWY78v5J43bO1Af2ZD7yxoKruOtsvKk";
-const API_KEY = "SKrgc5udTSi3pGmmnZMMc8n2UCNqoYgOaMm1sPpKLB";
+const CLIENT_ID = process.env.CLIENT_ID;
+const API_KEY = process.env.API_KEY;
 
 // =======================
 app.get("/", (req, res) => {
@@ -186,7 +186,7 @@ app.post("/create-payment", async (req, res) => {
 });
 
 // =======================
-// ✅ ADMIN (FIXED ORDER + NO DUPLICATES)
+// ✅ ADMIN (NO DUPLICATES)
 // =======================
 app.get("/admin/payments", async (req, res) => {
 
