@@ -47,8 +47,8 @@ const Payment = mongoose.model("Payment", paymentSchema);
 // =======================
 // 🔑 CLICKPESA KEYS (UPDATED ONLY)
 // =======================
-const CLIENT_ID = "IDoyNPRgIOPMcvadCQZEUHaoZbqpm6WS";
-const API_KEY = "SK6hQzRThqLQcDFt7NA6rzxrTAiE8Wi0FDWPHzRItg";
+const CLIENT_ID = "IDcbg3Qej7hj7SqTAUaf0qViKmJB46Su";
+const API_KEY = "SK8wC6theopgC1xUvgqBkNuHU5ncuhx7sWz50GjcVn";
 
 // =======================
 app.get("/", (req, res) => {
