@@ -17,9 +17,26 @@ app.use(express.json());
 // =======================
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/unlockvip";
 
-mongoose.connect(MONGO_URI)
-.then(() => console.log("MongoDB Connected", MONGO_URI))
-.catch(err => console.log("MongoDB Error:", err));
+mongoose.connect(MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+})
+.then(() => {
+  console.log("MongoDB Connected", MONGO_URI);
+  // =======================
+  // 🚀 START SERVER
+  // =======================
+  app.listen(PORT, () => {
+    console.log("🚀 Server running on port", PORT);
+    console.log("📚 API Documentation: http://localhost:" + PORT + "/api/docs");
+    console.log("📊 Health Check: http://localhost:" + PORT + "/api/v1/health");
+    console.log("🔗 Base URL: http://localhost:" + PORT);
+  });
+})
+.catch(err => {
+  console.error("MongoDB Connection Failed:", err);
+  process.exit(1);
+});
 
 // =======================
 // 📊 SCHEMAS
@@ -57,8 +74,8 @@ const Transaction = mongoose.model("Transaction", transactionSchema);
 // =======================
 // 🔑 PRIMESTACK KEYS
 // =======================
-const APP_ID = process.env.APP_ID || process.env.X_APP_ID || "MOBILE_APP_01";
-const SECRET_KEY = process.env.SECRET_KEY || process.env.X_SECRET_KEY || "your_shared_secret_key";
+const APP_ID = process.env.APP_ID;
+const SECRET_KEY = process.env.SECRET_KEY;
 const PRIMESTACK_BASE_URL = process.env.PRIMESTACK_URL || "https://paymentgw.textify.africa";
 
 // For backward compatibility
@@ -744,11 +761,5 @@ app.get("/api/docs", (req, res) => {
 
 
 // =======================
-// 🚀 START SERVER
+// 🚀 START SERVER (MOVED TO MONGO CONNECT SUCCESS)
 // =======================
-app.listen(PORT, () => {
-  console.log("🚀 Server running on port", PORT);
-  console.log("📚 API Documentation: http://localhost:" + PORT + "/api/docs");
-  console.log("📊 Health Check: http://localhost:" + PORT + "/api/v1/health");
-  console.log("🔗 Base URL: http://localhost:" + PORT);
-});
