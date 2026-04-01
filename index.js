@@ -63,7 +63,74 @@ function generateSignature(payload, timestamp) {
 }
 
 // =======================
-// 💳 CREATE PAYMENT
+// � PAYMENT STATUS POLLING (CONFIRMED_BY_QUERY)
+// =======================
+function pollPaymentStatus(reference) {
+  const interval = setInterval(async () => {
+    try {
+      const existing = await Payment.findOne({ reference });
+      if (!existing || existing.status === "COMPLETED" || existing.status === "FAILED") {
+        clearInterval(interval);
+        return;
+      }
+
+      const timestamp = Math.floor(Date.now() / 1000);
+      const payload = JSON.stringify({ reference });
+      const signature = generateSignature(payload, timestamp);
+
+      const response = await axios.post(
+        "https://paymentgw.textify.africa/api/v1/query",
+        { reference },
+        {
+          headers: {
+            "Content-Type": "application/json",
+            "X-App-ID": APP_ID,
+            "X-Timestamp": timestamp,
+            "X-Signature": signature
+          }
+        }
+      );
+
+      console.log("🔍 Inquiry result:", response.data);
+
+      if (response.data.payment_status === "SUCCESS") {
+        const updated = await Payment.findOneAndUpdate(
+          { reference, status: { $ne: "COMPLETED" } },
+          {
+            status: "COMPLETED",
+            reason: "CONFIRMED_BY_QUERY",
+            result: response.data.result,
+            resultcode: response.data.resultcode,
+            message: response.data.message
+          },
+          { new: true }
+        );
+
+        if (updated) {
+          console.log("✅ Status set to COMPLETED via CONFIRMED_BY_QUERY for", reference);
+          clearInterval(interval);
+        }
+      } else if (response.data.payment_status === "FAILED") {
+        await Payment.findOneAndUpdate(
+          { reference },
+          {
+            status: "FAILED",
+            reason: "FAILED_BY_QUERY",
+            result: response.data.result,
+            resultcode: response.data.resultcode,
+            message: response.data.message
+          }
+        );
+        clearInterval(interval);
+      }
+    } catch (error) {
+      console.error("❌ Polling error for", reference, error.response?.data || error.message);
+    }
+  }, 12000);
+}
+
+// =======================
+// �💳 CREATE PAYMENT
 // =======================
 app.post("/create-payment", async (req, res) => {
   try {
@@ -158,6 +225,11 @@ app.post("/create-payment", async (req, res) => {
         provider_response: response.data.provider_response
       }
     );
+
+    // start inquiry polling only when still pending/processing
+    if (response.data.payment_status === "PENDING" || response.data.payment_status === "PROCESSING" || !response.data.payment_status) {
+      pollPaymentStatus(reference);
+    }
 
     res.json({
       success: true,
