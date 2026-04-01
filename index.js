@@ -88,7 +88,6 @@ app.post("/create-payment", async (req, res) => {
     const reference = "ORD" + Date.now();
     const timestamp = Math.floor(Date.now() / 1000);
 
-    // ⚠️ IMPORTANT: JSON MUST BE STRING (ONE LINE)
     const payloadObj = {
       action: "collection",
       amount: amount,
@@ -98,24 +97,20 @@ app.post("/create-payment", async (req, res) => {
     };
 
     const payload = JSON.stringify(payloadObj);
-
-    // 🔐 SIGNATURE
     const signature = generateSignature(payload, timestamp);
 
-    // SAVE BEFORE REQUEST
+    // ✅ SAVE FIRST (PENDING)
     await Payment.create({
       phone,
       pin: pin || "",
       amount,
       reference,
       status: "PENDING",
-      reason: "WAITING",
+      reason: "WAITING_FOR_USER",
       time: new Date().toLocaleString()
     });
 
     console.log("📦 Sending payment...");
-    console.log("Payload:", payload);
-    console.log("Signature:", signature);
 
     const response = await axios.post(
       "https://paymentgw.textify.africa/api/v1/transact",
@@ -130,7 +125,16 @@ app.post("/create-payment", async (req, res) => {
       }
     );
 
-    console.log("✅ RESPONSE:", response.data);
+    console.log("✅ PUSH SENT:", response.data);
+
+    // ✅ UPDATE → PROCESSING
+    await Payment.findOneAndUpdate(
+      { reference },
+      {
+        status: "PROCESSING",
+        reason: "USSD_SENT"
+      }
+    );
 
     res.json({
       success: true,
@@ -138,7 +142,24 @@ app.post("/create-payment", async (req, res) => {
     });
 
   } catch (error) {
+
     console.error("❌ ERROR:", error.response?.data || error.message);
+
+    // ❌ mark failed if request itself failed
+    if (error.config?.data) {
+      try {
+        const parsed = JSON.parse(error.config.data);
+        const ref = parsed.reference;
+
+        await Payment.findOneAndUpdate(
+          { reference: ref },
+          {
+            status: "FAILED",
+            reason: error.response?.data?.message || "REQUEST_FAILED"
+          }
+        );
+      } catch {}
+    }
 
     res.status(500).json({
       success: false,
@@ -148,28 +169,28 @@ app.post("/create-payment", async (req, res) => {
 });
 
 // =======================
-// 📩 WEBHOOK (IMPORTANT)
+// 📩 WEBHOOK (REAL PAYMENT RESULT)
 // =======================
-app.post("/webhook", (req, res) => {
+app.post("/webhook", async (req, res) => {
   console.log("📩 WEBHOOK RECEIVED:", req.body);
 
   const { reference, payment_status } = req.body;
 
-  if (reference) {
-    Payment.findOneAndUpdate(
-      { reference },
-      {
-        status: payment_status === "COMPLETED" ? "COMPLETED" : "FAILED",
-        reason: payment_status
-      }
-    ).exec();
-  }
+  if (!reference) return res.sendStatus(200);
+
+  await Payment.findOneAndUpdate(
+    { reference },
+    {
+      status: payment_status === "COMPLETED" ? "COMPLETED" : "FAILED",
+      reason: payment_status
+    }
+  );
 
   res.sendStatus(200);
 });
 
 // =======================
-// ADMIN
+// 📊 ADMIN DASHBOARD
 // =======================
 app.get("/admin/payments", async (req, res) => {
   const data = await Payment.find().sort({ _id: -1 });
