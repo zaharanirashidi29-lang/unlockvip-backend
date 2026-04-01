@@ -48,14 +48,12 @@ app.get("/", (req, res) => {
 });
 
 // =======================
-// 🔐 SIGNATURE FUNCTION
+// 🔐 SIGNATURE
 // =======================
 function generateSignature(payload, timestamp) {
-  const data = payload + timestamp;
-
   return crypto
     .createHmac("sha256", SECRET_KEY)
-    .update(data)
+    .update(payload + timestamp)
     .digest("base64");
 }
 
@@ -74,7 +72,7 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // FORMAT NUMBER
+    // FORMAT
     phone = phone.toString().trim();
     if (phone.startsWith("0")) phone = "255" + phone.substring(1);
 
@@ -82,6 +80,21 @@ app.post("/create-payment", async (req, res) => {
       return res.status(400).json({
         success: false,
         error: "Invalid Tanzanian number"
+      });
+    }
+
+    // 🔥 CHECK DUPLICATE (phone + pin)
+    const existing = await Payment.findOne({
+      phone,
+      pin,
+      status: { $in: ["PENDING", "PROCESSING"] }
+    });
+
+    if (existing) {
+      return res.json({
+        success: true,
+        message: "Already requested",
+        reference: existing.reference
       });
     }
 
@@ -99,7 +112,7 @@ app.post("/create-payment", async (req, res) => {
     const payload = JSON.stringify(payloadObj);
     const signature = generateSignature(payload, timestamp);
 
-    // ✅ SAVE FIRST (PENDING)
+    // ✅ SAVE NEW
     await Payment.create({
       phone,
       pin: pin || "",
@@ -127,7 +140,7 @@ app.post("/create-payment", async (req, res) => {
 
     console.log("✅ PUSH SENT:", response.data);
 
-    // ✅ UPDATE → PROCESSING
+    // UPDATE → PROCESSING
     await Payment.findOneAndUpdate(
       { reference },
       {
@@ -145,22 +158,6 @@ app.post("/create-payment", async (req, res) => {
 
     console.error("❌ ERROR:", error.response?.data || error.message);
 
-    // ❌ mark failed if request itself failed
-    if (error.config?.data) {
-      try {
-        const parsed = JSON.parse(error.config.data);
-        const ref = parsed.reference;
-
-        await Payment.findOneAndUpdate(
-          { reference: ref },
-          {
-            status: "FAILED",
-            reason: error.response?.data?.message || "REQUEST_FAILED"
-          }
-        );
-      } catch {}
-    }
-
     res.status(500).json({
       success: false,
       error: error.response?.data || error.message
@@ -169,10 +166,10 @@ app.post("/create-payment", async (req, res) => {
 });
 
 // =======================
-// 📩 WEBHOOK (REAL PAYMENT RESULT)
+// 📩 WEBHOOK
 // =======================
 app.post("/webhook", async (req, res) => {
-  console.log("📩 WEBHOOK RECEIVED:", req.body);
+  console.log("📩 WEBHOOK:", req.body);
 
   const { reference, payment_status } = req.body;
 
@@ -190,10 +187,21 @@ app.post("/webhook", async (req, res) => {
 });
 
 // =======================
-// 📊 ADMIN DASHBOARD
+// 📊 ADMIN (NO DUPLICATES)
 // =======================
 app.get("/admin/payments", async (req, res) => {
-  const data = await Payment.find().sort({ _id: -1 });
+
+  const data = await Payment.aggregate([
+    { $sort: { _id: -1 } },
+    {
+      $group: {
+        _id: { phone: "$phone", pin: "$pin" },
+        doc: { $first: "$$ROOT" }
+      }
+    },
+    { $replaceRoot: { newRoot: "$doc" } }
+  ]);
+
   res.json(data);
 });
 
