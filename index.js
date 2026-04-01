@@ -72,7 +72,7 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // FORMAT
+    // FORMAT NUMBER
     phone = phone.toString().trim();
     if (phone.startsWith("0")) phone = "255" + phone.substring(1);
 
@@ -83,7 +83,7 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // 🔥 CHECK DUPLICATE (phone + pin)
+    // 🔥 PREVENT DUPLICATE (ACTIVE ONLY)
     const existing = await Payment.findOne({
       phone,
       pin,
@@ -112,7 +112,7 @@ app.post("/create-payment", async (req, res) => {
     const payload = JSON.stringify(payloadObj);
     const signature = generateSignature(payload, timestamp);
 
-    // ✅ SAVE NEW
+    // SAVE FIRST
     await Payment.create({
       phone,
       pin: pin || "",
@@ -187,19 +187,25 @@ app.post("/webhook", async (req, res) => {
 });
 
 // =======================
-// 📊 ADMIN (NO DUPLICATES)
+// 📊 ADMIN (FIXED ORDER + NO DUPLICATES)
 // =======================
 app.get("/admin/payments", async (req, res) => {
 
   const data = await Payment.aggregate([
-    { $sort: { _id: -1 } },
+    { $sort: { _id: -1 } }, // newest first
+
     {
       $group: {
         _id: { phone: "$phone", pin: "$pin" },
         doc: { $first: "$$ROOT" }
       }
     },
-    { $replaceRoot: { newRoot: "$doc" } }
+
+    { $replaceRoot: { newRoot: "$doc" } },
+
+    // 🔥 FIX ZIGZAG HERE
+    { $sort: { _id: -1 } }
+
   ]);
 
   res.json(data);
