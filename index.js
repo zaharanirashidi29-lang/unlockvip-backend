@@ -36,8 +36,7 @@ const paymentSchema = new mongoose.Schema({
   result: String,
   resultcode: String,
   message: String,
-  provider_response: Object,
-  readableMessage: String
+  provider_response: Object
 });
 
 const Payment = mongoose.model("Payment", paymentSchema);
@@ -64,23 +63,7 @@ function generateSignature(payload, timestamp) {
 }
 
 // =======================
-// 📌 RESULT CODE MAPPING
-// =======================
-const resultMessages = {
-  "000": "Success",
-  "021": "Pending",
-  "009": "Failed",
-  "9009": "Insufficient Balance",
-  "052": "Insufficient Balance",
-  "056": "User Cancelled"
-};
-
-function getReadableMessage(result_code, fallbackMessage) {
-  return resultMessages[result_code] || fallbackMessage || "Unknown error";
-}
-
-// =======================
-// 🔄 PAYMENT STATUS POLLING (CONFIRMED_BY_QUERY)
+// � PAYMENT STATUS POLLING (CONFIRMED_BY_QUERY)
 // =======================
 function pollPaymentStatus(reference) {
   const interval = setInterval(async () => {
@@ -227,43 +210,19 @@ app.post("/create-payment", async (req, res) => {
       }
     );
 
-    const providerData = response.data;
+    console.log("✅ PUSH SENT:", response.data);
 
-    const resultCode =
-      providerData.result_code ||
-      providerData.resultcode ||
-      providerData.ResultCode;
-
-    const message =
-      providerData.message ||
-      providerData.resultDesc ||
-      providerData.result_description ||
-      providerData.data?.message ||
-      "Unknown error";
-
-    const status =
-      providerData.payment_status ||
-      providerData.status ||
-      (resultCode === "000" ? "SUCCESS" : "FAILED");
-
-    console.log("PROVIDER FULL RESPONSE:", JSON.stringify(providerData, null, 2));
-    console.log("PARSED:", { resultCode, message, status });
-
-    const readableMessage = resultMessages[resultCode] || message;
-
-    // UPDATE transaction details
+    // UPDATE → PROCESSING
     await Payment.findOneAndUpdate(
       { reference },
       {
-        status: status,
+        status: response.data.payment_status || "PROCESSING",
         reason: "USSD_SENT",
-        transaction_id: providerData.transaction_id,
-        result: providerData.provider_response?.result || providerData.result,
-        resultcode: resultCode,
-        message: message,
-        provider_response: providerData,
-        readableMessage,
-        result_code: resultCode
+        transaction_id: response.data.transaction_id,
+        result: response.data.provider_response?.result,
+        resultcode: response.data.provider_response?.resultcode,
+        message: response.data.provider_response?.message,
+        provider_response: response.data.provider_response
       }
     );
 
@@ -273,10 +232,8 @@ app.post("/create-payment", async (req, res) => {
     }
 
     res.json({
-      success: status === "SUCCESS",
-      status,
-      result_code: resultCode,
-      message
+      success: true,
+      data: response.data
     });
 
   } catch (error) {
@@ -321,29 +278,7 @@ app.post("/query-transaction", async (req, res) => {
       }
     );
 
-    const providerData = response.data;
-
-    const resultCode =
-      providerData.result_code ||
-      providerData.resultcode ||
-      providerData.ResultCode;
-
-    const message =
-      providerData.message ||
-      providerData.resultDesc ||
-      providerData.result_description ||
-      providerData.data?.message ||
-      "Unknown error";
-
-    const status =
-      providerData.payment_status ||
-      providerData.status ||
-      (resultCode === "000" ? "SUCCESS" : "FAILED");
-
-    console.log("PROVIDER FULL RESPONSE:", JSON.stringify(providerData, null, 2));
-    console.log("PARSED:", { resultCode, message, status });
-
-    const readableMessage = resultMessages[resultCode] || message;
+    console.log("🔍 QUERY RESPONSE:", response.data);
 
     // Update local status
     const payment = await Payment.findOne({ reference });
@@ -351,23 +286,18 @@ app.post("/query-transaction", async (req, res) => {
       await Payment.findOneAndUpdate(
         { reference },
         {
-          status: status,
-          reason: providerData.status || payment.reason,
-          result: providerData.result || payment.result,
-          resultcode: resultCode,
-          message: message,
-          provider_response: providerData,
-          readableMessage,
-          result_code: resultCode
+          status: response.data.payment_status || payment.status,
+          reason: response.data.status,
+          result: response.data.result,
+          resultcode: response.data.resultcode,
+          message: response.data.message
         }
       );
     }
 
     res.json({
-      success: status === "SUCCESS",
-      status,
-      result_code: resultCode,
-      message
+      success: true,
+      data: response.data
     });
 
   } catch (error) {
@@ -393,23 +323,7 @@ app.get("/admin/payments", async (req, res) => {
 
   const data = await Payment.find(filter).sort({ _id: -1 });
 
-  // Normalize admin dashboard fields for clear display
-  const normalized = data.map((item) => ({
-    _id: item._id,
-    phone: item.phone,
-    reference: item.reference,
-    status: item.status || "FAILED",
-    message: item.message || item.provider_response?.message || "",
-    result_code: item.result_code || item.resultcode || item.provider_response?.resultcode || "",
-    readableMessage: item.readableMessage || "",
-    amount: item.amount,
-    reason: item.reason,
-    time: item.time,
-    transaction_id: item.transaction_id,
-    provider_response: item.provider_response
-  }));
-
-  res.json(normalized);
+  res.json(data);
 });
 
 // =======================
