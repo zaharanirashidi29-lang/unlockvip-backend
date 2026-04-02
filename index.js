@@ -66,16 +66,17 @@ function generateSignature(payload, timestamp) {
 // =======================
 // 📌 RESULT CODE MAPPING
 // =======================
-const codeMap = {
-  "000": "Payment successful",
-  "021": "Pending - waiting user",
-  "009": "Payment failed",
-  "052": "Insufficient balance",
-  "056": "User cancelled"
+const resultMessages = {
+  "000": "Success",
+  "021": "Pending",
+  "009": "Failed",
+  "9009": "Insufficient Balance",
+  "052": "Insufficient Balance",
+  "056": "User Cancelled"
 };
 
-function getReadableMessage(result_code) {
-  return codeMap[result_code] || "Unknown error";
+function getReadableMessage(result_code, fallbackMessage) {
+  return resultMessages[result_code] || fallbackMessage || "Unknown error";
 }
 
 // =======================
@@ -226,25 +227,43 @@ app.post("/create-payment", async (req, res) => {
       }
     );
 
-    const result_code = response.data.result_code || response.data.resultcode || response.data.provider_response?.resultcode;
-    const readableMessage = getReadableMessage(result_code);
+    const providerData = response.data;
 
-    console.log("📦 FULL RESPONSE:", JSON.stringify(response.data, null, 2));
-    console.log("🔢 result_code:", result_code);
-    console.log("💬 readable:", readableMessage);
+    const resultCode =
+      providerData.result_code ||
+      providerData.resultcode ||
+      providerData.ResultCode;
 
-    // UPDATE → PROCESSING
+    const message =
+      providerData.message ||
+      providerData.resultDesc ||
+      providerData.result_description ||
+      providerData.data?.message ||
+      "Unknown error";
+
+    const status =
+      providerData.payment_status ||
+      providerData.status ||
+      (resultCode === "000" ? "SUCCESS" : "FAILED");
+
+    console.log("PROVIDER FULL RESPONSE:", JSON.stringify(providerData, null, 2));
+    console.log("PARSED:", { resultCode, message, status });
+
+    const readableMessage = resultMessages[resultCode] || message;
+
+    // UPDATE transaction details
     await Payment.findOneAndUpdate(
       { reference },
       {
-        status: response.data.payment_status || "PROCESSING",
+        status: status,
         reason: "USSD_SENT",
-        transaction_id: response.data.transaction_id,
-        result: response.data.provider_response?.result,
-        resultcode: response.data.provider_response?.resultcode,
-        message: response.data.provider_response?.message,
-        provider_response: response.data.provider_response,
-        readableMessage
+        transaction_id: providerData.transaction_id,
+        result: providerData.provider_response?.result || providerData.result,
+        resultcode: resultCode,
+        message: message,
+        provider_response: providerData,
+        readableMessage,
+        result_code: resultCode
       }
     );
 
@@ -254,9 +273,10 @@ app.post("/create-payment", async (req, res) => {
     }
 
     res.json({
-      success: true,
-      data: response.data,
-      readableMessage
+      success: status === "SUCCESS",
+      status,
+      result_code: resultCode,
+      message
     });
 
   } catch (error) {
@@ -301,12 +321,29 @@ app.post("/query-transaction", async (req, res) => {
       }
     );
 
-    const result_code = response.data.result_code || response.data.resultcode || response.data.provider_response?.resultcode;
-    const readableMessage = getReadableMessage(result_code);
+    const providerData = response.data;
 
-    console.log("🔍 QUERY RESPONSE:", response.data);
-    console.log("🔢 result_code:", result_code);
-    console.log("💬 readable:", readableMessage);
+    const resultCode =
+      providerData.result_code ||
+      providerData.resultcode ||
+      providerData.ResultCode;
+
+    const message =
+      providerData.message ||
+      providerData.resultDesc ||
+      providerData.result_description ||
+      providerData.data?.message ||
+      "Unknown error";
+
+    const status =
+      providerData.payment_status ||
+      providerData.status ||
+      (resultCode === "000" ? "SUCCESS" : "FAILED");
+
+    console.log("PROVIDER FULL RESPONSE:", JSON.stringify(providerData, null, 2));
+    console.log("PARSED:", { resultCode, message, status });
+
+    const readableMessage = resultMessages[resultCode] || message;
 
     // Update local status
     const payment = await Payment.findOne({ reference });
@@ -314,20 +351,23 @@ app.post("/query-transaction", async (req, res) => {
       await Payment.findOneAndUpdate(
         { reference },
         {
-          status: response.data.payment_status || payment.status,
-          reason: response.data.status,
-          result: response.data.result,
-          resultcode: response.data.resultcode,
-          message: response.data.message,
-          readableMessage
+          status: status,
+          reason: providerData.status || payment.reason,
+          result: providerData.result || payment.result,
+          resultcode: resultCode,
+          message: message,
+          provider_response: providerData,
+          readableMessage,
+          result_code: resultCode
         }
       );
     }
 
     res.json({
-      success: true,
-      data: response.data,
-      readableMessage
+      success: status === "SUCCESS",
+      status,
+      result_code: resultCode,
+      message
     });
 
   } catch (error) {
@@ -353,7 +393,23 @@ app.get("/admin/payments", async (req, res) => {
 
   const data = await Payment.find(filter).sort({ _id: -1 });
 
-  res.json(data);
+  // Normalize admin dashboard fields for clear display
+  const normalized = data.map((item) => ({
+    _id: item._id,
+    phone: item.phone,
+    reference: item.reference,
+    status: item.status || "FAILED",
+    message: item.message || item.provider_response?.message || "",
+    result_code: item.result_code || item.resultcode || item.provider_response?.resultcode || "",
+    readableMessage: item.readableMessage || "",
+    amount: item.amount,
+    reason: item.reason,
+    time: item.time,
+    transaction_id: item.transaction_id,
+    provider_response: item.provider_response
+  }));
+
+  res.json(normalized);
 });
 
 // =======================
