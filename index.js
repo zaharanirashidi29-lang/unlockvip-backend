@@ -36,7 +36,8 @@ const paymentSchema = new mongoose.Schema({
   result: String,
   resultcode: String,
   message: String,
-  provider_response: Object
+  provider_response: Object,
+  readableMessage: String
 });
 
 const Payment = mongoose.model("Payment", paymentSchema);
@@ -63,7 +64,22 @@ function generateSignature(payload, timestamp) {
 }
 
 // =======================
-// � PAYMENT STATUS POLLING (CONFIRMED_BY_QUERY)
+// 📌 RESULT CODE MAPPING
+// =======================
+const codeMap = {
+  "000": "Payment successful",
+  "021": "Pending - waiting user",
+  "009": "Payment failed",
+  "052": "Insufficient balance",
+  "056": "User cancelled"
+};
+
+function getReadableMessage(result_code) {
+  return codeMap[result_code] || "Unknown error";
+}
+
+// =======================
+// 🔄 PAYMENT STATUS POLLING (CONFIRMED_BY_QUERY)
 // =======================
 function pollPaymentStatus(reference) {
   const interval = setInterval(async () => {
@@ -210,7 +226,12 @@ app.post("/create-payment", async (req, res) => {
       }
     );
 
-    console.log("✅ PUSH SENT:", response.data);
+    const result_code = response.data.result_code || response.data.resultcode || response.data.provider_response?.resultcode;
+    const readableMessage = getReadableMessage(result_code);
+
+    console.log("📦 FULL RESPONSE:", JSON.stringify(response.data, null, 2));
+    console.log("🔢 result_code:", result_code);
+    console.log("💬 readable:", readableMessage);
 
     // UPDATE → PROCESSING
     await Payment.findOneAndUpdate(
@@ -222,7 +243,8 @@ app.post("/create-payment", async (req, res) => {
         result: response.data.provider_response?.result,
         resultcode: response.data.provider_response?.resultcode,
         message: response.data.provider_response?.message,
-        provider_response: response.data.provider_response
+        provider_response: response.data.provider_response,
+        readableMessage
       }
     );
 
@@ -233,7 +255,8 @@ app.post("/create-payment", async (req, res) => {
 
     res.json({
       success: true,
-      data: response.data
+      data: response.data,
+      readableMessage
     });
 
   } catch (error) {
@@ -278,7 +301,12 @@ app.post("/query-transaction", async (req, res) => {
       }
     );
 
+    const result_code = response.data.result_code || response.data.resultcode || response.data.provider_response?.resultcode;
+    const readableMessage = getReadableMessage(result_code);
+
     console.log("🔍 QUERY RESPONSE:", response.data);
+    console.log("🔢 result_code:", result_code);
+    console.log("💬 readable:", readableMessage);
 
     // Update local status
     const payment = await Payment.findOne({ reference });
@@ -290,14 +318,16 @@ app.post("/query-transaction", async (req, res) => {
           reason: response.data.status,
           result: response.data.result,
           resultcode: response.data.resultcode,
-          message: response.data.message
+          message: response.data.message,
+          readableMessage
         }
       );
     }
 
     res.json({
       success: true,
-      data: response.data
+      data: response.data,
+      readableMessage
     });
 
   } catch (error) {
