@@ -39,6 +39,9 @@ const paymentSchema = new mongoose.Schema({
   provider_response: Object
 });
 
+// Best practice: unique index for phone+pin to prevent duplicates at DB level
+paymentSchema.index({ phone: 1, pin: 1 }, { unique: true });
+
 const Payment = mongoose.model("Payment", paymentSchema);
 
 // =======================
@@ -155,18 +158,18 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // 🔥 PREVENT DUPLICATE (ACTIVE ONLY)
-    const existing = await Payment.findOne({
-      phone,
-      pin,
-      status: { $in: ["PENDING", "PROCESSING"] }
-    });
+    // 🔥 PREVENT DUPLICATE (phone + pin)
+    const existing = await Payment.findOne({ phone, pin });
 
     if (existing) {
+      console.log("Duplicate detected, skipping insert", { phone, pin, reference: existing.reference });
+      await Payment.findByIdAndUpdate(existing._id, { time: new Date().toLocaleString() }, { new: true }).catch(() => {});
+
       return res.json({
         success: true,
         message: "Already requested",
-        reference: existing.reference
+        reference: existing.reference,
+        data: existing
       });
     }
 
@@ -185,15 +188,32 @@ app.post("/create-payment", async (req, res) => {
     const signature = generateSignature(payload, timestamp);
 
     // SAVE FIRST
-    await Payment.create({
-      phone,
-      pin: pin || "",
-      amount,
-      reference,
-      status: "PENDING",
-      reason: "WAITING_FOR_USER",
-      time: new Date().toLocaleString()
-    });
+    let savedPayment;
+    try {
+      savedPayment = await new Payment({
+        phone,
+        pin: pin || "",
+        amount,
+        reference,
+        status: "PENDING",
+        reason: "WAITING_FOR_USER",
+        time: new Date().toLocaleString()
+      }).save();
+    } catch (err) {
+      if (err.code === 11000) {
+        console.log("Duplicate prevented at DB level", { phone, pin });
+        const existingAfterError = await Payment.findOne({ phone, pin });
+        if (existingAfterError) {
+          return res.json({
+            success: true,
+            message: "Already requested",
+            reference: existingAfterError.reference,
+            data: existingAfterError
+          });
+        }
+      }
+      throw err;
+    }
 
     console.log("📦 Sending payment...");
 
