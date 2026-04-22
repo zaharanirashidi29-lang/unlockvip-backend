@@ -363,29 +363,80 @@ app.post("/webhook", async (req, res) => {
       return res.status(404).json({ success: false, error: "Payment not found" });
     }
 
-    // Only update if not already COMPLETED
-    if (payment.status !== "COMPLETED") {
-      const pStatus = (payment_status || "").toUpperCase();
-    const newStatus =
-      pStatus === "SUCCESS" || pStatus === "COMPLETED" ? "COMPLETED" :
-      pStatus === "FAILED" || pStatus === "CANCELLED" || pStatus === "EXPIRED" ? "FAILED" :
-      pStatus || payment.status;
+    if (payment.status === "COMPLETED") {
+      return res.json({ success: true }); // already done
+    }
 
+    const pStatus = (payment_status || "").toUpperCase();
+
+    // For FAILED/CANCELLED/EXPIRED — trust webhook directly
+    if (pStatus === "FAILED" || pStatus === "CANCELLED" || pStatus === "EXPIRED") {
       await Payment.findOneAndUpdate(
         { reference },
-        {
-          status: newStatus,
-          reason: "WEBHOOK_CALLBACK",
-          transaction_id: transaction_id || payment.transaction_id,
-          result,
-          resultcode,
-          message,
-          provider_response: provider_response || payment.provider_response
-        }
+        { status: "FAILED", reason: "WEBHOOK_CALLBACK", transaction_id: transaction_id || payment.transaction_id, result, resultcode, message, provider_response: provider_response || payment.provider_response }
       );
-
-      console.log(`✅ Webhook updated ${reference} → ${newStatus}`);
+      console.log(`❌ Webhook marked FAILED for ${reference}`);
+      return res.json({ success: true });
     }
+
+    // For SUCCESS — double-verify via query API before marking COMPLETED
+    // (paymeafrica also fires a webhook on push-sent with a success indicator)
+    if (pStatus === "SUCCESS" || pStatus === "COMPLETED") {
+      try {
+        const timestamp = Math.floor(Date.now() / 1000);
+        const qPayload = JSON.stringify({ reference });
+        const signature = generateSignature(qPayload, timestamp);
+
+        const qRes = await axios.post(
+          "https://portal.paymeafrica.com/api/v1/query",
+          { reference },
+          {
+            headers: {
+              "Content-Type": "application/json",
+              "X-App-ID": APP_ID,
+              "X-Timestamp": timestamp,
+              "X-Signature": signature
+            }
+          }
+        );
+
+        const confirmedStatus = (qRes.data.payment_status || "").toUpperCase();
+        console.log(`🔍 Webhook verify query for ${reference}: payment_status=${confirmedStatus}`);
+
+        if (confirmedStatus === "SUCCESS" || confirmedStatus === "COMPLETED") {
+          await Payment.findOneAndUpdate(
+            { reference },
+            {
+              status: "COMPLETED",
+              reason: "WEBHOOK_CONFIRMED",
+              transaction_id: transaction_id || payment.transaction_id,
+              result,
+              resultcode,
+              message,
+              provider_response: provider_response || payment.provider_response
+            }
+          );
+          console.log(`✅ Webhook CONFIRMED COMPLETED for ${reference}`);
+        } else {
+          // Push was sent but not yet paid — update to PROCESSING, keep polling
+          await Payment.findOneAndUpdate(
+            { reference },
+            { status: "PROCESSING", reason: "USSD_SENT", transaction_id: transaction_id || payment.transaction_id }
+          );
+          console.log(`⏳ Webhook: push sent but not paid yet for ${reference} (query says ${confirmedStatus}) — staying PROCESSING`);
+        }
+      } catch (qErr) {
+        console.error("⚠️ Webhook verify query failed:", qErr.response?.data || qErr.message);
+        // Don't mark COMPLETED if we can't verify
+      }
+      return res.json({ success: true });
+    }
+
+    // Any other status — just log and update reason
+    await Payment.findOneAndUpdate(
+      { reference },
+      { reason: `WEBHOOK_${pStatus || "UNKNOWN"}`, transaction_id: transaction_id || payment.transaction_id }
+    );
 
     res.json({ success: true });
   } catch (error) {
