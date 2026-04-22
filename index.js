@@ -45,7 +45,7 @@ paymentSchema.index({ phone: 1, pin: 1 }, { unique: true });
 const Payment = mongoose.model("Payment", paymentSchema);
 
 const textifyApi = axios.create({
-  baseURL: "https://paymentgw.textify.africa"
+  baseURL: "https://portal.paymeafrica.com"
 });
 
 // =======================
@@ -143,7 +143,7 @@ function pollPaymentStatus(reference) {
       const signature = generateSignature(payload, timestamp);
 
       const response = await axios.post(
-        "https://paymentgw.textify.africa/api/v1/query",
+        "https://portal.paymeafrica.com/api/v1/query",
         { reference },
         {
           headers: {
@@ -287,7 +287,7 @@ app.post("/create-payment", async (req, res) => {
     console.log("📦 Sending payment...");
 
     const response = await axios.post(
-      "https://paymentgw.textify.africa/api/v1/transact",
+      "https://portal.paymeafrica.com/api/v1/transact",
       payloadObj,
       {
         headers: {
@@ -404,7 +404,7 @@ app.post("/query-transaction", async (req, res) => {
     const signature = generateSignature(payload, timestamp);
 
     const response = await axios.post(
-      "https://paymentgw.textify.africa/api/v1/query",
+      "https://portal.paymeafrica.com/api/v1/query",
       { reference },
       {
         headers: {
