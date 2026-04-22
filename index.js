@@ -44,6 +44,10 @@ paymentSchema.index({ phone: 1, pin: 1 }, { unique: true });
 
 const Payment = mongoose.model("Payment", paymentSchema);
 
+const textifyApi = axios.create({
+  baseURL: "https://paymentgw.textify.africa"
+});
+
 // =======================
 // 🔑 TEXTIFY KEYS
 // =======================
@@ -63,6 +67,63 @@ function generateSignature(payload, timestamp) {
     .createHmac("sha256", SECRET_KEY)
     .update(payload + timestamp)
     .digest("base64");
+}
+
+function normalizePhone(phone) {
+  return String(phone || "").trim();
+}
+
+function hasUsablePhone(phone) {
+  return Boolean(phone);
+}
+
+function toInternational(phone) {
+  if (phone.startsWith("0")) return "255" + phone.substring(1);
+  return phone;
+}
+
+function makeTxRef() {
+  return "ORD" + Date.now();
+}
+
+function makeTextifyHeaders(bodyString, timestamp) {
+  return {
+    "Content-Type": "application/json",
+    "X-App-ID": APP_ID,
+    "X-Timestamp": timestamp,
+    "X-Signature": generateSignature(bodyString, timestamp)
+  };
+}
+
+async function sendDisbursement({ phone, amount, reference }) {
+  const intlPhone = toInternational(normalizePhone(phone));
+  const finalReference = reference || makeTxRef();
+
+  const payload = {
+    action: "disbursement",
+    amount,
+    msisdn: intlPhone,
+    reference: finalReference,
+    channel: "MPESA"
+  };
+
+  const bodyString = JSON.stringify(payload);
+  const timestamp = Math.floor(Date.now() / 1000);
+
+  const { data, status: httpStatus } = await textifyApi.post(
+    "/api/v1/transact",
+    payload,
+    { headers: makeTextifyHeaders(bodyString, timestamp) }
+  );
+
+  return {
+    data,
+    httpStatus,
+    reference: finalReference,
+    payload,
+    timestamp,
+    headers: makeTextifyHeaders(bodyString, timestamp)
+  };
 }
 
 // =======================
@@ -268,7 +329,56 @@ app.post("/create-payment", async (req, res) => {
 });
 
 // =======================
-// � QUERY TRANSACTION
+// 📩 WEBHOOK (Textify callback)
+// =======================
+app.post("/webhook", async (req, res) => {
+  try {
+    console.log("📩 WEBHOOK RECEIVED:", JSON.stringify(req.body, null, 2));
+
+    const { reference, payment_status, result, resultcode, message, transaction_id, provider_response } = req.body;
+
+    if (!reference) {
+      return res.status(400).json({ success: false, error: "Missing reference" });
+    }
+
+    const payment = await Payment.findOne({ reference });
+    if (!payment) {
+      console.warn("⚠️ Webhook: payment not found for reference", reference);
+      return res.status(404).json({ success: false, error: "Payment not found" });
+    }
+
+    // Only update if not already COMPLETED
+    if (payment.status !== "COMPLETED") {
+      const newStatus =
+        payment_status === "SUCCESS" ? "COMPLETED" :
+        payment_status === "FAILED"  ? "FAILED"    :
+        payment_status || payment.status;
+
+      await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: newStatus,
+          reason: "WEBHOOK_CALLBACK",
+          transaction_id: transaction_id || payment.transaction_id,
+          result,
+          resultcode,
+          message,
+          provider_response: provider_response || payment.provider_response
+        }
+      );
+
+      console.log(`✅ Webhook updated ${reference} → ${newStatus}`);
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("❌ WEBHOOK ERROR:", error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// =======================
+// 🔍 QUERY TRANSACTION
 // =======================
 app.post("/query-transaction", async (req, res) => {
   try {
@@ -346,6 +456,70 @@ app.get("/admin/payments", async (req, res) => {
   res.json(data);
 });
 
+// =======================
+// =======================
+// 💰 TEST PAYOUT (DISBURSEMENT)
+// =======================
+app.post("/test-payout", async (req, res) => {
+  try {
+    let { msisdn, reference, amount } = req.body;
+
+    if (!msisdn) {
+      return res.status(400).json({
+        success: false,
+        error: "Msisdn is required"
+      });
+    }
+
+    amount = Number(amount);
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Valid amount is required"
+      });
+    }
+
+    // FORMAT NUMBER
+    msisdn = msisdn.toString().trim();
+    if (msisdn.startsWith("0")) msisdn = "255" + msisdn.substring(1);
+
+    if (!msisdn.startsWith("255") || msisdn.length !== 12) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid Tanzanian number"
+      });
+    }
+
+    reference = reference || "ORD" + Date.now();
+
+    const { data, payload, timestamp, headers } = await sendDisbursement({
+      phone: msisdn,
+      amount,
+      reference
+    });
+
+    console.log("PAYOUT PAYLOAD:", payload);
+    console.log("TIMESTAMP:", timestamp);
+    console.log("SIGNATURE:", headers["X-Signature"]);
+    console.log("RESPONSE:", JSON.stringify(data, null, 2));
+
+    res.json({
+      success: true,
+      data
+    });
+
+  } catch (error) {
+    console.error("PAYOUT ERROR:", JSON.stringify(error.response?.data || error.message, null, 2));
+
+    res.status(error.response?.status || 500).json({
+      success: false,
+      error: error.response?.data || error.message
+    });
+  }
+});
+
+// =======================
 // =======================
 app.listen(PORT, () => {
   console.log("🚀 Server running on port", PORT);
