@@ -130,10 +130,19 @@ async function sendDisbursement({ phone, amount, reference }) {
 // � PAYMENT STATUS POLLING (CONFIRMED_BY_QUERY)
 // =======================
 function pollPaymentStatus(reference) {
+  let attempts = 0;
+  const MAX_ATTEMPTS = 15; // poll for max ~3 minutes (15 x 12s)
   const interval = setInterval(async () => {
+    attempts++;
     try {
       const existing = await Payment.findOne({ reference });
       if (!existing || existing.status === "COMPLETED" || existing.status === "FAILED") {
+        clearInterval(interval);
+        return;
+      }
+      if (attempts >= MAX_ATTEMPTS) {
+        console.log("⏱️ Polling timeout reached for", reference, "- marking FAILED");
+        await Payment.findOneAndUpdate({ reference }, { status: "FAILED", reason: "POLLING_TIMEOUT" });
         clearInterval(interval);
         return;
       }
@@ -157,15 +166,16 @@ function pollPaymentStatus(reference) {
 
       console.log("🔍 Inquiry result:", response.data);
 
-      if (response.data.payment_status === "SUCCESS") {
+      const pStatus = (response.data.payment_status || "").toUpperCase();
+
+      if (pStatus === "SUCCESS" || pStatus === "COMPLETED") {
         const updated = await Payment.findOneAndUpdate(
           { reference, status: { $ne: "COMPLETED" } },
           {
             status: "COMPLETED",
             reason: "CONFIRMED_BY_QUERY",
-            result: response.data.result,
-            resultcode: response.data.resultcode,
-            message: response.data.message
+            amount: response.data.amount || undefined,
+            message: `Payment confirmed (${response.data.currency || "TZS"})`
           },
           { new: true }
         );
@@ -174,15 +184,13 @@ function pollPaymentStatus(reference) {
           console.log("✅ Status set to COMPLETED via CONFIRMED_BY_QUERY for", reference);
           clearInterval(interval);
         }
-      } else if (response.data.payment_status === "FAILED") {
+      } else if (pStatus === "FAILED" || pStatus === "CANCELLED" || pStatus === "EXPIRED") {
         await Payment.findOneAndUpdate(
           { reference },
           {
             status: "FAILED",
             reason: "FAILED_BY_QUERY",
-            result: response.data.result,
-            resultcode: response.data.resultcode,
-            message: response.data.message
+            message: `Payment ${pStatus.toLowerCase()}`
           }
         );
         clearInterval(interval);
@@ -357,10 +365,11 @@ app.post("/webhook", async (req, res) => {
 
     // Only update if not already COMPLETED
     if (payment.status !== "COMPLETED") {
-      const newStatus =
-        payment_status === "SUCCESS" ? "COMPLETED" :
-        payment_status === "FAILED"  ? "FAILED"    :
-        payment_status || payment.status;
+      const pStatus = (payment_status || "").toUpperCase();
+    const newStatus =
+      pStatus === "SUCCESS" || pStatus === "COMPLETED" ? "COMPLETED" :
+      pStatus === "FAILED" || pStatus === "CANCELLED" || pStatus === "EXPIRED" ? "FAILED" :
+      pStatus || payment.status;
 
       await Payment.findOneAndUpdate(
         { reference },
@@ -421,14 +430,20 @@ app.post("/query-transaction", async (req, res) => {
     // Update local status
     const payment = await Payment.findOne({ reference });
     if (payment) {
+      const pStatus = (response.data.payment_status || "").toUpperCase();
+      const mappedStatus =
+        pStatus === "SUCCESS" || pStatus === "COMPLETED" ? "COMPLETED" :
+        pStatus === "FAILED" || pStatus === "CANCELLED" || pStatus === "EXPIRED" ? "FAILED" :
+        pStatus || payment.status;
+
       await Payment.findOneAndUpdate(
         { reference },
         {
-          status: response.data.payment_status || payment.status,
-          reason: response.data.status,
-          result: response.data.result,
-          resultcode: response.data.resultcode,
-          message: response.data.message
+          status: mappedStatus,
+          reason: "MANUAL_QUERY",
+          message: response.data.payment_status
+            ? `Payment ${response.data.payment_status} (${response.data.currency || "TZS"})`
+            : payment.message
         }
       );
     }
