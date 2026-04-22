@@ -219,8 +219,12 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // 🔥 PREVENT DUPLICATE (phone + pin)
-    const existing = await Payment.findOne({ phone, pin });
+    // 🔥 PREVENT DUPLICATE — only block if there's an active/successful payment
+    const existing = await Payment.findOne({
+      phone,
+      pin,
+      status: { $in: ["PENDING", "PROCESSING", "COMPLETED"] }
+    });
 
     if (existing) {
       console.log("Duplicate detected, skipping insert", { phone, pin, reference: existing.reference });
@@ -234,6 +238,9 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
+    // Remove any previous FAILED record for same phone+pin so they can retry
+    await Payment.deleteOne({ phone, pin, status: "FAILED" }).catch(() => {});
+
     const reference = "ORD" + Date.now();
     const timestamp = Math.floor(Date.now() / 1000);
 
@@ -242,7 +249,8 @@ app.post("/create-payment", async (req, res) => {
       amount: amount,
       msisdn: phone,
       reference: reference,
-      callback_url: "https://unlockvip-backend-1.onrender.com/webhook"
+      channel: "MPESA",
+      callback_url: process.env.CALLBACK_URL || "https://unlockvip-backend-1.onrender.com/webhook"
     };
 
     const payload = JSON.stringify(payloadObj);
