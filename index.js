@@ -15,9 +15,7 @@ app.use(express.json());
 // =======================
 // 🗄️ MONGODB
 // =======================
-mongoose.connect(
-  "mongodb+srv://zaharanirashidi29_db_user:oQgtq3g1JHIgtIT2@cluster0.a6wjozy.mongodb.net/unlockvip?retryWrites=true&w=majority"
-)
+mongoose.connect(process.env.MONGODB_URI)
 .then(() => console.log("MongoDB Connected"))
 .catch(err => console.log("MongoDB Error:", err));
 
@@ -51,8 +49,8 @@ const textifyApi = axios.create({
 // =======================
 // 🔑 TEXTIFY KEYS
 // =======================
-const APP_ID = "CHUO_ASILI";
-const SECRET_KEY = "UrESzERfxSxNOcGmtigm5ovnztw49F7bJMuBFJJ/NeA=";
+const APP_ID = process.env.TEXTIFY_APP_ID;
+const SECRET_KEY = process.env.TEXTIFY_SECRET_KEY;
 
 // =======================
 app.get("/", (req, res) => {
