@@ -1,8 +1,8 @@
 const crypto = require('crypto');
 const axios = require('axios');
 
-const APP_ID = 'CHUO_ASILI';
-const SECRET_KEY = 'UrESzERfxSxNOcGmtigm5ovnztw49F7bJMuBFJJ/NeA=';
+const APP_ID = 'KIBUNGA';
+const SECRET_KEY = '0rqkDR0mYVadm2Sk/UFAkDkRvbZmyY7QoWy+a3nFA34=';
 
 const payload = {
   action: 'disbursement',
