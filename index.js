@@ -58,6 +58,44 @@ app.get("/", (req, res) => {
 });
 
 // =======================
+// 🏥 HEALTH CHECK / API TEST
+// =======================
+app.get("/health", async (req, res) => {
+  const checks = {
+    app_id: APP_ID ? "✅ Set" : "❌ Missing",
+    secret_key: SECRET_KEY ? "✅ Set" : "❌ Missing",
+    mongodb_uri: process.env.MONGODB_URI ? "✅ Set" : "❌ Missing",
+    timestamp: Math.floor(Date.now() / 1000)
+  };
+
+  // Test Paymeafrica connectivity
+  try {
+    const testPayload = JSON.stringify({ test: true });
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signature = generateSignature(testPayload, timestamp);
+
+    const testRes = await axios.post(
+      "https://portal.paymeafrica.com/api/v1/query",
+      { reference: "TEST_CONNECTION_CHECK" },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "X-App-ID": APP_ID,
+          "X-Timestamp": timestamp,
+          "X-Signature": signature
+        }
+      }
+    ).catch(err => err.response);
+
+    checks.paymeafrica_api = testRes?.status ? `${testRes.status} - ${JSON.stringify(testRes.data)}` : "🔴 Error";
+  } catch (err) {
+    checks.paymeafrica_api = `🔴 ${err.message}`;
+  }
+
+  res.json(checks);
+});
+
+// =======================
 // 🔐 SIGNATURE
 // =======================
 function generateSignature(payload, timestamp) {
