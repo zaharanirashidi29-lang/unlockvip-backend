@@ -99,9 +99,10 @@ app.get("/health", async (req, res) => {
 // 🔐 SIGNATURE
 // =======================
 function generateSignature(payload, timestamp) {
+  const message = payload + timestamp.toString();
   return crypto
     .createHmac("sha256", SECRET_KEY)
-    .update(payload + timestamp)
+    .update(message)
     .digest("base64");
 }
 
