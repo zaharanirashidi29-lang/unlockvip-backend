@@ -244,7 +244,7 @@ function pollPaymentStatus(reference) {
 app.post("/create-payment", async (req, res) => {
   try {
     let { phone, pin } = req.body;
-    const amount = 3000;
+    const amount = 3060;
 
     if (!phone) {
       return res.status(400).json({
