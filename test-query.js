@@ -1,25 +1,16 @@
 require("dotenv").config();
-const axios = require("axios");
-const crypto = require("crypto");
+const { getPaymentStatus } = require("./clickpesa");
 
-const APP_ID = "KIBUNGA";
-const SECRET_KEY = "0rqkDR0mYVadm2Sk/UFAkDkRvbZmyY7QoWy+a3nFA34=";
-const reference = "TEST1776854002808";
+const orderReference = process.argv[2];
 
-const timestamp = Math.floor(Date.now() / 1000);
-const payload = JSON.stringify({ reference });
-const signature = crypto.createHmac("sha256", SECRET_KEY).update(payload + timestamp).digest("base64");
+if (!orderReference) {
+  console.error("Usage: node test-query.js <orderReference>");
+  process.exit(1);
+}
 
-axios.post("https://portal.paymeafrica.com/api/v1/query", { reference }, {
-  headers: {
-    "Content-Type": "application/json",
-    "X-App-ID": APP_ID,
-    "X-Timestamp": timestamp,
-    "X-Signature": signature
-  }
-})
-.then(r => console.log("QUERY RESPONSE:", JSON.stringify(r.data, null, 2)))
-.catch(e => {
-  console.error("ERROR STATUS:", e.response?.status);
-  console.error("ERROR DATA:", JSON.stringify(e.response?.data, null, 2));
-});
+getPaymentStatus(orderReference)
+  .then((data) => console.log("QUERY RESPONSE:", JSON.stringify(data, null, 2)))
+  .catch((error) => {
+    console.error("ERROR STATUS:", error.response?.status);
+    console.error("ERROR DATA:", JSON.stringify(error.response?.data || error.message, null, 2));
+  });

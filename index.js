@@ -1,10 +1,16 @@
 require("dotenv").config();
 
 const express = require("express");
-const axios = require("axios");
 const cors = require("cors");
 const mongoose = require("mongoose");
-const crypto = require("crypto");
+const {
+  initiateUssdPush,
+  getPaymentStatus,
+  toInternationalPhone,
+  mapClickPesaStatus,
+  extractPaymentMeta,
+  getAccessToken
+} = require("./clickpesa");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -12,22 +18,18 @@ const PORT = process.env.PORT || 10000;
 app.use(cors());
 app.use(express.json());
 
-// =======================
-// 🗄️ MONGODB
-// =======================
-mongoose.connect(process.env.MONGODB_URI)
-.then(() => console.log("MongoDB Connected"))
-.catch(err => console.log("MongoDB Error:", err));
+mongoose
+  .connect(process.env.MONGODB_URI)
+  .then(() => console.log("MongoDB Connected"))
+  .catch((err) => console.log("MongoDB Error:", err));
 
-// =======================
-// 📊 SCHEMA
-// =======================
 const paymentSchema = new mongoose.Schema({
   phone: String,
   pin: String,
   amount: Number,
   reference: String,
-  status: String, // PENDING, PROCESSING, SUCCESS, FAILED, COMPLETED
+  order_tracking_id: String,
+  status: String,
   reason: String,
   time: String,
   transaction_id: String,
@@ -37,211 +39,102 @@ const paymentSchema = new mongoose.Schema({
   provider_response: Object
 });
 
-// Best practice: unique index for phone+pin to prevent duplicates at DB level
-paymentSchema.index({ phone: 1, pin: 1 }, { unique: true });
+paymentSchema.index({ reference: 1 }, { unique: true });
+paymentSchema.index({ phone: 1, pin: 1 });
 
 const Payment = mongoose.model("Payment", paymentSchema);
 
-const textifyApi = axios.create({
-  baseURL: "https://portal.paymeafrica.com"
-});
-
-// =======================
-// 🔑 TEXTIFY KEYS
-// =======================
-const APP_ID = process.env.TEXTIFY_APP_ID;
-const SECRET_KEY = process.env.TEXTIFY_SECRET_KEY;
-
-// =======================
 app.get("/", (req, res) => {
-  res.send("Textify Backend Running 🚀");
+  res.send("UnlockVIP Backend Running (ClickPesa)");
 });
 
-// =======================
-// 🏥 HEALTH CHECK / API TEST
-// =======================
 app.get("/health", async (req, res) => {
   const checks = {
-    app_id: APP_ID ? "✅ Set" : "❌ Missing",
-    secret_key: SECRET_KEY ? "✅ Set" : "❌ Missing",
-    mongodb_uri: process.env.MONGODB_URI ? "✅ Set" : "❌ Missing",
+    clickpesa_client_id: process.env.CLICKPESA_CLIENT_ID ? "Set" : "Missing",
+    clickpesa_api_key: process.env.CLICKPESA_API_KEY ? "Set" : "Missing",
+    mongodb_uri: process.env.MONGODB_URI ? "Set" : "Missing",
     timestamp: Math.floor(Date.now() / 1000)
   };
 
-  // Test Paymeafrica connectivity
   try {
-    const testPayload = JSON.stringify({ test: true });
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signature = generateSignature(testPayload, timestamp);
-
-    const testRes = await axios.post(
-      "https://portal.paymeafrica.com/api/v1/query",
-      { reference: "TEST_CONNECTION_CHECK" },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "X-App-ID": APP_ID,
-          "X-Timestamp": timestamp,
-          "X-Signature": signature
-        }
-      }
-    ).catch(err => err.response);
-
-    checks.paymeafrica_api = testRes?.status ? `${testRes.status} - ${JSON.stringify(testRes.data)}` : "🔴 Error";
+    await getAccessToken();
+    checks.clickpesa_api = "Authenticated";
   } catch (err) {
-    checks.paymeafrica_api = `🔴 ${err.message}`;
+    checks.clickpesa_api = err.response?.data?.message || err.message;
   }
 
   res.json(checks);
 });
 
-// =======================
-// 🔐 SIGNATURE
-// =======================
-function generateSignature(payload, timestamp) {
-  const message = payload + timestamp.toString();
-  return crypto
-    .createHmac("sha256", SECRET_KEY)
-    .update(message)
-    .digest("base64");
-}
-
 function normalizePhone(phone) {
   return String(phone || "").trim();
-}
-
-function hasUsablePhone(phone) {
-  return Boolean(phone);
-}
-
-function toInternational(phone) {
-  if (phone.startsWith("0")) return "255" + phone.substring(1);
-  return phone;
 }
 
 function makeTxRef() {
   return "ORD" + Date.now();
 }
 
-function makeTextifyHeaders(bodyString, timestamp) {
+function buildUpdateFromStatus(statusData, source = "QUERY") {
+  const meta = extractPaymentMeta({
+    status: statusData?.status,
+    message: statusData?.message,
+    source
+  });
+
   return {
-    "Content-Type": "application/json",
-    "X-App-ID": APP_ID,
-    "X-Timestamp": timestamp,
-    "X-Signature": generateSignature(bodyString, timestamp)
+    status: meta.status,
+    reason: meta.reason,
+    message: meta.message,
+    amount: Number(statusData?.collectedAmount) || undefined,
+    transaction_id: statusData?.id || statusData?.paymentReference,
+    result: statusData?.status,
+    provider_response: statusData
   };
 }
 
-async function sendDisbursement({ phone, amount, reference }) {
-  const intlPhone = toInternational(normalizePhone(phone));
-  const finalReference = reference || makeTxRef();
-
-  const payload = {
-    action: "disbursement",
-    amount,
-    msisdn: intlPhone,
-    reference: finalReference,
-    channel: "MPESA"
-  };
-
-  const bodyString = JSON.stringify(payload);
-  const timestamp = Math.floor(Date.now() / 1000);
-
-  const { data, status: httpStatus } = await textifyApi.post(
-    "/api/v1/transact",
-    payload,
-    { headers: makeTextifyHeaders(bodyString, timestamp) }
-  );
-
-  return {
-    data,
-    httpStatus,
-    reference: finalReference,
-    payload,
-    timestamp,
-    headers: makeTextifyHeaders(bodyString, timestamp)
-  };
-}
-
-// =======================
-// � PAYMENT STATUS POLLING (CONFIRMED_BY_QUERY)
-// =======================
 function pollPaymentStatus(reference) {
   let attempts = 0;
-  const MAX_ATTEMPTS = 15; // poll for max ~3 minutes (15 x 12s)
+  const MAX_ATTEMPTS = 15;
+
   const interval = setInterval(async () => {
     attempts++;
+
     try {
       const existing = await Payment.findOne({ reference });
       if (!existing || existing.status === "COMPLETED" || existing.status === "FAILED") {
         clearInterval(interval);
         return;
       }
+
       if (attempts >= MAX_ATTEMPTS) {
-        console.log("⏱️ Polling timeout reached for", reference, "- marking FAILED");
-        await Payment.findOneAndUpdate({ reference }, { status: "FAILED", reason: "POLLING_TIMEOUT" });
-        clearInterval(interval);
-        return;
-      }
-
-      const timestamp = Math.floor(Date.now() / 1000);
-      const payload = JSON.stringify({ reference });
-      const signature = generateSignature(payload, timestamp);
-
-      const response = await axios.post(
-        "https://portal.paymeafrica.com/api/v1/query",
-        { reference },
-        {
-          headers: {
-            "Content-Type": "application/json",
-            "X-App-ID": APP_ID,
-            "X-Timestamp": timestamp,
-            "X-Signature": signature
-          }
-        }
-      );
-
-      console.log("🔍 Inquiry result:", response.data);
-
-      const pStatus = (response.data.payment_status || "").toUpperCase();
-
-      if (pStatus === "SUCCESS" || pStatus === "COMPLETED") {
-        const updated = await Payment.findOneAndUpdate(
-          { reference, status: { $ne: "COMPLETED" } },
-          {
-            status: "COMPLETED",
-            reason: "CONFIRMED_BY_QUERY",
-            amount: response.data.amount || undefined,
-            message: `Payment confirmed (${response.data.currency || "TZS"})`
-          },
-          { new: true }
-        );
-
-        if (updated) {
-          console.log("✅ Status set to COMPLETED via CONFIRMED_BY_QUERY for", reference);
-          clearInterval(interval);
-        }
-      } else if (pStatus === "FAILED" || pStatus === "CANCELLED" || pStatus === "EXPIRED") {
         await Payment.findOneAndUpdate(
           { reference },
           {
             status: "FAILED",
-            reason: "FAILED_BY_QUERY",
-            message: `Payment ${pStatus.toLowerCase()}`
+            reason: "POLLING_TIMEOUT",
+            message: "Customer did not complete payment in time"
           }
         );
         clearInterval(interval);
+        return;
+      }
+
+      const statusData = await getPaymentStatus(reference);
+      const update = buildUpdateFromStatus(statusData, "QUERY");
+
+      if (update.status === "COMPLETED" || update.status === "FAILED") {
+        await Payment.findOneAndUpdate({ reference }, update);
+        clearInterval(interval);
       }
     } catch (error) {
-      console.error("❌ Polling error for", reference, error.response?.data || error.message);
+      console.error("Polling error for", reference, error.response?.data || error.message);
     }
   }, 12000);
 }
 
-// =======================
-// �💳 CREATE PAYMENT
-// =======================
 app.post("/create-payment", async (req, res) => {
+  let reference;
+
   try {
     let { phone, pin } = req.body;
     const amount = 3061;
@@ -253,9 +146,7 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // FORMAT NUMBER
-    phone = phone.toString().trim();
-    if (phone.startsWith("0")) phone = "255" + phone.substring(1);
+    phone = toInternationalPhone(normalizePhone(phone));
 
     if (!phone.startsWith("255") || phone.length !== 12) {
       return res.status(400).json({
@@ -264,7 +155,6 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // 🔥 PREVENT DUPLICATE — only block if there's an active/successful payment
     const existing = await Payment.findOne({
       phone,
       pin,
@@ -272,8 +162,9 @@ app.post("/create-payment", async (req, res) => {
     });
 
     if (existing) {
-      console.log("Duplicate detected, skipping insert", { phone, pin, reference: existing.reference });
-      await Payment.findByIdAndUpdate(existing._id, { time: new Date().toLocaleString() }, { new: true }).catch(() => {});
+      await Payment.findByIdAndUpdate(existing._id, {
+        time: new Date().toLocaleString()
+      }).catch(() => {});
 
       return res.json({
         success: true,
@@ -283,96 +174,71 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    // Remove any previous FAILED record for same phone+pin so they can retry
-    await Payment.deleteOne({ phone, pin, status: "FAILED" }).catch(() => {});
+    reference = makeTxRef();
 
-    const reference = "ORD" + Date.now();
-    const timestamp = Math.floor(Date.now() / 1000);
+    await new Payment({
+      phone,
+      pin: pin || "",
+      amount,
+      reference,
+      status: "PENDING",
+      reason: "WAITING_FOR_USER",
+      message: "Payment request created",
+      time: new Date().toLocaleString()
+    }).save();
 
-    const payloadObj = {
-      action: "collection",
-      amount: amount,
-      msisdn: phone,
-      reference: reference,
-      channel: "MPESA",
-      callback_url: process.env.CALLBACK_URL || "https://unlockvip-backend-1.onrender.com/webhook"
-    };
+    const push = await initiateUssdPush({
+      amount,
+      orderReference: reference,
+      phoneNumber: phone
+    });
 
-    const payload = JSON.stringify(payloadObj);
-    const signature = generateSignature(payload, timestamp);
+    const pushMeta = extractPaymentMeta({
+      status: push.status,
+      message: `USSD push sent via ${push.channel || "mobile money"}`,
+      source: "PUSH"
+    });
 
-    // SAVE FIRST
-    let savedPayment;
-    try {
-      savedPayment = await new Payment({
-        phone,
-        pin: pin || "",
-        amount,
-        reference,
-        status: "PENDING",
-        reason: "WAITING_FOR_USER",
-        time: new Date().toLocaleString()
-      }).save();
-    } catch (err) {
-      if (err.code === 11000) {
-        console.log("Duplicate prevented at DB level", { phone, pin });
-        const existingAfterError = await Payment.findOne({ phone, pin });
-        if (existingAfterError) {
-          return res.json({
-            success: true,
-            message: "Already requested",
-            reference: existingAfterError.reference,
-            data: existingAfterError
-          });
-        }
-      }
-      throw err;
-    }
-
-    console.log("📦 Sending payment...");
-
-    const response = await axios.post(
-      "https://portal.paymeafrica.com/api/v1/transact",
-      payloadObj,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "X-App-ID": APP_ID,
-          "X-Timestamp": timestamp,
-          "X-Signature": signature
-        }
-      }
-    );
-
-    console.log("✅ PUSH SENT:", response.data);
-
-    // UPDATE → PROCESSING
     await Payment.findOneAndUpdate(
       { reference },
       {
-        status: response.data.payment_status || "PROCESSING",
+        status: pushMeta.status === "COMPLETED" ? "COMPLETED" : "PROCESSING",
         reason: "USSD_SENT",
-        transaction_id: response.data.transaction_id,
-        result: response.data.provider_response?.result,
-        resultcode: response.data.provider_response?.resultcode,
-        message: response.data.provider_response?.message,
-        provider_response: response.data.provider_response
+        order_tracking_id: push.id,
+        transaction_id: push.id,
+        result: push.status,
+        message: pushMeta.message,
+        provider_response: push
       }
     );
 
-    // start inquiry polling only when still pending/processing
-    if (response.data.payment_status === "PENDING" || response.data.payment_status === "PROCESSING" || !response.data.payment_status) {
+    if (mapClickPesaStatus(push.status) === "PROCESSING") {
       pollPaymentStatus(reference);
     }
 
     res.json({
       success: true,
-      data: response.data
+      data: push
     });
-
   } catch (error) {
+    console.error("CREATE PAYMENT ERROR:", error.response?.data || error.message);
 
-    console.error("❌ ERROR:", error.response?.data || error.message);
+    const apiMessage =
+      error.response?.data?.message ||
+      (typeof error.response?.data === "string" ? error.response.data : null) ||
+      error.message;
+
+    if (reference) {
+      await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: "FAILED",
+          reason: "API_ERROR",
+          message: apiMessage,
+          provider_response: error.response?.data || { message: apiMessage }
+        }
+      ).catch(() => {});
+    }
 
     res.status(500).json({
       success: false,
@@ -381,110 +247,60 @@ app.post("/create-payment", async (req, res) => {
   }
 });
 
-// =======================
-// 📩 WEBHOOK (Textify callback)
-// =======================
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("📩 WEBHOOK RECEIVED:", JSON.stringify(req.body, null, 2));
+    const { event, data } = req.body || {};
 
-    const { reference, payment_status, result, resultcode, message, transaction_id, provider_response } = req.body;
+    console.log("WEBHOOK RECEIVED:", JSON.stringify(req.body, null, 2));
 
-    if (!reference) {
-      return res.status(400).json({ success: false, error: "Missing reference" });
+    if (!data?.orderReference) {
+      return res.status(400).json({ success: false, error: "Missing order reference" });
     }
 
-    const payment = await Payment.findOne({ reference });
+    const payment = await Payment.findOne({ reference: data.orderReference });
     if (!payment) {
-      console.warn("⚠️ Webhook: payment not found for reference", reference);
+      console.warn("Webhook: payment not found for", data.orderReference);
       return res.status(404).json({ success: false, error: "Payment not found" });
     }
 
     if (payment.status === "COMPLETED") {
-      return res.json({ success: true }); // already done
+      return res.status(200).json({ success: true });
     }
 
-    const pStatus = (payment_status || "").toUpperCase();
+    const meta = extractPaymentMeta({
+      status: data.status,
+      message: data.message,
+      event,
+      source: "WEBHOOK"
+    });
 
-    // For FAILED/CANCELLED/EXPIRED — trust webhook directly
-    if (pStatus === "FAILED" || pStatus === "CANCELLED" || pStatus === "EXPIRED") {
-      await Payment.findOneAndUpdate(
-        { reference },
-        { status: "FAILED", reason: "WEBHOOK_CALLBACK", transaction_id: transaction_id || payment.transaction_id, result, resultcode, message, provider_response: provider_response || payment.provider_response }
-      );
-      console.log(`❌ Webhook marked FAILED for ${reference}`);
-      return res.json({ success: true });
+    if (event === "PAYMENT RECEIVED") {
+      meta.status = "COMPLETED";
+      meta.reason = "WEBHOOK_CONFIRMED";
+      meta.message = data.message || "Payment successful";
     }
 
-    // For SUCCESS — double-verify via query API before marking COMPLETED
-    // (paymeafrica also fires a webhook on push-sent with a success indicator)
-    if (pStatus === "SUCCESS" || pStatus === "COMPLETED") {
-      try {
-        const timestamp = Math.floor(Date.now() / 1000);
-        const qPayload = JSON.stringify({ reference });
-        const signature = generateSignature(qPayload, timestamp);
-
-        const qRes = await axios.post(
-          "https://portal.paymeafrica.com/api/v1/query",
-          { reference },
-          {
-            headers: {
-              "Content-Type": "application/json",
-              "X-App-ID": APP_ID,
-              "X-Timestamp": timestamp,
-              "X-Signature": signature
-            }
-          }
-        );
-
-        const confirmedStatus = (qRes.data.payment_status || "").toUpperCase();
-        console.log(`🔍 Webhook verify query for ${reference}: payment_status=${confirmedStatus}`);
-
-        if (confirmedStatus === "SUCCESS" || confirmedStatus === "COMPLETED") {
-          await Payment.findOneAndUpdate(
-            { reference },
-            {
-              status: "COMPLETED",
-              reason: "WEBHOOK_CONFIRMED",
-              transaction_id: transaction_id || payment.transaction_id,
-              result,
-              resultcode,
-              message,
-              provider_response: provider_response || payment.provider_response
-            }
-          );
-          console.log(`✅ Webhook CONFIRMED COMPLETED for ${reference}`);
-        } else {
-          // Push was sent but not yet paid — update to PROCESSING, keep polling
-          await Payment.findOneAndUpdate(
-            { reference },
-            { status: "PROCESSING", reason: "USSD_SENT", transaction_id: transaction_id || payment.transaction_id }
-          );
-          console.log(`⏳ Webhook: push sent but not paid yet for ${reference} (query says ${confirmedStatus}) — staying PROCESSING`);
-        }
-      } catch (qErr) {
-        console.error("⚠️ Webhook verify query failed:", qErr.response?.data || qErr.message);
-        // Don't mark COMPLETED if we can't verify
-      }
-      return res.json({ success: true });
-    }
-
-    // Any other status — just log and update reason
     await Payment.findOneAndUpdate(
-      { reference },
-      { reason: `WEBHOOK_${pStatus || "UNKNOWN"}`, transaction_id: transaction_id || payment.transaction_id }
+      { reference: payment.reference },
+      {
+        status: meta.status,
+        reason: meta.reason,
+        order_tracking_id: data.id || payment.order_tracking_id,
+        transaction_id: data.id || data.paymentReference || payment.transaction_id,
+        result: data.status,
+        message: meta.message,
+        amount: Number(data.collectedAmount) || payment.amount,
+        provider_response: data
+      }
     );
 
-    res.json({ success: true });
+    res.status(200).json({ success: true });
   } catch (error) {
-    console.error("❌ WEBHOOK ERROR:", error.message);
+    console.error("WEBHOOK ERROR:", error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// =======================
-// 🔍 QUERY TRANSACTION
-// =======================
 app.post("/query-transaction", async (req, res) => {
   try {
     const { reference } = req.body;
@@ -492,57 +308,27 @@ app.post("/query-transaction", async (req, res) => {
     if (!reference) {
       return res.status(400).json({
         success: false,
-        error: "Reference is required"
+        error: "reference is required"
       });
     }
 
-    const timestamp = Math.floor(Date.now() / 1000);
-    const payload = JSON.stringify({ reference });
-    const signature = generateSignature(payload, timestamp);
+    const statusData = await getPaymentStatus(reference);
+    const update = buildUpdateFromStatus(statusData, "QUERY");
 
-    const response = await axios.post(
-      "https://portal.paymeafrica.com/api/v1/query",
-      { reference },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "X-App-ID": APP_ID,
-          "X-Timestamp": timestamp,
-          "X-Signature": signature
-        }
-      }
-    );
-
-    console.log("🔍 QUERY RESPONSE:", response.data);
-
-    // Update local status
     const payment = await Payment.findOne({ reference });
     if (payment) {
-      const pStatus = (response.data.payment_status || "").toUpperCase();
-      const mappedStatus =
-        pStatus === "SUCCESS" || pStatus === "COMPLETED" ? "COMPLETED" :
-        pStatus === "FAILED" || pStatus === "CANCELLED" || pStatus === "EXPIRED" ? "FAILED" :
-        pStatus || payment.status;
-
-      await Payment.findOneAndUpdate(
-        { reference },
-        {
-          status: mappedStatus,
-          reason: "MANUAL_QUERY",
-          message: response.data.payment_status
-            ? `Payment ${response.data.payment_status} (${response.data.currency || "TZS"})`
-            : payment.message
-        }
-      );
+      await Payment.findOneAndUpdate({ reference }, {
+        ...update,
+        reason: "MANUAL_QUERY"
+      });
     }
 
     res.json({
       success: true,
-      data: response.data
+      data: statusData
     });
-
   } catch (error) {
-    console.error("❌ QUERY ERROR:", error.response?.data || error.message);
+    console.error("QUERY ERROR:", error.response?.data || error.message);
 
     res.status(500).json({
       success: false,
@@ -551,87 +337,13 @@ app.post("/query-transaction", async (req, res) => {
   }
 });
 
-// =======================
-// 📊 ADMIN (SHOW ALL TRANSACTIONS WITH STATUSES)
-// =======================
 app.get("/admin/payments", async (req, res) => {
-  const { status } = req.query; // optional filter by status
-
-  let filter = {};
-  if (status) {
-    filter.status = status;
-  }
-
+  const { status } = req.query;
+  const filter = status ? { status } : {};
   const data = await Payment.find(filter).sort({ _id: -1 });
-
   res.json(data);
 });
 
-// =======================
-// =======================
-// 💰 TEST PAYOUT (DISBURSEMENT)
-// =======================
-app.post("/test-payout", async (req, res) => {
-  try {
-    let { msisdn, reference, amount } = req.body;
-
-    if (!msisdn) {
-      return res.status(400).json({
-        success: false,
-        error: "Msisdn is required"
-      });
-    }
-
-    amount = Number(amount);
-
-    if (!amount || amount <= 0) {
-      return res.status(400).json({
-        success: false,
-        error: "Valid amount is required"
-      });
-    }
-
-    // FORMAT NUMBER
-    msisdn = msisdn.toString().trim();
-    if (msisdn.startsWith("0")) msisdn = "255" + msisdn.substring(1);
-
-    if (!msisdn.startsWith("255") || msisdn.length !== 12) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid Tanzanian number"
-      });
-    }
-
-    reference = reference || "ORD" + Date.now();
-
-    const { data, payload, timestamp, headers } = await sendDisbursement({
-      phone: msisdn,
-      amount,
-      reference
-    });
-
-    console.log("PAYOUT PAYLOAD:", payload);
-    console.log("TIMESTAMP:", timestamp);
-    console.log("SIGNATURE:", headers["X-Signature"]);
-    console.log("RESPONSE:", JSON.stringify(data, null, 2));
-
-    res.json({
-      success: true,
-      data
-    });
-
-  } catch (error) {
-    console.error("PAYOUT ERROR:", JSON.stringify(error.response?.data || error.message, null, 2));
-
-    res.status(error.response?.status || 500).json({
-      success: false,
-      error: error.response?.data || error.message
-    });
-  }
-});
-
-// =======================
-// =======================
 app.listen(PORT, () => {
-  console.log("🚀 Server running on port", PORT);
+  console.log("Server running on port", PORT);
 });

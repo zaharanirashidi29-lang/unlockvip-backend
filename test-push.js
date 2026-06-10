@@ -1,38 +1,39 @@
 require("dotenv").config();
-const axios = require("axios");
-const crypto = require("crypto");
+const {
+  previewUssdPush,
+  initiateUssdPush,
+  toInternationalPhone
+} = require("./clickpesa");
 
-const APP_ID = "KIBUNGA";
-const SECRET_KEY = "0rqkDR0mYVadm2Sk/UFAkDkRvbZmyY7QoWy+a3nFA34=";
+const phone = process.argv[2] || "0667392184";
+const amount = Number(process.argv[3] || 3061);
+const reference = "TEST" + Date.now();
 
-const payloadObj = {
-  action: "collection",
-  amount: 3000,
-  msisdn: "255757230102",
-  reference: "TEST" + Date.now(),
-  channel: "MPESA",
-  callback_url: "https://unlockvip-backend-1.onrender.com/webhook"
-};
+(async () => {
+  try {
+    const phoneNumber = toInternationalPhone(phone);
 
-const bodyString = JSON.stringify(payloadObj);
-const timestamp = Math.floor(Date.now() / 1000);
-const signature = crypto.createHmac("sha256", SECRET_KEY).update(bodyString + timestamp).digest("base64");
+    console.log("Previewing USSD push...");
+    console.log("Phone:", phone, "->", phoneNumber);
+    console.log("Amount:", amount, "TZS");
+    console.log("Reference:", reference);
 
-console.log("Payload:", bodyString);
-console.log("Timestamp:", timestamp);
-console.log("Signature:", signature);
+    const preview = await previewUssdPush({
+      amount,
+      orderReference: reference,
+      phoneNumber
+    });
+    console.log("PREVIEW:", JSON.stringify(preview, null, 2));
 
-axios.post("https://portal.paymeafrica.com/api/v1/transact", payloadObj, {
-  headers: {
-    "Content-Type": "application/json",
-    "X-App-ID": APP_ID,
-    "X-Timestamp": timestamp,
-    "X-Signature": signature
+    const result = await initiateUssdPush({
+      amount,
+      orderReference: reference,
+      phoneNumber
+    });
+
+    console.log("SUCCESS:", JSON.stringify(result, null, 2));
+  } catch (error) {
+    console.error("ERROR STATUS:", error.response?.status);
+    console.error("ERROR DATA:", JSON.stringify(error.response?.data || error.message, null, 2));
   }
-})
-.then(r => console.log("SUCCESS:", JSON.stringify(r.data, null, 2)))
-.catch(e => {
-  console.error("ERROR STATUS:", e.response?.status);
-  console.error("ERROR DATA:", JSON.stringify(e.response?.data, null, 2));
-  console.error("MESSAGE:", e.message);
-});
+})();
