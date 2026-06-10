@@ -1,34 +1,24 @@
 require("dotenv").config();
-const {
-  previewUssdPush,
-  initiateUssdPush,
-  toInternationalPhone
-} = require("./clickpesa");
+const { collectPayment, toInternationalPhone } = require("./malipopay");
 
-const phone = process.argv[2] || "0667392184";
+const phone = process.argv[2] || "255794316132";
 const amount = Number(process.argv[3] || 3061);
-const reference = "TEST" + Date.now();
+const reference = "ORD" + Date.now();
 
 (async () => {
   try {
     const phoneNumber = toInternationalPhone(phone);
 
-    console.log("Previewing USSD push...");
+    console.log("Sending MaliPoPay USSD push...");
     console.log("Phone:", phone, "->", phoneNumber);
     console.log("Amount:", amount, "TZS");
     console.log("Reference:", reference);
 
-    const preview = await previewUssdPush({
+    const result = await collectPayment({
       amount,
-      orderReference: reference,
-      phoneNumber
-    });
-    console.log("PREVIEW:", JSON.stringify(preview, null, 2));
-
-    const result = await initiateUssdPush({
-      amount,
-      orderReference: reference,
-      phoneNumber
+      phoneNumber,
+      reference,
+      description: "UnlockVIP payment test"
     });
 
     console.log("SUCCESS:", JSON.stringify(result, null, 2));

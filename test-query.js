@@ -1,14 +1,14 @@
 require("dotenv").config();
-const { getPaymentStatus } = require("./clickpesa");
+const { verifyPayment } = require("./malipopay");
 
-const orderReference = process.argv[2];
+const reference = process.argv[2];
 
-if (!orderReference) {
-  console.error("Usage: node test-query.js <orderReference>");
+if (!reference) {
+  console.error("Usage: node test-query.js <malipopayReference>");
   process.exit(1);
 }
 
-getPaymentStatus(orderReference)
+verifyPayment(reference)
   .then((data) => console.log("QUERY RESPONSE:", JSON.stringify(data, null, 2)))
   .catch((error) => {
     console.error("ERROR STATUS:", error.response?.status);

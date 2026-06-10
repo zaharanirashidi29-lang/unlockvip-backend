@@ -4,13 +4,12 @@ const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 const {
-  initiateUssdPush,
-  getPaymentStatus,
+  collectPayment,
+  verifyPayment,
   toInternationalPhone,
-  mapClickPesaStatus,
-  extractPaymentMeta,
-  getAccessToken
-} = require("./clickpesa");
+  mapMalipopayStatus,
+  extractPaymentMeta
+} = require("./malipopay");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -40,30 +39,21 @@ const paymentSchema = new mongoose.Schema({
 });
 
 paymentSchema.index({ reference: 1 }, { unique: true });
+paymentSchema.index({ order_tracking_id: 1 });
 paymentSchema.index({ phone: 1, pin: 1 });
 
 const Payment = mongoose.model("Payment", paymentSchema);
 
 app.get("/", (req, res) => {
-  res.send("UnlockVIP Backend Running (ClickPesa)");
+  res.send("UnlockVIP Backend Running (MaliPoPay)");
 });
 
 app.get("/health", async (req, res) => {
-  const checks = {
-    clickpesa_client_id: process.env.CLICKPESA_CLIENT_ID ? "Set" : "Missing",
-    clickpesa_api_key: process.env.CLICKPESA_API_KEY ? "Set" : "Missing",
+  res.json({
+    malipopay_secret_key: process.env.MALIPOPAY_SECRET_KEY ? "Set" : "Missing",
     mongodb_uri: process.env.MONGODB_URI ? "Set" : "Missing",
     timestamp: Math.floor(Date.now() / 1000)
-  };
-
-  try {
-    await getAccessToken();
-    checks.clickpesa_api = "Authenticated";
-  } catch (err) {
-    checks.clickpesa_api = err.response?.data?.message || err.message;
-  }
-
-  res.json(checks);
+  });
 });
 
 function normalizePhone(phone) {
@@ -74,10 +64,10 @@ function makeTxRef() {
   return "ORD" + Date.now();
 }
 
-function buildUpdateFromStatus(statusData, source = "QUERY") {
+function buildUpdateFromProvider(statusData, source = "QUERY") {
   const meta = extractPaymentMeta({
     status: statusData?.status,
-    message: statusData?.message,
+    message: statusData?.description || statusData?.message,
     source
   });
 
@@ -85,14 +75,15 @@ function buildUpdateFromStatus(statusData, source = "QUERY") {
     status: meta.status,
     reason: meta.reason,
     message: meta.message,
-    amount: Number(statusData?.collectedAmount) || undefined,
-    transaction_id: statusData?.id || statusData?.paymentReference,
+    amount: Number(statusData?.paidAmount || statusData?.amount) || undefined,
+    transaction_id: statusData?.id || statusData?.reference,
     result: statusData?.status,
+    resultcode: statusData?.status,
     provider_response: statusData
   };
 }
 
-function pollPaymentStatus(reference) {
+function pollPaymentStatus(malipopayReference, localReference) {
   let attempts = 0;
   const MAX_ATTEMPTS = 15;
 
@@ -100,7 +91,7 @@ function pollPaymentStatus(reference) {
     attempts++;
 
     try {
-      const existing = await Payment.findOne({ reference });
+      const existing = await Payment.findOne({ reference: localReference });
       if (!existing || existing.status === "COMPLETED" || existing.status === "FAILED") {
         clearInterval(interval);
         return;
@@ -108,7 +99,7 @@ function pollPaymentStatus(reference) {
 
       if (attempts >= MAX_ATTEMPTS) {
         await Payment.findOneAndUpdate(
-          { reference },
+          { reference: localReference },
           {
             status: "FAILED",
             reason: "POLLING_TIMEOUT",
@@ -119,15 +110,19 @@ function pollPaymentStatus(reference) {
         return;
       }
 
-      const statusData = await getPaymentStatus(reference);
-      const update = buildUpdateFromStatus(statusData, "QUERY");
+      const statusData = await verifyPayment(malipopayReference);
+      const update = buildUpdateFromProvider(statusData, "QUERY");
 
       if (update.status === "COMPLETED" || update.status === "FAILED") {
-        await Payment.findOneAndUpdate({ reference }, update);
+        await Payment.findOneAndUpdate({ reference: localReference }, update);
         clearInterval(interval);
       }
     } catch (error) {
-      console.error("Polling error for", reference, error.response?.data || error.message);
+      console.error(
+        "Polling error for",
+        localReference,
+        error.response?.data || error.message
+      );
     }
   }, 12000);
 }
@@ -187,45 +182,48 @@ app.post("/create-payment", async (req, res) => {
       time: new Date().toLocaleString()
     }).save();
 
-    const push = await initiateUssdPush({
+    const push = await collectPayment({
       amount,
-      orderReference: reference,
-      phoneNumber: phone
+      phoneNumber: phone,
+      reference,
+      description: "UnlockVIP subscription payment"
     });
 
-    const pushMeta = extractPaymentMeta({
-      status: push.status,
-      message: `USSD push sent via ${push.channel || "mobile money"}`,
-      source: "PUSH"
-    });
+    const mno = push.customer?.mno || "mobile money";
+    const malipopayRef = push.reference;
 
     await Payment.findOneAndUpdate(
       { reference },
       {
-        status: pushMeta.status === "COMPLETED" ? "COMPLETED" : "PROCESSING",
+        status: "PROCESSING",
         reason: "USSD_SENT",
-        order_tracking_id: push.id,
+        order_tracking_id: malipopayRef,
         transaction_id: push.id,
         result: push.status,
-        message: pushMeta.message,
+        message: `USSD push sent via ${mno}`,
         provider_response: push
       }
     );
 
-    if (mapClickPesaStatus(push.status) === "PROCESSING") {
-      pollPaymentStatus(reference);
+    if (mapMalipopayStatus(push.status) === "PROCESSING") {
+      pollPaymentStatus(malipopayRef, reference);
     }
 
     res.json({
       success: true,
-      data: push
+      data: {
+        reference,
+        malipopay_reference: malipopayRef,
+        status: push.status,
+        customer: push.customer
+      }
     });
   } catch (error) {
     console.error("CREATE PAYMENT ERROR:", error.response?.data || error.message);
 
     const apiMessage =
       error.response?.data?.message ||
-      (typeof error.response?.data === "string" ? error.response.data : null) ||
+      error.response?.data?.details ||
       error.message;
 
     if (reference) {
@@ -249,17 +247,23 @@ app.post("/create-payment", async (req, res) => {
 
 app.post("/webhook", async (req, res) => {
   try {
-    const { event, data } = req.body || {};
+    const body = req.body || {};
+    const event = body.type || body.event;
+    const data = body.data || body;
 
-    console.log("WEBHOOK RECEIVED:", JSON.stringify(req.body, null, 2));
+    console.log("WEBHOOK RECEIVED:", JSON.stringify(body, null, 2));
 
-    if (!data?.orderReference) {
-      return res.status(400).json({ success: false, error: "Missing order reference" });
+    const malipopayRef = data.reference || data.orderReference;
+    if (!malipopayRef) {
+      return res.status(400).json({ success: false, error: "Missing payment reference" });
     }
 
-    const payment = await Payment.findOne({ reference: data.orderReference });
+    const payment = await Payment.findOne({
+      $or: [{ order_tracking_id: malipopayRef }, { reference: malipopayRef }]
+    });
+
     if (!payment) {
-      console.warn("Webhook: payment not found for", data.orderReference);
+      console.warn("Webhook: payment not found for", malipopayRef);
       return res.status(404).json({ success: false, error: "Payment not found" });
     }
 
@@ -269,27 +273,22 @@ app.post("/webhook", async (req, res) => {
 
     const meta = extractPaymentMeta({
       status: data.status,
-      message: data.message,
+      message: data.message || data.description,
       event,
       source: "WEBHOOK"
     });
-
-    if (event === "PAYMENT RECEIVED") {
-      meta.status = "COMPLETED";
-      meta.reason = "WEBHOOK_CONFIRMED";
-      meta.message = data.message || "Payment successful";
-    }
 
     await Payment.findOneAndUpdate(
       { reference: payment.reference },
       {
         status: meta.status,
         reason: meta.reason,
-        order_tracking_id: data.id || payment.order_tracking_id,
-        transaction_id: data.id || data.paymentReference || payment.transaction_id,
+        order_tracking_id: malipopayRef,
+        transaction_id: data.id || payment.transaction_id,
         result: data.status,
+        resultcode: data.status,
         message: meta.message,
-        amount: Number(data.collectedAmount) || payment.amount,
+        amount: Number(data.paidAmount || data.amount) || payment.amount,
         provider_response: data
       }
     );
@@ -312,15 +311,19 @@ app.post("/query-transaction", async (req, res) => {
       });
     }
 
-    const statusData = await getPaymentStatus(reference);
-    const update = buildUpdateFromStatus(statusData, "QUERY");
+    const payment = await Payment.findOne({
+      $or: [{ reference }, { order_tracking_id: reference }]
+    });
 
-    const payment = await Payment.findOne({ reference });
+    const malipopayRef = payment?.order_tracking_id || reference;
+    const statusData = await verifyPayment(malipopayRef);
+    const update = buildUpdateFromProvider(statusData, "QUERY");
+
     if (payment) {
-      await Payment.findOneAndUpdate({ reference }, {
-        ...update,
-        reason: "MANUAL_QUERY"
-      });
+      await Payment.findOneAndUpdate(
+        { reference: payment.reference },
+        { ...update, reason: "MANUAL_QUERY" }
+      );
     }
 
     res.json({
