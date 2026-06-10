@@ -25,19 +25,63 @@ function apiHeaders() {
   return headers;
 }
 
-async function apiRequest(method, path, data) {
-  const { data: body } = await axios({
-    method,
-    url: `${BASE_URL}${path}`,
-    data,
-    headers: apiHeaders()
-  });
+function detectOperator(phone) {
+  const normalized = toInternationalPhone(phone);
+  const prefix3 = normalized.substring(3, 6);
 
-  if (body?.success === false) {
-    throw new Error(body.message || body.details || "MaliPoPay request failed");
+  if (/^7[4-9]/.test(prefix3)) return "M-Pesa (Vodacom)";
+  if (/^6[89]/.test(prefix3)) return "Airtel Money";
+  if (/^(71|65|67)/.test(prefix3)) return "Mixx by YAS (Tigo Pesa)";
+  if (/^62/.test(prefix3)) return "Halopesa";
+  if (/^61/.test(prefix3)) return "Halopesa/EasyPesa";
+  return `Network (${prefix3 || "unknown"})`;
+}
+
+function formatMalipopayError(error) {
+  const data = error.response?.data;
+  const rawMessage = data?.message || error.message || "MaliPoPay request failed";
+  let message = rawMessage;
+
+  if (/payment method not found|not supported/i.test(rawMessage)) {
+    message =
+      "This mobile network is not enabled on your MaliPoPay merchant account. Ask MaliPoPay to enable collection for this operator.";
   }
 
-  return body?.data ?? body;
+  return {
+    message,
+    code: data?.code || error.code,
+    details: data || null
+  };
+}
+
+async function apiRequest(method, path, data) {
+  try {
+    const { data: body } = await axios({
+      method,
+      url: `${BASE_URL}${path}`,
+      data,
+      headers: apiHeaders()
+    });
+
+    if (body?.success === false) {
+      const err = new Error(body.message || body.details || "MaliPoPay request failed");
+      err.code = body.code;
+      err.details = body;
+      throw err;
+    }
+
+    return body?.data ?? body;
+  } catch (error) {
+    if (error.details || !error.response?.data) {
+      throw error;
+    }
+
+    const formatted = formatMalipopayError(error);
+    const err = new Error(formatted.message);
+    err.code = formatted.code;
+    err.details = formatted.details;
+    throw err;
+  }
 }
 
 async function collectPayment({ amount, phoneNumber, reference, description }) {
@@ -135,6 +179,8 @@ module.exports = {
   collectPayment,
   verifyPayment,
   toInternationalPhone,
+  detectOperator,
+  formatMalipopayError,
   mapMalipopayStatus,
   extractPaymentMeta
 };

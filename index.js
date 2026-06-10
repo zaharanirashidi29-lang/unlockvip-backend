@@ -7,6 +7,8 @@ const {
   collectPayment,
   verifyPayment,
   toInternationalPhone,
+  detectOperator,
+  formatMalipopayError,
   mapMalipopayStatus,
   extractPaymentMeta
 } = require("./malipopay");
@@ -62,6 +64,18 @@ function normalizePhone(phone) {
 
 function makeTxRef() {
   return "ORD" + Date.now();
+}
+
+function clientError(error, fallback = "Payment failed") {
+  const formatted = formatMalipopayError(error);
+  const message = formatted.message || fallback;
+
+  return {
+    success: false,
+    error: message,
+    message,
+    code: formatted.code || null
+  };
 }
 
 function buildUpdateFromProvider(statusData, source = "QUERY") {
@@ -219,28 +233,32 @@ app.post("/create-payment", async (req, res) => {
       }
     });
   } catch (error) {
-    console.error("CREATE PAYMENT ERROR:", error.response?.data || error.message);
+    console.error("CREATE PAYMENT ERROR:", error.details || error.response?.data || error.message);
 
-    const apiMessage =
-      error.response?.data?.message ||
-      error.response?.data?.details ||
-      error.message;
+    const formatted = formatMalipopayError(error);
+    const apiMessage = formatted.message;
+    const isUnsupportedNetwork = /not enabled on your malipopay/i.test(apiMessage);
+    const operator = detectOperator(req.body?.phone || "");
 
     if (reference) {
       await Payment.findOneAndUpdate(
         { reference },
         {
           status: "FAILED",
-          reason: "API_ERROR",
-          message: apiMessage,
-          provider_response: error.response?.data || { message: apiMessage }
+          reason: isUnsupportedNetwork ? "UNSUPPORTED_NETWORK" : "API_ERROR",
+          message: isUnsupportedNetwork
+            ? `${operator}: ${apiMessage}`
+            : apiMessage,
+          result: formatted.code ? String(formatted.code) : "ERROR",
+          provider_response: formatted.details || { message: apiMessage }
         }
       ).catch(() => {});
     }
 
     res.status(500).json({
-      success: false,
-      error: error.response?.data || error.message
+      ...clientError(error),
+      operator,
+      reason: isUnsupportedNetwork ? "UNSUPPORTED_NETWORK" : "API_ERROR"
     });
   }
 });
@@ -332,11 +350,7 @@ app.post("/query-transaction", async (req, res) => {
     });
   } catch (error) {
     console.error("QUERY ERROR:", error.response?.data || error.message);
-
-    res.status(500).json({
-      success: false,
-      error: error.response?.data || error.message
-    });
+    res.status(500).json(clientError(error, "Failed to query payment"));
   }
 });
 
