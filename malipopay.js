@@ -31,7 +31,7 @@ function detectOperator(phone) {
 
   if (/^7[4-9]/.test(prefix3)) return "M-Pesa (Vodacom)";
   if (/^6[89]/.test(prefix3)) return "Airtel Money";
-  if (/^(71|65|67)/.test(prefix3)) return "Mixx by YAS (Tigo Pesa)";
+  if (/^(71|65|66|67)/.test(prefix3)) return "Mixx by YAS (Tigo Pesa)";
   if (/^62/.test(prefix3)) return "Halopesa";
   if (/^61/.test(prefix3)) return "Halopesa/EasyPesa";
   return `Network (${prefix3 || "unknown"})`;
