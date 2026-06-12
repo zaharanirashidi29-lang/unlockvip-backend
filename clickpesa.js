@@ -93,7 +93,7 @@ function extractPaymentMeta({ status, message, event, source = "QUERY" }) {
   const mappedStatus = mapClickPesaStatus(status);
   const text = String(message || "").toLowerCase();
 
-  if (mappedStatus === "COMPLETED" || event === "PAYMENT RECEIVED") {
+  if (mappedStatus === "COMPLETED") {
     return {
       status: "COMPLETED",
       reason: source === "WEBHOOK" ? "WEBHOOK_CONFIRMED" : "CONFIRMED_BY_QUERY",
@@ -101,7 +101,7 @@ function extractPaymentMeta({ status, message, event, source = "QUERY" }) {
     };
   }
 
-  if (mappedStatus === "FAILED" || event === "PAYMENT FAILED") {
+  if (mappedStatus === "FAILED") {
     if (text.includes("insufficient")) {
       return {
         status: "FAILED",

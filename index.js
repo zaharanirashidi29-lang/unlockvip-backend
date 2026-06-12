@@ -102,6 +102,30 @@ function clientError(error, provider, fallback = "Payment failed") {
   };
 }
 
+function isFailureWebhook(event, status) {
+  const eventName = String(event || "").toLowerCase();
+  const value = String(status || "").toUpperCase();
+  return (
+    eventName.includes("failed") ||
+    value === "FAILED" ||
+    value === "CANCELLED" ||
+    value === "REVERSED" ||
+    value === "EXPIRED"
+  );
+}
+
+function isSuccessWebhook(event, status) {
+  const eventName = String(event || "").toLowerCase();
+  const value = String(status || "").toUpperCase();
+  return (
+    event === "PAYMENT RECEIVED" ||
+    eventName.includes("completed") ||
+    value === "SUCCESS" ||
+    value === "COMPLETED" ||
+    value === "SETTLED"
+  );
+}
+
 function buildMalipopayUpdate(statusData, source) {
   const meta = extractMalipopayMeta({
     status: statusData?.status,
@@ -124,7 +148,7 @@ function buildMalipopayUpdate(statusData, source) {
 function buildClickpesaUpdate(statusData, source) {
   const meta = extractClickpesaMeta({
     status: statusData?.status,
-    message: statusData?.message,
+    message: statusData?.message || statusData?.description,
     source
   });
 
@@ -147,6 +171,23 @@ async function queryProviderStatus(payment) {
   }
 
   return { provider: "clickpesa", data: await getClickpesaStatus(payment.reference) };
+}
+
+function buildProviderUpdate(provider, statusData, source) {
+  return provider === "malipopay"
+    ? buildMalipopayUpdate(statusData, source)
+    : buildClickpesaUpdate(statusData, source);
+}
+
+async function applyStatusFromQuery(payment, source) {
+  const { provider, data } = await queryProviderStatus(payment);
+  const update = buildProviderUpdate(provider, data, source);
+
+  if (source === "WEBHOOK" && update.status === "COMPLETED") {
+    update.reason = "WEBHOOK_CONFIRMED";
+  }
+
+  return { provider, data, update };
 }
 
 function pollPaymentStatus(localReference) {
@@ -176,14 +217,25 @@ function pollPaymentStatus(localReference) {
         return;
       }
 
-      const { provider, data } = await queryProviderStatus(existing);
-      const update =
-        provider === "malipopay"
-          ? buildMalipopayUpdate(data, "QUERY")
-          : buildClickpesaUpdate(data, "QUERY");
+      const { data, update } = await applyStatusFromQuery(existing, "QUERY");
+      console.log("Inquiry result for", localReference, ":", data?.status || data);
 
-      if (update.status === "COMPLETED" || update.status === "FAILED") {
+      if (update.status === "COMPLETED") {
+        const updated = await Payment.findOneAndUpdate(
+          { reference: localReference, status: { $ne: "COMPLETED" } },
+          update,
+          { new: true }
+        );
+        if (updated) {
+          console.log("Status set to COMPLETED via CONFIRMED_BY_QUERY for", localReference);
+        }
+        clearInterval(interval);
+        return;
+      }
+
+      if (update.status === "FAILED") {
         await Payment.findOneAndUpdate({ reference: localReference }, update);
+        console.log("Status set to FAILED via FAILED_BY_QUERY for", localReference);
         clearInterval(interval);
       }
     } catch (error) {
@@ -360,55 +412,25 @@ app.post("/webhook", async (req, res) => {
     const body = req.body || {};
     console.log("WEBHOOK RECEIVED:", JSON.stringify(body, null, 2));
 
-    // ClickPesa webhook
+    let event;
+    let data;
+    let payment;
+
     if (body.event && body.data?.orderReference) {
-      const { event, data } = body;
-      const payment = await Payment.findOne({ reference: data.orderReference });
-
-      if (!payment) {
-        return res.status(404).json({ success: false, error: "Payment not found" });
+      event = body.event;
+      data = body.data;
+      payment = await Payment.findOne({ reference: data.orderReference });
+    } else {
+      event = body.type || body.event;
+      data = body.data || body;
+      const malipopayRef = data.reference || data.orderReference;
+      if (!malipopayRef) {
+        return res.status(400).json({ success: false, error: "Missing payment reference" });
       }
-
-      if (payment.status === "COMPLETED") {
-        return res.status(200).json({ success: true });
-      }
-
-      const meta = extractClickpesaMeta({
-        status: data.status,
-        message: data.message,
-        event,
-        source: "WEBHOOK"
+      payment = await Payment.findOne({
+        $or: [{ order_tracking_id: malipopayRef }, { reference: malipopayRef }]
       });
-
-      await Payment.findOneAndUpdate(
-        { reference: payment.reference },
-        {
-          status: meta.status,
-          reason: meta.reason,
-          order_tracking_id: data.id || payment.order_tracking_id,
-          transaction_id: data.id || data.paymentReference || payment.transaction_id,
-          result: data.status,
-          message: meta.message,
-          amount: Number(data.collectedAmount) || payment.amount,
-          provider_response: data
-        }
-      );
-
-      return res.status(200).json({ success: true });
     }
-
-    // MaliPoPay webhook
-    const event = body.type || body.event;
-    const data = body.data || body;
-    const malipopayRef = data.reference || data.orderReference;
-
-    if (!malipopayRef) {
-      return res.status(400).json({ success: false, error: "Missing payment reference" });
-    }
-
-    const payment = await Payment.findOne({
-      $or: [{ order_tracking_id: malipopayRef }, { reference: malipopayRef }]
-    });
 
     if (!payment) {
       return res.status(404).json({ success: false, error: "Payment not found" });
@@ -418,24 +440,92 @@ app.post("/webhook", async (req, res) => {
       return res.status(200).json({ success: true });
     }
 
-    const meta = extractMalipopayMeta({
-      status: data.status,
-      message: data.message || data.description,
-      event,
-      source: "WEBHOOK"
-    });
+    const webhookStatus = data.status || data.payment_status;
+
+    if (isFailureWebhook(event, webhookStatus)) {
+      const update = buildProviderUpdate(
+        payment.provider,
+        data,
+        "WEBHOOK"
+      );
+
+      await Payment.findOneAndUpdate(
+        { reference: payment.reference },
+        {
+          ...update,
+          reason: update.reason || "WEBHOOK_CALLBACK",
+          order_tracking_id: data.reference || data.orderReference || payment.order_tracking_id,
+          transaction_id: data.id || data.paymentReference || payment.transaction_id,
+          provider_response: data
+        }
+      );
+
+      console.log("Webhook marked FAILED for", payment.reference);
+      return res.status(200).json({ success: true });
+    }
+
+    if (isSuccessWebhook(event, webhookStatus)) {
+      try {
+        const { data: queryData, update } = await applyStatusFromQuery(payment, "WEBHOOK");
+        const confirmedStatus = (queryData?.status || "").toUpperCase();
+
+        console.log(
+          `Webhook verify query for ${payment.reference}: status=${confirmedStatus}`
+        );
+
+        if (update.status === "COMPLETED") {
+          await Payment.findOneAndUpdate(
+            { reference: payment.reference },
+            {
+              ...update,
+              reason: "WEBHOOK_CONFIRMED",
+              order_tracking_id: data.id || data.reference || payment.order_tracking_id,
+              transaction_id:
+                data.id || data.paymentReference || queryData?.id || payment.transaction_id,
+              provider_response: queryData
+            }
+          );
+          console.log("Webhook CONFIRMED COMPLETED for", payment.reference);
+        } else if (update.status === "FAILED") {
+          await Payment.findOneAndUpdate(
+            { reference: payment.reference },
+            {
+              ...update,
+              reason: "WEBHOOK_CALLBACK",
+              provider_response: queryData
+            }
+          );
+        } else {
+          await Payment.findOneAndUpdate(
+            { reference: payment.reference },
+            {
+              status: "PROCESSING",
+              reason: "USSD_SENT",
+              transaction_id: data.id || payment.transaction_id,
+              message: `Push sent but not paid yet (query says ${confirmedStatus || "PROCESSING"})`
+            }
+          );
+          console.log(
+            "Webhook: push sent but not paid yet for",
+            payment.reference,
+            "- staying PROCESSING"
+          );
+        }
+      } catch (queryError) {
+        console.error(
+          "Webhook verify query failed:",
+          queryError.response?.data || queryError.message
+        );
+      }
+
+      return res.status(200).json({ success: true });
+    }
 
     await Payment.findOneAndUpdate(
       { reference: payment.reference },
       {
-        status: meta.status,
-        reason: meta.reason,
-        order_tracking_id: malipopayRef,
-        transaction_id: data.id || payment.transaction_id,
-        result: data.status,
-        message: meta.message,
-        amount: Number(data.paidAmount || data.amount) || payment.amount,
-        provider_response: data
+        reason: `WEBHOOK_${String(webhookStatus || event || "UNKNOWN").toUpperCase()}`,
+        transaction_id: data.id || payment.transaction_id
       }
     );
 
@@ -465,18 +555,17 @@ app.post("/query-transaction", async (req, res) => {
       return res.status(404).json({ success: false, error: "Payment not found" });
     }
 
-    const { provider, data } = await queryProviderStatus(payment);
-    const update =
-      provider === "malipopay"
-        ? buildMalipopayUpdate(data, "QUERY")
-        : buildClickpesaUpdate(data, "QUERY");
+    const { provider, data, update } = await applyStatusFromQuery(payment, "QUERY");
 
     await Payment.findOneAndUpdate(
       { reference: payment.reference },
-      { ...update, reason: "MANUAL_QUERY" }
+      {
+        ...update,
+        reason: update.status === "COMPLETED" ? "CONFIRMED_BY_QUERY" : "MANUAL_QUERY"
+      }
     );
 
-    res.json({ success: true, provider, data });
+    res.json({ success: true, provider, data, status: update.status, reason: update.reason });
   } catch (error) {
     console.error("QUERY ERROR:", error.response?.data || error.message);
     const payment = await Payment.findOne({ reference: req.body?.reference }).catch(() => null);
