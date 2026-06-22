@@ -2,8 +2,7 @@ const { toInternationalPhone, detectOperator } = require("./malipopay");
 const { formatClickpesaError } = require("./clickpesa");
 const { formatMalipopayError } = require("./malipopay");
 
-function resolveProvider(phone) {
-  // Testing: route all networks through MaliPoPay
+function resolveProvider() {
   return "malipopay";
 }
 

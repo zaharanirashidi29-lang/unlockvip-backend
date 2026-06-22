@@ -29,8 +29,8 @@ function detectOperator(phone) {
   const normalized = toInternationalPhone(phone);
   const prefix3 = normalized.substring(3, 6);
 
-  if (/^7[4-9]/.test(prefix3)) return "M-Pesa (Vodacom)";
-  if (/^6[89]/.test(prefix3)) return "Airtel Money";
+  if (/^(74|75|76|79)/.test(prefix3)) return "M-Pesa (Vodacom)";
+  if (/^(68|69|78)/.test(prefix3)) return "Airtel Money";
   if (/^(71|65|66|67)/.test(prefix3)) return "Mixx by YAS (Tigo Pesa)";
   if (/^62/.test(prefix3)) return "Halopesa";
   if (/^61/.test(prefix3)) return "Halopesa/EasyPesa";
