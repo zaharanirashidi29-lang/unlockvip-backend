@@ -6,7 +6,6 @@ const mongoose = require("mongoose");
 const {
   collectPayment,
   verifyPayment,
-  getPaymentByReference,
   searchPayments,
   isMalipopaySuccessStatus,
   extractPaymentMeta: extractMalipopayMeta
