@@ -6,6 +6,9 @@ const mongoose = require("mongoose");
 const {
   collectPayment,
   verifyPayment,
+  getPaymentByReference,
+  searchPayments,
+  isMalipopaySuccessStatus,
   extractPaymentMeta: extractMalipopayMeta
 } = require("./malipopay");
 const { getAccessToken } = require("./clickpesa");
@@ -119,6 +122,7 @@ function isSuccessWebhook(event, status) {
     event === "PAYMENT RECEIVED" ||
     eventName.includes("completed") ||
     value === "SUCCESS" ||
+    value === "SUCCESSFUL" ||
     value === "COMPLETED" ||
     value === "SETTLED"
   );
@@ -126,10 +130,12 @@ function isSuccessWebhook(event, status) {
 
 function buildMalipopayUpdate(statusData, source) {
   const paidAmount = Number(statusData?.paidAmount || 0);
-  const rawStatus =
-    paidAmount > 0 && String(statusData?.status || "").toUpperCase() !== "FAILED"
+  const providerStatus = statusData?.status;
+  const rawStatus = isMalipopaySuccessStatus(providerStatus)
+    ? "SUCCESS"
+    : paidAmount > 0 && String(providerStatus || "").toUpperCase() !== "FAILED"
       ? "SUCCESS"
-      : statusData?.status;
+      : providerStatus;
 
   const meta = extractMalipopayMeta({
     status: rawStatus,
@@ -152,13 +158,41 @@ function buildMalipopayUpdate(statusData, source) {
 async function queryProviderStatus(payment) {
   const refs = [payment.order_tracking_id, payment.reference].filter(Boolean);
   let lastError;
+  let lastData;
 
   for (const ref of refs) {
-    try {
-      return { provider: "malipopay", data: await verifyPayment(ref) };
-    } catch (error) {
-      lastError = error;
+    for (const fetchStatus of [verifyPayment, getPaymentByReference]) {
+      try {
+        const data = await fetchStatus(ref);
+        lastData = data;
+        if (isMalipopaySuccessStatus(data?.status) || Number(data?.paidAmount) > 0) {
+          return { provider: "malipopay", data };
+        }
+      } catch (error) {
+        lastError = error;
+      }
     }
+  }
+
+  if (lastData) {
+    return { provider: "malipopay", data: lastData };
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const results = await searchPayments({ status: "SUCCESS", from: today, to: today });
+    const items = Array.isArray(results) ? results : [];
+    const match = items.find(
+      (item) =>
+        item.reference === payment.order_tracking_id ||
+        item.reference === payment.reference ||
+        item.id === payment.transaction_id
+    );
+    if (match) {
+      return { provider: "malipopay", data: match };
+    }
+  } catch (error) {
+    lastError = error;
   }
 
   throw lastError || new Error("Unable to verify MaliPoPay payment");
@@ -179,27 +213,51 @@ async function applyStatusFromQuery(payment, source) {
   return { provider, data, update };
 }
 
+async function syncMalipopayPayment(payment) {
+  if (!payment?.order_tracking_id && !payment?.reference) {
+    return payment;
+  }
+
+  try {
+    const { update } = await applyStatusFromQuery(payment, "SYNC");
+    if (update.status === payment.status && update.reason === payment.reason) {
+      return payment;
+    }
+
+    return Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      {
+        ...update,
+        reason: update.status === "COMPLETED" ? "SYNCED_FROM_MALIPOPAY" : update.reason
+      },
+      { new: true }
+    );
+  } catch (error) {
+    console.error("Sync error for", payment.reference, error.message);
+    return payment;
+  }
+}
+
 function pollPaymentStatus(localReference) {
   let attempts = 0;
-  const MAX_ATTEMPTS = 40;
+  const MAX_ATTEMPTS = 120;
 
   const interval = setInterval(async () => {
     attempts++;
 
     try {
       const existing = await Payment.findOne({ reference: localReference });
-      if (!existing || existing.status === "COMPLETED" || existing.status === "FAILED") {
+      if (!existing || existing.status === "COMPLETED") {
         clearInterval(interval);
         return;
       }
 
       if (attempts >= MAX_ATTEMPTS) {
         await Payment.findOneAndUpdate(
-          { reference: localReference },
+          { reference: localReference, status: { $ne: "COMPLETED" } },
           {
-            status: "FAILED",
-            reason: "POLLING_TIMEOUT",
-            message: "Customer did not complete payment in time"
+            reason: "POLLING_STOPPED",
+            message: "Awaiting MaliPoPay confirmation"
           }
         );
         clearInterval(interval);
@@ -212,7 +270,7 @@ function pollPaymentStatus(localReference) {
       if (update.status === "COMPLETED") {
         const updated = await Payment.findOneAndUpdate(
           { reference: localReference, status: { $ne: "COMPLETED" } },
-          update,
+          { ...update, reason: "CONFIRMED_BY_QUERY" },
           { new: true }
         );
         if (updated) {
@@ -234,7 +292,7 @@ function pollPaymentStatus(localReference) {
         error.response?.data || error.message
       );
     }
-  }, 12000);
+  }, 5000);
 }
 
 app.post("/create-payment", async (req, res) => {
@@ -576,6 +634,18 @@ app.post("/query-transaction", async (req, res) => {
 app.get("/admin/payments", async (req, res) => {
   const { status } = req.query;
   const filter = status ? { status } : {};
+
+  let pending = await Payment.find({
+    ...filter,
+    provider: "malipopay",
+    status: { $ne: "COMPLETED" },
+    order_tracking_id: { $exists: true, $ne: null }
+  })
+    .sort({ _id: -1 })
+    .limit(50);
+
+  await Promise.allSettled(pending.map((payment) => syncMalipopayPayment(payment)));
+
   const data = await Payment.find(filter).sort({ _id: -1 });
   res.json(data);
 });

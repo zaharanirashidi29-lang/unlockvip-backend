@@ -97,6 +97,19 @@ async function verifyPayment(reference) {
   return apiRequest("GET", `/api/v1/payment/verify/${encodeURIComponent(reference)}`);
 }
 
+async function getPaymentByReference(reference) {
+  return apiRequest("GET", `/api/v1/payment/reference/${encodeURIComponent(reference)}`);
+}
+
+async function searchPayments({ status, from, to } = {}) {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  const query = params.toString();
+  return apiRequest("GET", `/api/v1/payment/search${query ? `?${query}` : ""}`);
+}
+
 function toInternationalPhone(phone) {
   const normalized = String(phone || "").trim();
   if (normalized.startsWith("0")) {
@@ -108,9 +121,16 @@ function toInternationalPhone(phone) {
   return normalized;
 }
 
+function isMalipopaySuccessStatus(status) {
+  const value = String(status || "").toUpperCase();
+  return ["SUCCESS", "SUCCESSFUL", "SUCCEEDED", "COMPLETED", "SETTLED", "PAID"].includes(
+    value
+  );
+}
+
 function mapMalipopayStatus(status) {
   const value = String(status || "").toUpperCase();
-  if (value === "SUCCESS" || value === "COMPLETED") return "COMPLETED";
+  if (isMalipopaySuccessStatus(status)) return "COMPLETED";
   if (value === "FAILED" || value === "CANCELLED" || value === "REVERSED") {
     return "FAILED";
   }
@@ -121,9 +141,8 @@ function extractPaymentMeta({ status, message, event, source = "QUERY" }) {
   const rawStatus = String(status || "").toUpperCase();
   const mappedStatus = mapMalipopayStatus(status);
   const text = String(message || "").toLowerCase();
-  const eventName = String(event || "").toLowerCase();
 
-  if (rawStatus === "SUCCESS" || rawStatus === "COMPLETED") {
+  if (isMalipopaySuccessStatus(status)) {
     return {
       status: "COMPLETED",
       reason: source === "WEBHOOK" ? "WEBHOOK_CONFIRMED" : "CONFIRMED_BY_QUERY",
@@ -173,9 +192,12 @@ function extractPaymentMeta({ status, message, event, source = "QUERY" }) {
 module.exports = {
   collectPayment,
   verifyPayment,
+  getPaymentByReference,
+  searchPayments,
   toInternationalPhone,
   detectOperator,
   formatMalipopayError,
   mapMalipopayStatus,
+  isMalipopaySuccessStatus,
   extractPaymentMeta
 };
