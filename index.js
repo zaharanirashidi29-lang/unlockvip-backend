@@ -6,7 +6,6 @@ const mongoose = require("mongoose");
 const {
   collectPayment,
   verifyPayment,
-  searchPayments,
   isMalipopaySuccessStatus,
   extractPaymentMeta: extractMalipopayMeta
 } = require("./malipopay");
@@ -154,57 +153,22 @@ function buildMalipopayUpdate(statusData, source) {
   };
 }
 
-async function queryProviderStatus(payment, { allowSearch = false } = {}) {
-  const refs = [payment.order_tracking_id, payment.reference].filter(Boolean);
-  let lastError;
-  let lastData;
-
-  for (const ref of refs) {
-    try {
-      const data = await verifyPayment(ref);
-      lastData = data;
-      if (isMalipopaySuccessStatus(data?.status) || Number(data?.paidAmount) > 0) {
-        return { provider: "malipopay", data };
-      }
-    } catch (error) {
-      lastError = error;
-    }
+async function queryProviderStatus(payment) {
+  const ref = payment.order_tracking_id || payment.reference;
+  if (!ref) {
+    throw new Error("Missing MaliPoPay reference");
   }
 
-  if (lastData) {
-    return { provider: "malipopay", data: lastData };
-  }
-
-  if (!allowSearch) {
-    throw lastError || new Error("Unable to verify MaliPoPay payment");
-  }
-
-  const today = new Date().toISOString().slice(0, 10);
-  try {
-    const results = await searchPayments({ status: "SUCCESS", from: today, to: today });
-    const items = Array.isArray(results) ? results : [];
-    const match = items.find(
-      (item) =>
-        item.reference === payment.order_tracking_id ||
-        item.reference === payment.reference ||
-        item.id === payment.transaction_id
-    );
-    if (match) {
-      return { provider: "malipopay", data: match };
-    }
-  } catch (error) {
-    lastError = error;
-  }
-
-  throw lastError || new Error("Unable to verify MaliPoPay payment");
+  const data = await verifyPayment(ref);
+  return { provider: "malipopay", data };
 }
 
 function buildProviderUpdate(provider, statusData, source) {
   return buildMalipopayUpdate(statusData, source);
 }
 
-async function applyStatusFromQuery(payment, source, options = {}) {
-  const { provider, data } = await queryProviderStatus(payment, options);
+async function applyStatusFromQuery(payment, source) {
+  const { provider, data } = await queryProviderStatus(payment);
   const update = buildProviderUpdate(provider, data, source);
 
   if (source === "WEBHOOK" && update.status === "COMPLETED") {
@@ -220,7 +184,7 @@ async function syncMalipopayPayment(payment) {
   }
 
   try {
-    const { update } = await applyStatusFromQuery(payment, "SYNC", { allowSearch: true });
+    const { update } = await applyStatusFromQuery(payment, "SYNC");
     if (update.status === payment.status && update.reason === payment.reason) {
       return payment;
     }
@@ -241,7 +205,7 @@ async function syncMalipopayPayment(payment) {
 
 function pollPaymentStatus(localReference) {
   let attempts = 0;
-  const MAX_ATTEMPTS = 60;
+  const MAX_ATTEMPTS = 24;
 
   const interval = setInterval(async () => {
     attempts++;
@@ -287,13 +251,17 @@ function pollPaymentStatus(localReference) {
         clearInterval(interval);
       }
     } catch (error) {
+      const isRateLimited = error.code === 429 || error.response?.status === 429;
       console.error(
         "Polling error for",
         localReference,
         error.response?.data || error.message
       );
+      if (isRateLimited) {
+        clearInterval(interval);
+      }
     }
-  }, 10000);
+  }, 20000);
 }
 
 app.post("/create-payment", async (req, res) => {
@@ -635,22 +603,25 @@ app.post("/query-transaction", async (req, res) => {
 app.get("/admin/payments", async (req, res) => {
   const { status } = req.query;
   const filter = status ? { status } : {};
+  const data = await Payment.find(filter).sort({ _id: -1 });
+  res.json(data);
+});
 
-  let pending = await Payment.find({
-    ...filter,
+app.post("/admin/sync-payments", async (req, res) => {
+  const pending = await Payment.find({
     provider: "malipopay",
     status: { $ne: "COMPLETED" },
     order_tracking_id: { $exists: true, $ne: null }
   })
     .sort({ _id: -1 })
-    .limit(10);
+    .limit(3);
 
+  const results = [];
   for (const payment of pending) {
-    await syncMalipopayPayment(payment);
+    results.push(await syncMalipopayPayment(payment));
   }
 
-  const data = await Payment.find(filter).sort({ _id: -1 });
-  res.json(data);
+  res.json({ success: true, synced: results.length });
 });
 
 app.listen(PORT, () => {

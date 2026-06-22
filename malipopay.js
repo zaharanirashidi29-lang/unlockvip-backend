@@ -25,16 +25,38 @@ function apiHeaders() {
   return headers;
 }
 
+let apiCooldownUntil = 0;
+let lastApiCallAt = 0;
+const MIN_API_GAP_MS = 3000;
+const verifyCache = new Map();
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForApiSlot() {
+  if (Date.now() < apiCooldownUntil) {
+    const err = new Error("Too many payment requests. Please wait a moment and try again.");
+    err.code = 429;
+    throw err;
+  }
+
+  const wait = Math.max(0, MIN_API_GAP_MS - (Date.now() - lastApiCallAt));
+  if (wait > 0) {
+    await sleep(wait);
+  }
+
+  lastApiCallAt = Date.now();
+}
+
 function detectOperator(phone) {
   const normalized = toInternationalPhone(phone);
   const prefix3 = normalized.substring(3, 6);
 
   if (/^(74|75|76|79)/.test(prefix3)) return "M-Pesa (Vodacom)";
-  if (/^(68|69|78)/.test(prefix3)) return "Airtel Money";
-  if (/^66/.test(prefix3)) return "Halopesa";
+  if (/^(66|68|69|78)/.test(prefix3)) return "Airtel Money";
   if (/^(71|65|67)/.test(prefix3)) return "Mixx by YAS (Tigo Pesa)";
-  if (/^62/.test(prefix3)) return "Halopesa";
-  if (/^61/.test(prefix3)) return "Halopesa/EasyPesa";
+  if (/^(62|61)/.test(prefix3)) return "Halopesa";
   return `Network (${prefix3 || "unknown"})`;
 }
 
@@ -60,6 +82,8 @@ function formatMalipopayError(error) {
 }
 
 async function apiRequest(method, path, data) {
+  await waitForApiSlot();
+
   try {
     const { data: body } = await axios({
       method,
@@ -77,6 +101,10 @@ async function apiRequest(method, path, data) {
 
     return body?.data ?? body;
   } catch (error) {
+    if (error.response?.status === 429) {
+      apiCooldownUntil = Date.now() + 90000;
+    }
+
     if (error.details || !error.response?.data) {
       throw error;
     }
@@ -99,7 +127,15 @@ async function collectPayment({ amount, phoneNumber, reference, description }) {
 }
 
 async function verifyPayment(reference) {
-  return apiRequest("GET", `/api/v1/payment/verify/${encodeURIComponent(reference)}`);
+  const cached = verifyCache.get(reference);
+  if (cached && cached.expiry > Date.now()) {
+    return cached.data;
+  }
+
+  const data = await apiRequest("GET", `/api/v1/payment/verify/${encodeURIComponent(reference)}`);
+  const ttl = isMalipopaySuccessStatus(data?.status) ? 300000 : 45000;
+  verifyCache.set(reference, { data, expiry: Date.now() + ttl });
+  return data;
 }
 
 async function getPaymentByReference(reference) {
