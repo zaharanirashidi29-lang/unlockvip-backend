@@ -155,27 +155,29 @@ function buildMalipopayUpdate(statusData, source) {
   };
 }
 
-async function queryProviderStatus(payment) {
+async function queryProviderStatus(payment, { allowSearch = false } = {}) {
   const refs = [payment.order_tracking_id, payment.reference].filter(Boolean);
   let lastError;
   let lastData;
 
   for (const ref of refs) {
-    for (const fetchStatus of [verifyPayment, getPaymentByReference]) {
-      try {
-        const data = await fetchStatus(ref);
-        lastData = data;
-        if (isMalipopaySuccessStatus(data?.status) || Number(data?.paidAmount) > 0) {
-          return { provider: "malipopay", data };
-        }
-      } catch (error) {
-        lastError = error;
+    try {
+      const data = await verifyPayment(ref);
+      lastData = data;
+      if (isMalipopaySuccessStatus(data?.status) || Number(data?.paidAmount) > 0) {
+        return { provider: "malipopay", data };
       }
+    } catch (error) {
+      lastError = error;
     }
   }
 
   if (lastData) {
     return { provider: "malipopay", data: lastData };
+  }
+
+  if (!allowSearch) {
+    throw lastError || new Error("Unable to verify MaliPoPay payment");
   }
 
   const today = new Date().toISOString().slice(0, 10);
@@ -202,8 +204,8 @@ function buildProviderUpdate(provider, statusData, source) {
   return buildMalipopayUpdate(statusData, source);
 }
 
-async function applyStatusFromQuery(payment, source) {
-  const { provider, data } = await queryProviderStatus(payment);
+async function applyStatusFromQuery(payment, source, options = {}) {
+  const { provider, data } = await queryProviderStatus(payment, options);
   const update = buildProviderUpdate(provider, data, source);
 
   if (source === "WEBHOOK" && update.status === "COMPLETED") {
@@ -219,7 +221,7 @@ async function syncMalipopayPayment(payment) {
   }
 
   try {
-    const { update } = await applyStatusFromQuery(payment, "SYNC");
+    const { update } = await applyStatusFromQuery(payment, "SYNC", { allowSearch: true });
     if (update.status === payment.status && update.reason === payment.reason) {
       return payment;
     }
@@ -240,7 +242,7 @@ async function syncMalipopayPayment(payment) {
 
 function pollPaymentStatus(localReference) {
   let attempts = 0;
-  const MAX_ATTEMPTS = 120;
+  const MAX_ATTEMPTS = 60;
 
   const interval = setInterval(async () => {
     attempts++;
@@ -292,7 +294,7 @@ function pollPaymentStatus(localReference) {
         error.response?.data || error.message
       );
     }
-  }, 5000);
+  }, 10000);
 }
 
 app.post("/create-payment", async (req, res) => {
@@ -642,9 +644,11 @@ app.get("/admin/payments", async (req, res) => {
     order_tracking_id: { $exists: true, $ne: null }
   })
     .sort({ _id: -1 })
-    .limit(50);
+    .limit(10);
 
-  await Promise.allSettled(pending.map((payment) => syncMalipopayPayment(payment)));
+  for (const payment of pending) {
+    await syncMalipopayPayment(payment);
+  }
 
   const data = await Payment.find(filter).sort({ _id: -1 });
   res.json(data);

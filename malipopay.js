@@ -31,7 +31,8 @@ function detectOperator(phone) {
 
   if (/^(74|75|76|79)/.test(prefix3)) return "M-Pesa (Vodacom)";
   if (/^(68|69|78)/.test(prefix3)) return "Airtel Money";
-  if (/^(71|65|66|67)/.test(prefix3)) return "Mixx by YAS (Tigo Pesa)";
+  if (/^66/.test(prefix3)) return "Halopesa";
+  if (/^(71|65|67)/.test(prefix3)) return "Mixx by YAS (Tigo Pesa)";
   if (/^62/.test(prefix3)) return "Halopesa";
   if (/^61/.test(prefix3)) return "Halopesa/EasyPesa";
   return `Network (${prefix3 || "unknown"})`;
@@ -47,9 +48,13 @@ function formatMalipopayError(error) {
       "This mobile network is not enabled on your MaliPoPay merchant account. Ask MaliPoPay to enable collection for this operator.";
   }
 
+  if (error.response?.status === 429 || /too many requests|rate limit/i.test(rawMessage)) {
+    message = "Too many payment requests. Please wait a moment and try again.";
+  }
+
   return {
     message,
-    code: data?.code || error.code,
+    code: data?.code || error.response?.status || error.code,
     details: data || null
   };
 }
