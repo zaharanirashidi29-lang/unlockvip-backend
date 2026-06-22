@@ -4,12 +4,10 @@ const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 const {
-  collectPayment,
+  initiateStkPush,
   verifyPayment,
-  isMalipopaySuccessStatus,
-  extractPaymentMeta: extractMalipopayMeta
-} = require("./malipopay");
-const { getAccessToken } = require("./clickpesa");
+  buildVoxopayUpdate
+} = require("./voxopay");
 const {
   toInternationalPhone,
   detectOperator,
@@ -52,25 +50,19 @@ paymentSchema.index({ phone: 1, pin: 1 });
 const Payment = mongoose.model("Payment", paymentSchema);
 
 app.get("/", (req, res) => {
-  res.send("UnlockVIP Backend Running (MaliPoPay)");
+  res.send("UnlockVIP Backend Running (VoxoPay)");
 });
 
 app.get("/health", async (req, res) => {
   const checks = {
-    clickpesa_client_id: process.env.CLICKPESA_CLIENT_ID ? "Set" : "Missing",
-    clickpesa_api_key: process.env.CLICKPESA_API_KEY ? "Set" : "Missing",
-    malipopay_secret_key: process.env.MALIPOPAY_SECRET_KEY ? "Set" : "Missing",
+    voxopay_merchant_id: process.env.VOXOPAY_MERCHANT_ID ? "Set" : "Missing",
+    voxopay_api_key: process.env.VOXOPAY_API_KEY ? "Set" : "Missing",
+    voxopay_api_secret: process.env.VOXOPAY_API_SECRET ? "Set" : "Missing",
+    voxopay_ipn_url: process.env.VOXOPAY_IPN_URL ? "Set" : "Missing",
     mongodb_uri: process.env.MONGODB_URI ? "Set" : "Missing",
-    routing: "All networks → MaliPoPay",
+    routing: "All networks → VoxoPay",
     timestamp: Math.floor(Date.now() / 1000)
   };
-
-  try {
-    await getAccessToken();
-    checks.clickpesa_api = "Authenticated";
-  } catch (err) {
-    checks.clickpesa_api = err.message;
-  }
 
   res.json(checks);
 });
@@ -96,90 +88,45 @@ function clientError(error, provider, fallback = "Payment failed") {
   };
 }
 
-function isMalipopayWebhook(body) {
-  const event = String(body?.event || "").toLowerCase();
-  return event.startsWith("payment.") || event.startsWith("disbursement.");
+function isVoxopayWebhook(body) {
+  const status = String(body?.status || "").toLowerCase();
+  const data = body?.data;
+  return Boolean(data && (data.ref_trx || data.trx_id) && status);
 }
 
-function isFailureWebhook(event, status) {
-  const eventName = String(event || "").toLowerCase();
-  const value = String(status || "").toUpperCase();
-  return (
-    eventName.includes("failed") ||
-    value === "FAILED" ||
-    value === "CANCELLED" ||
-    value === "REVERSED" ||
-    value === "EXPIRED"
-  );
-}
+function buildPaymentLookup(data) {
+  const refs = [
+    data?.ref_trx,
+    data?.trx_id,
+    data?.merchant_reference,
+    data?.external_reference
+  ].filter(Boolean);
 
-function isSuccessWebhook(event, status) {
-  const eventName = String(event || "").toLowerCase();
-  const value = String(status || "").toUpperCase();
-  return (
-    event === "PAYMENT RECEIVED" ||
-    eventName.includes("completed") ||
-    value === "SUCCESS" ||
-    value === "SUCCESSFUL" ||
-    value === "COMPLETED" ||
-    value === "SETTLED"
-  );
-}
-
-function buildMalipopayUpdate(statusData, source) {
-  const paidAmount = Number(statusData?.paidAmount || 0);
-  const providerStatus = statusData?.status;
-  const rawStatus = isMalipopaySuccessStatus(providerStatus)
-    ? "SUCCESS"
-    : paidAmount > 0 && String(providerStatus || "").toUpperCase() !== "FAILED"
-      ? "SUCCESS"
-      : providerStatus;
-
-  const meta = extractMalipopayMeta({
-    status: rawStatus,
-    message: statusData?.description || statusData?.message,
-    source
-  });
-
-  return {
-    status: meta.status,
-    reason: meta.reason,
-    message: meta.message,
-    amount: Number(statusData?.paidAmount || statusData?.amount) || undefined,
-    transaction_id: statusData?.id || statusData?.reference,
-    result: statusData?.status,
-    resultcode: statusData?.status,
-    provider_response: statusData
-  };
+  const lookup = [];
+  for (const ref of refs) {
+    lookup.push({ reference: ref }, { order_tracking_id: ref });
+  }
+  return lookup;
 }
 
 async function queryProviderStatus(payment) {
-  const ref = payment.order_tracking_id || payment.reference;
-  if (!ref) {
-    throw new Error("Missing MaliPoPay reference");
+  const trxId = payment.order_tracking_id || payment.transaction_id;
+  if (!trxId) {
+    throw new Error("Missing VoxoPay transaction ID");
   }
 
-  const data = await verifyPayment(ref);
-  return { provider: "malipopay", data };
-}
-
-function buildProviderUpdate(provider, statusData, source) {
-  return buildMalipopayUpdate(statusData, source);
+  const data = await verifyPayment(trxId);
+  return { provider: "voxopay", data };
 }
 
 async function applyStatusFromQuery(payment, source) {
   const { provider, data } = await queryProviderStatus(payment);
-  const update = buildProviderUpdate(provider, data, source);
-
-  if (source === "WEBHOOK" && update.status === "COMPLETED") {
-    update.reason = "WEBHOOK_CONFIRMED";
-  }
-
+  const update = buildVoxopayUpdate(data, source);
   return { provider, data, update };
 }
 
-async function syncMalipopayPayment(payment) {
-  if (!payment?.order_tracking_id && !payment?.reference) {
+async function syncVoxopayPayment(payment) {
+  if (!payment?.order_tracking_id && !payment?.transaction_id) {
     return payment;
   }
 
@@ -193,7 +140,7 @@ async function syncMalipopayPayment(payment) {
       { reference: payment.reference },
       {
         ...update,
-        reason: update.status === "COMPLETED" ? "SYNCED_FROM_MALIPOPAY" : update.reason
+        reason: update.status === "COMPLETED" ? "SYNCED_FROM_VOXOPAY" : update.reason
       },
       { new: true }
     );
@@ -222,7 +169,7 @@ function pollPaymentStatus(localReference) {
           { reference: localReference, status: { $ne: "COMPLETED" } },
           {
             reason: "POLLING_STOPPED",
-            message: "Awaiting MaliPoPay confirmation"
+            message: "Awaiting VoxoPay confirmation"
           }
         );
         clearInterval(interval);
@@ -325,50 +272,43 @@ app.post("/create-payment", async (req, res) => {
       time: new Date().toLocaleString()
     }).save();
 
-    if (provider === "malipopay") {
-      const push = await collectPayment({
-        amount,
-        phoneNumber: phone,
+    const push = await initiateStkPush({
+      amount,
+      phone,
+      refTrx: reference,
+      description: "UnlockVIP subscription payment"
+    });
+
+    await Payment.findOneAndUpdate(
+      { reference },
+      {
+        status: "PROCESSING",
+        reason: "USSD_SENT",
+        order_tracking_id: push.trx_id,
+        transaction_id: push.trx_id,
+        result: push.stk_push_initiated ? "PROCESSING" : "UNKNOWN",
+        message: `USSD push sent via VoxoPay (${operator})`,
+        provider_response: push
+      }
+    );
+
+    pollPaymentStatus(reference);
+
+    return res.json({
+      success: true,
+      provider,
+      operator,
+      data: {
         reference,
-        description: "UnlockVIP subscription payment"
-      });
-
-      const mno = push.customer?.mno || "M-Pesa";
-      const malipopayRef = push.reference;
-
-      await Payment.findOneAndUpdate(
-        { reference },
-        {
-          status: "PROCESSING",
-          reason: "USSD_SENT",
-          order_tracking_id: malipopayRef,
-          transaction_id: push.id,
-          result: push.status,
-          message: `USSD push sent via ${mno} (MaliPoPay)`,
-          provider_response: push
-        }
-      );
-
-      pollPaymentStatus(reference);
-
-      return res.json({
-        success: true,
-        provider,
-        operator,
-        data: {
-          reference,
-          malipopay_reference: malipopayRef,
-          status: push.status,
-          customer: push.customer
-        }
-      });
-    }
-
-    throw new Error("Unsupported payment provider");
+        trx_id: push.trx_id,
+        stk_push_initiated: push.stk_push_initiated,
+        status: push.stk_push_initiated ? "PROCESSING" : "UNKNOWN"
+      }
+    });
   } catch (error) {
     console.error("CREATE PAYMENT ERROR:", error.details || error.response?.data || error.message);
 
-    const formatted = formatApiError(error, provider || "malipopay");
+    const formatted = formatApiError(error, provider || "voxopay");
     const apiMessage = formatted.message;
     const operator = detectOperator(req.body?.phone || "");
 
@@ -398,21 +338,15 @@ app.post("/webhook", async (req, res) => {
     const body = req.body || {};
     console.log("WEBHOOK RECEIVED:", JSON.stringify(body, null, 2));
 
-    const event = body.event || body.type;
-    const data = body.data || body;
-    const malipopayRef = data.reference || data.orderReference;
-    const localReference = data.merchantReference || data.external_reference;
+    if (!isVoxopayWebhook(body)) {
+      return res.status(400).json({ success: false, error: "Unrecognized webhook format" });
+    }
 
-    if (!malipopayRef && !localReference) {
+    const data = body.data || {};
+    const lookup = buildPaymentLookup(data);
+
+    if (!lookup.length) {
       return res.status(400).json({ success: false, error: "Missing payment reference" });
-    }
-
-    const lookup = [];
-    if (malipopayRef) {
-      lookup.push({ order_tracking_id: malipopayRef }, { reference: malipopayRef });
-    }
-    if (localReference) {
-      lookup.push({ reference: localReference });
     }
 
     const payment = await Payment.findOne({ $or: lookup });
@@ -425,133 +359,32 @@ app.post("/webhook", async (req, res) => {
       return res.status(200).json({ success: true });
     }
 
-    const eventName = String(event || "").toLowerCase();
+    const webhookStatus = String(body.status || data.status || "").toLowerCase();
+    const statusData = {
+      ...data,
+      status: webhookStatus === "completed" ? "success" : webhookStatus,
+      message: body.message || data.message
+    };
 
-    if (isMalipopayWebhook(body)) {
-      if (eventName === "payment.completed") {
-        const update = buildMalipopayUpdate(
-          { ...data, status: data.status || "SUCCESS" },
-          "WEBHOOK"
-        );
-
-        await Payment.findOneAndUpdate(
-          { reference: payment.reference },
-          {
-            ...update,
-            reason: "WEBHOOK_CONFIRMED",
-            order_tracking_id: malipopayRef || payment.order_tracking_id,
-            transaction_id: data.id || payment.transaction_id,
-            provider_response: data
-          }
-        );
-
-        console.log("MaliPoPay webhook COMPLETED for", payment.reference);
-        return res.status(200).json({ success: true });
-      }
-
-      if (eventName === "payment.failed") {
-        const update = buildMalipopayUpdate(
-          { ...data, status: data.status || "FAILED" },
-          "WEBHOOK"
-        );
-
-        await Payment.findOneAndUpdate(
-          { reference: payment.reference },
-          {
-            ...update,
-            reason: update.reason || "WEBHOOK_CALLBACK",
-            order_tracking_id: malipopayRef || payment.order_tracking_id,
-            transaction_id: data.id || payment.transaction_id,
-            provider_response: data
-          }
-        );
-
-        console.log("MaliPoPay webhook FAILED for", payment.reference);
-        return res.status(200).json({ success: true });
-      }
-    }
-
-    const webhookStatus = data.status || data.payment_status;
-
-    if (isFailureWebhook(event, webhookStatus)) {
-      const update = buildProviderUpdate(payment.provider, data, "WEBHOOK");
-
-      await Payment.findOneAndUpdate(
-        { reference: payment.reference },
-        {
-          ...update,
-          reason: update.reason || "WEBHOOK_CALLBACK",
-          order_tracking_id: malipopayRef || payment.order_tracking_id,
-          transaction_id: data.id || data.paymentReference || payment.transaction_id,
-          provider_response: data
-        }
-      );
-
-      console.log("Webhook marked FAILED for", payment.reference);
-      return res.status(200).json({ success: true });
-    }
-
-    if (isSuccessWebhook(event, webhookStatus)) {
-      const update = buildMalipopayUpdate(
-        { ...data, status: data.status || webhookStatus || "SUCCESS" },
-        "WEBHOOK"
-      );
-
-      if (update.status === "COMPLETED") {
-        await Payment.findOneAndUpdate(
-          { reference: payment.reference },
-          {
-            ...update,
-            reason: "WEBHOOK_CONFIRMED",
-            order_tracking_id: malipopayRef || payment.order_tracking_id,
-            transaction_id: data.id || data.paymentReference || payment.transaction_id,
-            provider_response: data
-          }
-        );
-        console.log("Webhook CONFIRMED COMPLETED for", payment.reference);
-      } else {
-        try {
-          const { data: queryData, update: queryUpdate } = await applyStatusFromQuery(
-            payment,
-            "WEBHOOK"
-          );
-
-          if (queryUpdate.status === "COMPLETED") {
-            await Payment.findOneAndUpdate(
-              { reference: payment.reference },
-              {
-                ...queryUpdate,
-                reason: "WEBHOOK_CONFIRMED",
-                provider_response: queryData
-              }
-            );
-          } else {
-            await Payment.findOneAndUpdate(
-              { reference: payment.reference },
-              {
-                status: "PROCESSING",
-                reason: "USSD_SENT",
-                message: `Payment pending (query says ${queryData?.status || "PROCESSING"})`
-              }
-            );
-          }
-        } catch (queryError) {
-          console.error(
-            "Webhook verify query failed:",
-            queryError.response?.data || queryError.message
-          );
-        }
-      }
-
-      return res.status(200).json({ success: true });
-    }
+    const update = buildVoxopayUpdate(statusData, "WEBHOOK");
+    const trxId = data.trx_id || payment.order_tracking_id;
 
     await Payment.findOneAndUpdate(
       { reference: payment.reference },
       {
-        reason: `WEBHOOK_${String(webhookStatus || event || "UNKNOWN").toUpperCase()}`,
-        transaction_id: data.id || payment.transaction_id
+        ...update,
+        order_tracking_id: trxId || payment.order_tracking_id,
+        transaction_id: trxId || payment.transaction_id,
+        provider_response: body
       }
+    );
+
+    console.log(
+      "VoxoPay webhook",
+      update.status,
+      "for",
+      payment.reference,
+      "(" + webhookStatus + ")"
     );
 
     res.status(200).json({ success: true });
@@ -596,7 +429,7 @@ app.post("/query-transaction", async (req, res) => {
     const payment = await Payment.findOne({ reference: req.body?.reference }).catch(() => null);
     res
       .status(500)
-      .json(clientError(error, payment?.provider || "malipopay", "Failed to query payment"));
+      .json(clientError(error, payment?.provider || "voxopay", "Failed to query payment"));
   }
 });
 
@@ -609,7 +442,7 @@ app.get("/admin/payments", async (req, res) => {
 
 app.post("/admin/sync-payments", async (req, res) => {
   const pending = await Payment.find({
-    provider: "malipopay",
+    provider: "voxopay",
     status: { $ne: "COMPLETED" },
     order_tracking_id: { $exists: true, $ne: null }
   })
@@ -618,7 +451,7 @@ app.post("/admin/sync-payments", async (req, res) => {
 
   const results = [];
   for (const payment of pending) {
-    results.push(await syncMalipopayPayment(payment));
+    results.push(await syncVoxopayPayment(payment));
   }
 
   res.json({ success: true, synced: results.length });
