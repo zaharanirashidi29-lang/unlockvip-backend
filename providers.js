@@ -1,12 +1,16 @@
 const { toInternationalPhone, detectOperator } = require("./malipopay");
-const { formatVoxopayError } = require("./voxopay");
+const { formatClickpesaError } = require("./clickpesa");
+const { formatMalipopayError } = require("./malipopay");
 
 function resolveProvider() {
-  return "voxopay";
+  return "malipopay";
 }
 
-function formatApiError(error) {
-  return formatVoxopayError(error);
+function formatApiError(error, provider) {
+  if (provider === "malipopay") {
+    return formatMalipopayError(error);
+  }
+  return formatClickpesaError(error);
 }
 
 module.exports = {
