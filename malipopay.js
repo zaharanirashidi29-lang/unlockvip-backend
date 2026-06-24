@@ -176,14 +176,19 @@ async function collectPayment({ amount, phoneNumber, reference, description }) {
   });
 }
 
-async function verifyPayment(reference) {
-  const cached = verifyCache.get(reference);
-  if (cached && cached.expiry > Date.now()) {
-    return cached.data;
+async function verifyPayment(reference, options = {}) {
+  const { bypassCache = false } = options;
+
+  if (!bypassCache) {
+    const cached = verifyCache.get(reference);
+    if (cached && cached.expiry > Date.now()) {
+      return cached.data;
+    }
   }
 
   const data = await apiRequest("GET", `/api/v1/payment/verify/${encodeURIComponent(reference)}`);
-  const ttl = isMalipopaySuccessStatus(data?.status) ? 300000 : 45000;
+  const ttl =
+    isMalipopayPaymentComplete(data) ? 300000 : 15000;
   verifyCache.set(reference, { data, expiry: Date.now() + ttl });
   return data;
 }
@@ -210,6 +215,78 @@ function toInternationalPhone(phone) {
     return normalized.substring(1);
   }
   return normalized;
+}
+
+function isMalipopayPaymentComplete(data) {
+  if (!data) return false;
+
+  if (isMalipopaySuccessStatus(data.status)) {
+    return true;
+  }
+
+  const paidAmount = Number(data.paidAmount || 0);
+  const amount = Number(data.amount || 0);
+  const providerStatus = String(data.status || "").toUpperCase();
+
+  if (paidAmount > 0 && providerStatus !== "FAILED" && providerStatus !== "CANCELLED") {
+    return true;
+  }
+
+  return amount > 0 && paidAmount >= amount;
+}
+
+function normalizeMalipopayStatusData(statusData) {
+  const paidAmount = Number(statusData?.paidAmount || 0);
+  const providerStatus = statusData?.status;
+
+  if (isMalipopayPaymentComplete(statusData)) {
+    return {
+      ...statusData,
+      status: isMalipopaySuccessStatus(providerStatus) ? providerStatus : "SUCCESS"
+    };
+  }
+
+  return statusData;
+}
+
+async function lookupPaymentStatus(reference, options = {}) {
+  return verifyPayment(reference, options);
+}
+
+async function resolvePaymentStatus(payment, options = {}) {
+  const refs = [...new Set([payment.order_tracking_id, payment.reference].filter(Boolean))];
+  let lastData = null;
+  let lastError = null;
+
+  for (const ref of refs) {
+    try {
+      const data = await verifyPayment(ref, options);
+      lastData = data;
+      if (isMalipopayPaymentComplete(data)) {
+        return data;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  for (const ref of refs) {
+    try {
+      const data = await getPaymentByReference(ref);
+      lastData = data;
+      if (isMalipopayPaymentComplete(data)) {
+        return data;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  if (lastData) {
+    return lastData;
+  }
+
+  throw lastError || new Error("Missing MaliPoPay reference");
 }
 
 function isMalipopaySuccessStatus(status) {
@@ -286,6 +363,8 @@ module.exports = {
   resolvePaymentMethodType,
   needsExplicitPaymentMethod,
   verifyPayment,
+  lookupPaymentStatus,
+  resolvePaymentStatus,
   getPaymentByReference,
   searchPayments,
   toInternationalPhone,
@@ -293,5 +372,7 @@ module.exports = {
   formatMalipopayError,
   mapMalipopayStatus,
   isMalipopaySuccessStatus,
+  isMalipopayPaymentComplete,
+  normalizeMalipopayStatusData,
   extractPaymentMeta
 };

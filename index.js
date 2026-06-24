@@ -5,8 +5,8 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 const {
   collectPayment,
-  verifyPayment,
-  isMalipopaySuccessStatus,
+  resolvePaymentStatus,
+  normalizeMalipopayStatusData,
   extractPaymentMeta: extractMalipopayMeta
 } = require("./malipopay");
 const { getAccessToken } = require("./clickpesa");
@@ -50,6 +50,9 @@ paymentSchema.index({ order_tracking_id: 1 });
 paymentSchema.index({ phone: 1, pin: 1 });
 
 const Payment = mongoose.model("Payment", paymentSchema);
+
+const POLL_INTERVAL_MS = 8000;
+const MAX_POLL_ATTEMPTS = 10;
 
 app.get("/", (req, res) => {
   res.send("UnlockVIP Backend Running (MaliPoPay)");
@@ -127,17 +130,10 @@ function isSuccessWebhook(event, status) {
 }
 
 function buildMalipopayUpdate(statusData, source) {
-  const paidAmount = Number(statusData?.paidAmount || 0);
-  const providerStatus = statusData?.status;
-  const rawStatus = isMalipopaySuccessStatus(providerStatus)
-    ? "SUCCESS"
-    : paidAmount > 0 && String(providerStatus || "").toUpperCase() !== "FAILED"
-      ? "SUCCESS"
-      : providerStatus;
-
+  const normalized = normalizeMalipopayStatusData(statusData);
   const meta = extractMalipopayMeta({
-    status: rawStatus,
-    message: statusData?.description || statusData?.message,
+    status: normalized.status,
+    message: normalized.description || normalized.message || statusData?.description || statusData?.message,
     source
   });
 
@@ -145,21 +141,20 @@ function buildMalipopayUpdate(statusData, source) {
     status: meta.status,
     reason: meta.reason,
     message: meta.message,
-    amount: Number(statusData?.paidAmount || statusData?.amount) || undefined,
-    transaction_id: statusData?.id || statusData?.reference,
-    result: statusData?.status,
-    resultcode: statusData?.status,
-    provider_response: statusData
+    amount: Number(normalized.paidAmount || normalized.amount || statusData?.paidAmount || statusData?.amount) || undefined,
+    transaction_id: normalized.id || normalized.reference || statusData?.id || statusData?.reference,
+    result: normalized.status || statusData?.status,
+    resultcode: normalized.status || statusData?.status,
+    provider_response: normalized
   };
 }
 
-async function queryProviderStatus(payment) {
-  const ref = payment.order_tracking_id || payment.reference;
-  if (!ref) {
+async function queryProviderStatus(payment, options = {}) {
+  if (!payment?.order_tracking_id && !payment?.reference) {
     throw new Error("Missing MaliPoPay reference");
   }
 
-  const data = await verifyPayment(ref);
+  const data = await resolvePaymentStatus(payment, options);
   return { provider: "malipopay", data };
 }
 
@@ -167,8 +162,8 @@ function buildProviderUpdate(provider, statusData, source) {
   return buildMalipopayUpdate(statusData, source);
 }
 
-async function applyStatusFromQuery(payment, source) {
-  const { provider, data } = await queryProviderStatus(payment);
+async function applyStatusFromQuery(payment, source, options = {}) {
+  const { provider, data } = await queryProviderStatus(payment, options);
   const update = buildProviderUpdate(provider, data, source);
 
   if (source === "WEBHOOK" && update.status === "COMPLETED") {
@@ -178,13 +173,71 @@ async function applyStatusFromQuery(payment, source) {
   return { provider, data, update };
 }
 
+async function finalizePolling(localReference) {
+  const existing = await Payment.findOne({ reference: localReference });
+  if (!existing || existing.status === "COMPLETED") {
+    return;
+  }
+
+  try {
+    const { update } = await applyStatusFromQuery(existing, "QUERY", { bypassCache: true });
+    if (update.status === "COMPLETED") {
+      await Payment.findOneAndUpdate(
+        { reference: localReference, status: { $ne: "COMPLETED" } },
+        { ...update, reason: "CONFIRMED_BY_QUERY" }
+      );
+      console.log("Late COMPLETED detected for", localReference);
+      return;
+    }
+
+    if (update.status === "FAILED") {
+      await Payment.findOneAndUpdate({ reference: localReference }, update);
+      return;
+    }
+  } catch (error) {
+    console.error("Final MaliPoPay check failed for", localReference, error.message);
+  }
+
+  await Payment.findOneAndUpdate(
+    { reference: localReference, status: { $nin: ["COMPLETED", "TIMEOUT", "FAILED"] } },
+    {
+      status: "TIMEOUT",
+      reason: "POLLING_TIMEOUT",
+      message: "Payment not confirmed in time",
+      result: "TIMEOUT",
+      resultcode: "TIMEOUT"
+    }
+  );
+  console.log("Marked TIMEOUT for", localReference);
+}
+
+async function fixStalePollingRecords() {
+  const result = await Payment.updateMany(
+    {
+      status: "PROCESSING",
+      reason: { $in: ["POLLING_STOPPED", "POLLING_TIMEOUT"] }
+    },
+    {
+      status: "TIMEOUT",
+      reason: "POLLING_TIMEOUT",
+      message: "Payment not confirmed in time",
+      result: "TIMEOUT",
+      resultcode: "TIMEOUT"
+    }
+  );
+
+  if (result.modifiedCount > 0) {
+    console.log("Fixed stale polling records:", result.modifiedCount);
+  }
+}
+
 async function syncMalipopayPayment(payment) {
   if (!payment?.order_tracking_id && !payment?.reference) {
     return payment;
   }
 
   try {
-    const { update } = await applyStatusFromQuery(payment, "SYNC");
+    const { update } = await applyStatusFromQuery(payment, "SYNC", { bypassCache: true });
     if (update.status === payment.status && update.reason === payment.reason) {
       return payment;
     }
@@ -205,32 +258,32 @@ async function syncMalipopayPayment(payment) {
 
 function pollPaymentStatus(localReference) {
   let attempts = 0;
-  const MAX_ATTEMPTS = 24;
 
   const interval = setInterval(async () => {
     attempts++;
 
     try {
       const existing = await Payment.findOne({ reference: localReference });
-      if (!existing || existing.status === "COMPLETED") {
+      if (
+        !existing ||
+        existing.status === "COMPLETED" ||
+        existing.status === "TIMEOUT" ||
+        existing.status === "FAILED"
+      ) {
         clearInterval(interval);
         return;
       }
 
-      if (attempts >= MAX_ATTEMPTS) {
-        await Payment.findOneAndUpdate(
-          { reference: localReference, status: { $ne: "COMPLETED" } },
-          {
-            reason: "POLLING_STOPPED",
-            message: "Awaiting MaliPoPay confirmation"
-          }
-        );
+      if (attempts >= MAX_POLL_ATTEMPTS) {
+        await finalizePolling(localReference);
         clearInterval(interval);
         return;
       }
 
-      const { data, update } = await applyStatusFromQuery(existing, "QUERY");
-      console.log("Inquiry result for", localReference, ":", data?.status || data);
+      const { data, update } = await applyStatusFromQuery(existing, "QUERY", {
+        bypassCache: true
+      });
+      console.log("Inquiry result for", localReference, ":", data?.status, "paid:", data?.paidAmount);
 
       if (update.status === "COMPLETED") {
         const updated = await Payment.findOneAndUpdate(
@@ -258,10 +311,11 @@ function pollPaymentStatus(localReference) {
         error.response?.data || error.message
       );
       if (isRateLimited) {
+        await finalizePolling(localReference);
         clearInterval(interval);
       }
     }
-  }, 20000);
+  }, POLL_INTERVAL_MS);
 }
 
 app.post("/create-payment", async (req, res) => {
@@ -580,7 +634,9 @@ app.post("/query-transaction", async (req, res) => {
       return res.status(404).json({ success: false, error: "Payment not found" });
     }
 
-    const { provider, data, update } = await applyStatusFromQuery(payment, "QUERY");
+    const { provider, data, update } = await applyStatusFromQuery(payment, "QUERY", {
+      bypassCache: true
+    });
 
     await Payment.findOneAndUpdate(
       { reference: payment.reference },
@@ -624,6 +680,12 @@ app.post("/admin/sync-payments", async (req, res) => {
   res.json({ success: true, synced: results.length });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
+  try {
+    await fixStalePollingRecords();
+  } catch (error) {
+    console.error("Failed to fix stale polling records:", error.message);
+  }
+
   console.log("Server running on port", PORT);
 });
