@@ -56,7 +56,7 @@ function detectOperator(phone) {
   if (/^(74|75|76|79)/.test(prefix3)) return "M-Pesa (Vodacom)";
   if (/^(66|68|69|78)/.test(prefix3)) return "Airtel Money";
   if (/^(71|65|67)/.test(prefix3)) return "Mixx by YAS (Tigo Pesa)";
-  if (/^(62|61)/.test(prefix3)) return "Halopesa";
+  if (/^(61|62|63)/.test(prefix3)) return "Halopesa";
   return `Network (${prefix3 || "unknown"})`;
 }
 
@@ -124,15 +124,15 @@ function resolvePaymentMethodType(phone) {
   if (/^(74|75|76|79)/.test(prefix3)) return "MPESA_TZ_PUSH";
   if (/^(66|68|69|78)/.test(prefix3)) return "AIRTELMONEY_TZ_PUSH";
   if (/^(71|65|67)/.test(prefix3)) return "TIGOPESA_TZ_PUSH";
-  if (/^(62|61)/.test(prefix3)) return "HALOPESA_TZ";
+  if (/^(61|62|63)/.test(prefix3)) return "HALOPESA_TZ";
 
   return null;
 }
 
 function needsExplicitPaymentMethod(phone) {
   const prefix3 = toInternationalPhone(phone).substring(3, 6);
-  // MaliPoPay collection auto-routing fails for 066 (Airtel) and 061/062 (Halotel).
-  return /^(66|61|62)/.test(prefix3);
+  // MaliPoPay collection auto-routing fails for 066 (Airtel) and 061/062/063 (Halotel).
+  return /^(66|61|62|63)/.test(prefix3);
 }
 
 async function createPaymentIntent({ amount, phoneNumber, reference, description }) {

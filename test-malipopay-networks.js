@@ -7,7 +7,8 @@ const testNumbers = [
   { label: "Airtel 066", phone: "0667392184" },
   { label: "Airtel 078", phone: "0784000001" },
   { label: "Tigo/Mixx", phone: "0712000001" },
-  { label: "Halotel", phone: "0617119863" }
+  { label: "Halotel 061", phone: "0617119863" },
+  { label: "Halotel 063", phone: "0630000001" }
 ];
 
 (async () => {
