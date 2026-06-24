@@ -8,6 +8,7 @@ const {
   resolvePaymentStatus,
   normalizeMalipopayStatusData,
   isHalotelPhone,
+  getPaymentFailureMessage,
   extractPaymentMeta: extractMalipopayMeta
 } = require("./malipopay");
 const { getAccessToken } = require("./clickpesa");
@@ -423,11 +424,7 @@ app.post("/create-payment", async (req, res) => {
       });
 
       if (String(push.status || "").toUpperCase() === "FAILED") {
-        throw new Error(
-          push.description ||
-            push.message ||
-            "Payment push failed. Customer did not receive a USSD prompt."
-        );
+        throw new Error(getPaymentFailureMessage(push, operator));
       }
 
       const mno = push.customer?.mno || detectOperator(phone);

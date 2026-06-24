@@ -74,6 +74,11 @@ function formatMalipopayError(error) {
     message = "Too many payment requests. Please wait a moment and try again.";
   }
 
+  if (/^unlockvip/i.test(message) || message === "UnlockVIP payment") {
+    message =
+      "Halotel payment prompt could not be sent. The number may not have an active Halopesa wallet or MaliPoPay rejected the push.";
+  }
+
   return {
     message,
     code: data?.code || error.response?.status || error.code,
@@ -189,6 +194,31 @@ async function createPaymentIntent({ amount, phoneNumber, reference, description
 function isHalotelPhone(phone) {
   const prefix3 = toInternationalPhone(phone).substring(3, 6);
   return /^(61|62|63)/.test(prefix3);
+}
+
+function getPaymentFailureMessage(push, operator = "Halotel") {
+  const description = String(push?.description || "");
+  const candidates = [
+    push?.failureReason,
+    push?.failureMessage,
+    push?.resultDescription,
+    push?.lastError,
+    push?.message,
+    push?.metadata
+  ]
+    .map((value) => String(value || "").trim())
+    .filter(
+      (value) =>
+        value &&
+        value !== description &&
+        !/^unlockvip/i.test(value)
+    );
+
+  if (candidates.length) {
+    return candidates[0];
+  }
+
+  return `${operator} payment prompt could not be sent. Ensure the number has an active Halopesa wallet and can receive USSD pushes.`;
 }
 
 async function collectHalotelPayment({ amount, phoneNumber, reference, description }) {
@@ -457,6 +487,7 @@ module.exports = {
   resolvePaymentMethodType,
   needsExplicitPaymentMethod,
   isHalotelPhone,
+  getPaymentFailureMessage,
   verifyPayment,
   lookupPaymentStatus,
   resolvePaymentStatus,
