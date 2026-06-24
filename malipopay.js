@@ -166,10 +166,6 @@ function isHalotelPhone(phone) {
   return /^(61|62|63)/.test(prefix3);
 }
 
-function isFailedInitiation(push) {
-  return String(push?.status || "").toUpperCase() === "FAILED";
-}
-
 async function collectHalotelPayment({ amount, phoneNumber, reference, description }) {
   const phone = toInternationalPhone(phoneNumber);
 
