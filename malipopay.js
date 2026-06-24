@@ -173,37 +173,13 @@ function isFailedInitiation(push) {
 async function collectHalotelPayment({ amount, phoneNumber, reference, description }) {
   const phone = toInternationalPhone(phoneNumber);
 
-  const push = await createPaymentIntent({
+  return createPaymentIntent({
     amount,
     phoneNumber: phone,
     reference,
     description,
     type: "HALOPESA_TZ_PUSH"
   });
-
-  if (!isFailedInitiation(push)) {
-    return push;
-  }
-
-  const collected = await apiRequest("POST", "/api/v1/payment/collection", {
-    amount: Number(amount),
-    phoneNumber: phone,
-    reference,
-    description: description || "UnlockVIP payment"
-  });
-
-  if (isFailedInitiation(collected)) {
-    const err = new Error(
-      collected.description ||
-        collected.message ||
-        "Halotel STK push failed. The customer did not receive a payment prompt."
-    );
-    err.code = collected.code;
-    err.details = collected;
-    throw err;
-  }
-
-  return collected;
 }
 
 async function collectPayment({ amount, phoneNumber, reference, description }) {
