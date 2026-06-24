@@ -387,7 +387,15 @@ app.post("/create-payment", async (req, res) => {
         description: "UnlockVIP subscription payment"
       });
 
-      const mno = push.customer?.mno || "M-Pesa";
+      if (String(push.status || "").toUpperCase() === "FAILED") {
+        throw new Error(
+          push.description ||
+            push.message ||
+            "Payment push failed. Customer did not receive a USSD prompt."
+        );
+      }
+
+      const mno = push.customer?.mno || detectOperator(phone);
       const malipopayRef = push.reference;
 
       await Payment.findOneAndUpdate(

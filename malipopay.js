@@ -124,20 +124,20 @@ function resolvePaymentMethodType(phone) {
   if (/^(74|75|76|79)/.test(prefix3)) return "MPESA_TZ_PUSH";
   if (/^(66|68|69|78)/.test(prefix3)) return "AIRTELMONEY_TZ_PUSH";
   if (/^(71|65|67)/.test(prefix3)) return "TIGOPESA_TZ_PUSH";
-  if (/^(61|62|63)/.test(prefix3)) return "HALOPESA_TZ";
+  if (/^(61|62|63)/.test(prefix3)) return "HALOPESA_TZ_PUSH";
 
   return null;
 }
 
 function needsExplicitPaymentMethod(phone) {
   const prefix3 = toInternationalPhone(phone).substring(3, 6);
-  // MaliPoPay collection auto-routing fails for 066 (Airtel) and 061/062/063 (Halotel).
-  return /^(66|61|62|63)/.test(prefix3);
+  // MaliPoPay collection auto-routing fails for 066 (Airtel). Halotel handled separately.
+  return /^66/.test(prefix3);
 }
 
-async function createPaymentIntent({ amount, phoneNumber, reference, description }) {
+async function createPaymentIntent({ amount, phoneNumber, reference, description, type }) {
   const phone = toInternationalPhone(phoneNumber);
-  const pushType = resolvePaymentMethodType(phone);
+  const pushType = type || resolvePaymentMethodType(phone);
 
   if (!pushType) {
     const err = new Error(
@@ -161,8 +161,57 @@ async function createPaymentIntent({ amount, phoneNumber, reference, description
   return apiRequest("POST", "/api/v1/payment", payload);
 }
 
+function isHalotelPhone(phone) {
+  const prefix3 = toInternationalPhone(phone).substring(3, 6);
+  return /^(61|62|63)/.test(prefix3);
+}
+
+function isFailedInitiation(push) {
+  return String(push?.status || "").toUpperCase() === "FAILED";
+}
+
+async function collectHalotelPayment({ amount, phoneNumber, reference, description }) {
+  const phone = toInternationalPhone(phoneNumber);
+
+  const push = await createPaymentIntent({
+    amount,
+    phoneNumber: phone,
+    reference,
+    description,
+    type: "HALOPESA_TZ_PUSH"
+  });
+
+  if (!isFailedInitiation(push)) {
+    return push;
+  }
+
+  const collected = await apiRequest("POST", "/api/v1/payment/collection", {
+    amount: Number(amount),
+    phoneNumber: phone,
+    reference,
+    description: description || "UnlockVIP payment"
+  });
+
+  if (isFailedInitiation(collected)) {
+    const err = new Error(
+      collected.description ||
+        collected.message ||
+        "Halotel STK push failed. The customer did not receive a payment prompt."
+    );
+    err.code = collected.code;
+    err.details = collected;
+    throw err;
+  }
+
+  return collected;
+}
+
 async function collectPayment({ amount, phoneNumber, reference, description }) {
   const phone = toInternationalPhone(phoneNumber);
+
+  if (isHalotelPhone(phone)) {
+    return collectHalotelPayment({ amount, phoneNumber: phone, reference, description });
+  }
 
   if (needsExplicitPaymentMethod(phone)) {
     return createPaymentIntent({ amount, phoneNumber: phone, reference, description });
