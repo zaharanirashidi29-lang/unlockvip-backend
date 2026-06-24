@@ -77,7 +77,8 @@ function formatMalipopayError(error) {
   return {
     message,
     code: data?.code || error.response?.status || error.code,
-    details: data || null
+    details: data || null,
+    metadata: data?.metadata || data?.details || null
   };
 }
 
@@ -128,11 +129,17 @@ function resolvePaymentMethodType(phone) {
   return null;
 }
 
+function needsExplicitPaymentMethod(phone) {
+  const prefix3 = toInternationalPhone(phone).substring(3, 6);
+  // MaliPoPay collection auto-routing fails for 066 (Airtel) and 061/062 (Halotel).
+  return /^(66|61|62)/.test(prefix3);
+}
+
 async function createPaymentIntent({ amount, phoneNumber, reference, description }) {
   const phone = toInternationalPhone(phoneNumber);
-  const type = resolvePaymentMethodType(phone);
+  const pushType = resolvePaymentMethodType(phone);
 
-  if (!type) {
+  if (!pushType) {
     const err = new Error(
       `Unsupported Tanzanian number prefix ${phone.substring(3, 6)}. Use a valid Vodacom, Airtel, Tigo, or Halotel number.`
     );
@@ -146,20 +153,27 @@ async function createPaymentIntent({ amount, phoneNumber, reference, description
     currency: "TZS",
     reference,
     paymentMethodDetails: {
-      type,
+      type: pushType,
       phoneNumber: phone
     }
   };
 
-  if (description) {
-    payload.customer = { phoneNumber: phone };
-  }
-
-  return apiRequest("PUT", "/api/v1/payment", payload);
+  return apiRequest("POST", "/api/v1/payment", payload);
 }
 
 async function collectPayment({ amount, phoneNumber, reference, description }) {
-  return createPaymentIntent({ amount, phoneNumber, reference, description });
+  const phone = toInternationalPhone(phoneNumber);
+
+  if (needsExplicitPaymentMethod(phone)) {
+    return createPaymentIntent({ amount, phoneNumber: phone, reference, description });
+  }
+
+  return apiRequest("POST", "/api/v1/payment/collection", {
+    amount: Number(amount),
+    phoneNumber: phone,
+    reference,
+    description: description || "UnlockVIP payment"
+  });
 }
 
 async function verifyPayment(reference) {
@@ -270,6 +284,7 @@ module.exports = {
   collectPayment,
   createPaymentIntent,
   resolvePaymentMethodType,
+  needsExplicitPaymentMethod,
   verifyPayment,
   getPaymentByReference,
   searchPayments,
