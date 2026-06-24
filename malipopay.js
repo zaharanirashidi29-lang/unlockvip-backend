@@ -117,13 +117,49 @@ async function apiRequest(method, path, data) {
   }
 }
 
-async function collectPayment({ amount, phoneNumber, reference, description }) {
-  return apiRequest("POST", "/api/v1/payment/collection", {
+function resolvePaymentMethodType(phone) {
+  const prefix3 = toInternationalPhone(phone).substring(3, 6);
+
+  if (/^(74|75|76|79)/.test(prefix3)) return "MPESA_TZ_PUSH";
+  if (/^(66|68|69|78)/.test(prefix3)) return "AIRTELMONEY_TZ_PUSH";
+  if (/^(71|65|67)/.test(prefix3)) return "TIGOPESA_TZ_PUSH";
+  if (/^(62|61)/.test(prefix3)) return "HALOPESA_TZ_PUSH";
+
+  return null;
+}
+
+async function createPaymentIntent({ amount, phoneNumber, reference, description }) {
+  const phone = toInternationalPhone(phoneNumber);
+  const type = resolvePaymentMethodType(phone);
+
+  if (!type) {
+    const err = new Error(
+      `Unsupported Tanzanian number prefix ${phone.substring(3, 6)}. Use a valid Vodacom, Airtel, Tigo, or Halotel number.`
+    );
+    err.code = "UNSUPPORTED_PREFIX";
+    throw err;
+  }
+
+  const payload = {
+    mode: "CHARGE",
     amount: Number(amount),
-    phoneNumber,
+    currency: "TZS",
     reference,
-    description: description || "UnlockVIP payment"
-  });
+    paymentMethodDetails: {
+      type,
+      phoneNumber: phone
+    }
+  };
+
+  if (description) {
+    payload.customer = { phoneNumber: phone };
+  }
+
+  return apiRequest("PUT", "/api/v1/payment", payload);
+}
+
+async function collectPayment({ amount, phoneNumber, reference, description }) {
+  return createPaymentIntent({ amount, phoneNumber, reference, description });
 }
 
 async function verifyPayment(reference) {
@@ -232,6 +268,8 @@ function extractPaymentMeta({ status, message, event, source = "QUERY" }) {
 
 module.exports = {
   collectPayment,
+  createPaymentIntent,
+  resolvePaymentMethodType,
   verifyPayment,
   getPaymentByReference,
   searchPayments,
