@@ -7,6 +7,7 @@ const {
   collectPayment,
   resolvePaymentStatus,
   normalizeMalipopayStatusData,
+  isHalotelPhone,
   extractPaymentMeta: extractMalipopayMeta
 } = require("./malipopay");
 const { getAccessToken } = require("./clickpesa");
@@ -52,7 +53,9 @@ paymentSchema.index({ phone: 1, pin: 1 });
 const Payment = mongoose.model("Payment", paymentSchema);
 
 const POLL_INTERVAL_MS = 8000;
-const MAX_POLL_ATTEMPTS = 10;
+const MAX_POLL_ATTEMPTS = 12;
+const HALOTEL_POLL_INTERVAL_MS = 10000;
+const HALOTEL_MAX_POLL_ATTEMPTS = 30;
 
 app.get("/", (req, res) => {
   res.send("UnlockVIP Backend Running (MaliPoPay)");
@@ -209,6 +212,35 @@ async function finalizePolling(localReference) {
     }
   );
   console.log("Marked TIMEOUT for", localReference);
+  scheduleLateStatusChecks(localReference);
+}
+
+function scheduleLateStatusChecks(localReference) {
+  const delays = [5 * 60 * 1000, 15 * 60 * 1000, 30 * 60 * 1000];
+
+  for (const delay of delays) {
+    setTimeout(async () => {
+      try {
+        const payment = await Payment.findOne({ reference: localReference });
+        if (!payment || payment.status === "COMPLETED") {
+          return;
+        }
+
+        const { update } = await applyStatusFromQuery(payment, "SYNC", { bypassCache: true });
+        if (update.status !== "COMPLETED") {
+          return;
+        }
+
+        await Payment.findOneAndUpdate(
+          { reference: localReference, status: { $ne: "COMPLETED" } },
+          { ...update, reason: "LATE_CONFIRMED_BY_QUERY" }
+        );
+        console.log("Late COMPLETED detected for", localReference, "after", delay / 60000, "min");
+      } catch (error) {
+        console.error("Late status check failed for", localReference, error.message);
+      }
+    }, delay);
+  }
 }
 
 async function fixStalePollingRecords() {
@@ -256,8 +288,11 @@ async function syncMalipopayPayment(payment) {
   }
 }
 
-function pollPaymentStatus(localReference) {
+function pollPaymentStatus(localReference, phone) {
   let attempts = 0;
+  const halotel = isHalotelPhone(phone);
+  const intervalMs = halotel ? HALOTEL_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
+  const maxAttempts = halotel ? HALOTEL_MAX_POLL_ATTEMPTS : MAX_POLL_ATTEMPTS;
 
   const interval = setInterval(async () => {
     attempts++;
@@ -274,7 +309,7 @@ function pollPaymentStatus(localReference) {
         return;
       }
 
-      if (attempts >= MAX_POLL_ATTEMPTS) {
+      if (attempts >= maxAttempts) {
         await finalizePolling(localReference);
         clearInterval(interval);
         return;
@@ -315,7 +350,7 @@ function pollPaymentStatus(localReference) {
         clearInterval(interval);
       }
     }
-  }, POLL_INTERVAL_MS);
+  }, intervalMs);
 }
 
 app.post("/create-payment", async (req, res) => {
@@ -411,7 +446,7 @@ app.post("/create-payment", async (req, res) => {
         }
       );
 
-      pollPaymentStatus(reference);
+      pollPaymentStatus(reference, phone);
 
       return res.json({
         success: true,
@@ -490,9 +525,12 @@ app.post("/webhook", async (req, res) => {
     const eventName = String(event || "").toLowerCase();
 
     if (isMalipopayWebhook(body)) {
-      if (eventName === "payment.completed") {
+      if (eventName === "payment.completed" || Number(data?.paidAmount || 0) > 0) {
         const update = buildMalipopayUpdate(
-          { ...data, status: data.status || "SUCCESS" },
+          {
+            ...data,
+            status: data.status || (Number(data?.paidAmount || 0) > 0 ? "SUCCESS" : "PROCESSING")
+          },
           "WEBHOOK"
         );
 
@@ -674,11 +712,11 @@ app.get("/admin/payments", async (req, res) => {
 app.post("/admin/sync-payments", async (req, res) => {
   const pending = await Payment.find({
     provider: "malipopay",
-    status: { $ne: "COMPLETED" },
+    status: { $in: ["PROCESSING", "TIMEOUT", "PENDING"] },
     order_tracking_id: { $exists: true, $ne: null }
   })
     .sort({ _id: -1 })
-    .limit(3);
+    .limit(10);
 
   const results = [];
   for (const payment of pending) {

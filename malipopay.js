@@ -82,6 +82,30 @@ function formatMalipopayError(error) {
   };
 }
 
+function unwrapMalipopayData(body) {
+  if (!body || typeof body !== "object") {
+    return body;
+  }
+
+  if ("success" in body && "data" in body) {
+    if (body.data && typeof body.data === "object") {
+      return body.data;
+    }
+    return null;
+  }
+
+  return body;
+}
+
+function isPaymentRecord(data) {
+  return Boolean(
+    data &&
+      typeof data === "object" &&
+      !("success" in data && "message" in data && !data.status) &&
+      (data.reference || data.id || data.status || data.amount !== undefined)
+  );
+}
+
 async function apiRequest(method, path, data) {
   await waitForApiSlot();
 
@@ -100,7 +124,7 @@ async function apiRequest(method, path, data) {
       throw err;
     }
 
-    return body?.data ?? body;
+    return unwrapMalipopayData(body);
   } catch (error) {
     if (error.response?.status === 429) {
       apiCooldownUntil = Date.now() + 90000;
@@ -152,6 +176,7 @@ async function createPaymentIntent({ amount, phoneNumber, reference, description
     amount: Number(amount),
     currency: "TZS",
     reference,
+    description: description || `UnlockVIP ${reference}`,
     paymentMethodDetails: {
       type: pushType,
       phoneNumber: phone
@@ -274,6 +299,29 @@ async function lookupPaymentStatus(reference, options = {}) {
   return verifyPayment(reference, options);
 }
 
+async function searchPaymentByReferences(refs) {
+  for (const ref of refs) {
+    try {
+      const results = await searchPayments({ query: ref });
+      const list = Array.isArray(results) ? results : [];
+
+      const hit = list.find((item) => {
+        const itemRef = String(item?.reference || "");
+        const itemId = String(item?.id || "");
+        return refs.some((wanted) => wanted === itemRef || wanted === itemId);
+      });
+
+      if (hit) {
+        return hit;
+      }
+    } catch (error) {
+      // Try the next lookup strategy.
+    }
+  }
+
+  return null;
+}
+
 async function resolvePaymentStatus(payment, options = {}) {
   const refs = [...new Set([payment.order_tracking_id, payment.reference].filter(Boolean))];
   let lastData = null;
@@ -282,6 +330,9 @@ async function resolvePaymentStatus(payment, options = {}) {
   for (const ref of refs) {
     try {
       const data = await verifyPayment(ref, options);
+      if (!isPaymentRecord(data)) {
+        continue;
+      }
       lastData = data;
       if (isMalipopayPaymentComplete(data)) {
         return data;
@@ -294,6 +345,9 @@ async function resolvePaymentStatus(payment, options = {}) {
   for (const ref of refs) {
     try {
       const data = await getPaymentByReference(ref);
+      if (!isPaymentRecord(data)) {
+        continue;
+      }
       lastData = data;
       if (isMalipopayPaymentComplete(data)) {
         return data;
@@ -301,6 +355,18 @@ async function resolvePaymentStatus(payment, options = {}) {
     } catch (error) {
       lastError = error;
     }
+  }
+
+  try {
+    const searched = await searchPaymentByReferences(refs);
+    if (isPaymentRecord(searched)) {
+      lastData = searched;
+      if (isMalipopayPaymentComplete(searched)) {
+        return searched;
+      }
+    }
+  } catch (error) {
+    lastError = error;
   }
 
   if (lastData) {
@@ -312,9 +378,16 @@ async function resolvePaymentStatus(payment, options = {}) {
 
 function isMalipopaySuccessStatus(status) {
   const value = String(status || "").toUpperCase();
-  return ["SUCCESS", "SUCCESSFUL", "SUCCEEDED", "COMPLETED", "SETTLED", "PAID"].includes(
-    value
-  );
+  return [
+    "SUCCESS",
+    "SUCCESSFUL",
+    "SUCCEEDED",
+    "COMPLETED",
+    "SETTLED",
+    "PAID",
+    "APPROVED",
+    "CONFIRMED"
+  ].includes(value);
 }
 
 function mapMalipopayStatus(status) {
@@ -383,9 +456,11 @@ module.exports = {
   createPaymentIntent,
   resolvePaymentMethodType,
   needsExplicitPaymentMethod,
+  isHalotelPhone,
   verifyPayment,
   lookupPaymentStatus,
   resolvePaymentStatus,
+  searchPaymentByReferences,
   getPaymentByReference,
   searchPayments,
   toInternationalPhone,
