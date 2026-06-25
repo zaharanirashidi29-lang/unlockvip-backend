@@ -11,13 +11,7 @@ const {
   getPaymentFailureMessage,
   extractPaymentMeta: extractMalipopayMeta
 } = require("./malipopay");
-const {
-  initiateUssdPush,
-  getPaymentStatus: getClickpesaStatus,
-  mapClickPesaStatus,
-  extractPaymentMeta: extractClickpesaMeta,
-  getAccessToken
-} = require("./clickpesa");
+const { getAccessToken } = require("./clickpesa");
 const {
   toInternationalPhone,
   detectOperator,
@@ -65,7 +59,7 @@ const HALOTEL_POLL_INTERVAL_MS = 10000;
 const HALOTEL_MAX_POLL_ATTEMPTS = 30;
 
 app.get("/", (req, res) => {
-  res.send("UnlockVIP Backend Running (ClickPesa + MaliPoPay)");
+  res.send("UnlockVIP Backend Running (MaliPoPay)");
 });
 
 app.get("/health", async (req, res) => {
@@ -74,7 +68,7 @@ app.get("/health", async (req, res) => {
     clickpesa_api_key: process.env.CLICKPESA_API_KEY ? "Set" : "Missing",
     malipopay_secret_key: process.env.MALIPOPAY_SECRET_KEY ? "Set" : "Missing",
     mongodb_uri: process.env.MONGODB_URI ? "Set" : "Missing",
-    routing: "Vodacom/Airtel→MaliPoPay, Tigo/Halotel→ClickPesa",
+    routing: "All networks → MaliPoPay",
     timestamp: Math.floor(Date.now() / 1000)
   };
 
@@ -159,35 +153,7 @@ function buildMalipopayUpdate(statusData, source) {
   };
 }
 
-function buildClickpesaUpdate(statusData, source) {
-  const meta = extractClickpesaMeta({
-    status: statusData?.status,
-    message: statusData?.message,
-    source
-  });
-
-  return {
-    status: meta.status,
-    reason: meta.reason,
-    message: meta.message,
-    amount: Number(statusData?.collectedAmount) || undefined,
-    transaction_id: statusData?.id || statusData?.paymentReference,
-    result: statusData?.status,
-    resultcode: String(statusData?.status_code ?? ""),
-    provider_response: statusData
-  };
-}
-
 async function queryProviderStatus(payment, options = {}) {
-  if (payment.provider === "clickpesa") {
-    const ref = payment.reference;
-    if (!ref) {
-      throw new Error("Missing ClickPesa order reference");
-    }
-    const data = await getClickpesaStatus(ref);
-    return { provider: "clickpesa", data };
-  }
-
   if (!payment?.order_tracking_id && !payment?.reference) {
     throw new Error("Missing MaliPoPay reference");
   }
@@ -197,9 +163,6 @@ async function queryProviderStatus(payment, options = {}) {
 }
 
 function buildProviderUpdate(provider, statusData, source) {
-  if (provider === "clickpesa") {
-    return buildClickpesaUpdate(statusData, source);
-  }
   return buildMalipopayUpdate(statusData, source);
 }
 
@@ -301,7 +264,7 @@ async function fixStalePollingRecords() {
   }
 }
 
-async function syncProviderPayment(payment) {
+async function syncMalipopayPayment(payment) {
   if (!payment?.order_tracking_id && !payment?.reference) {
     return payment;
   }
@@ -312,16 +275,12 @@ async function syncProviderPayment(payment) {
       return payment;
     }
 
-    const syncReason =
-      update.status === "COMPLETED"
-        ? payment.provider === "clickpesa"
-          ? "SYNCED_FROM_CLICKPESA"
-          : "SYNCED_FROM_MALIPOPAY"
-        : update.reason;
-
     return Payment.findOneAndUpdate(
       { reference: payment.reference },
-      { ...update, reason: syncReason },
+      {
+        ...update,
+        reason: update.status === "COMPLETED" ? "SYNCED_FROM_MALIPOPAY" : update.reason
+      },
       { new: true }
     );
   } catch (error) {
@@ -330,9 +289,9 @@ async function syncProviderPayment(payment) {
   }
 }
 
-function pollPaymentStatus(localReference, phone, provider) {
+function pollPaymentStatus(localReference, phone) {
   let attempts = 0;
-  const halotel = provider !== "clickpesa" && isHalotelPhone(phone);
+  const halotel = isHalotelPhone(phone);
   const intervalMs = halotel ? HALOTEL_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
   const maxAttempts = halotel ? HALOTEL_MAX_POLL_ATTEMPTS : MAX_POLL_ATTEMPTS;
 
@@ -456,80 +415,46 @@ app.post("/create-payment", async (req, res) => {
       time: new Date().toLocaleString()
     }).save();
 
-    if (provider === "malipopay") {
-      const push = await collectPayment({
-        amount,
-        phoneNumber: phone,
-        reference,
-        description: "UnlockVIP subscription payment"
-      });
+    const push = await collectPayment({
+      amount,
+      phoneNumber: phone,
+      reference,
+      description: "UnlockVIP subscription payment"
+    });
 
-      if (String(push.status || "").toUpperCase() === "FAILED") {
-        throw new Error(getPaymentFailureMessage(push, operator));
-      }
-
-      const mno = push.customer?.mno || detectOperator(phone);
-      const malipopayRef = push.reference;
-
-      await Payment.findOneAndUpdate(
-        { reference },
-        {
-          status: "PROCESSING",
-          reason: "USSD_SENT",
-          order_tracking_id: malipopayRef,
-          transaction_id: push.id,
-          result: push.status,
-          message: `USSD push sent via ${mno} (MaliPoPay)`,
-          provider_response: push
-        }
-      );
-
-      pollPaymentStatus(reference, phone, provider);
-
-      return res.json({
-        success: true,
-        provider,
-        operator,
-        data: {
-          reference,
-          malipopay_reference: malipopayRef,
-          status: push.status,
-          customer: push.customer
-        }
-      });
+    if (String(push.status || "").toUpperCase() === "FAILED") {
+      throw new Error(getPaymentFailureMessage(push, operator));
     }
 
-    const push = await initiateUssdPush({
-      amount,
-      orderReference: reference,
-      phoneNumber: phone
-    });
+    const mno = push.customer?.mno || detectOperator(phone);
+    const malipopayRef = push.reference;
 
     await Payment.findOneAndUpdate(
       { reference },
       {
         status: "PROCESSING",
         reason: "USSD_SENT",
-        order_tracking_id: push.id,
+        order_tracking_id: malipopayRef,
         transaction_id: push.id,
         result: push.status,
-        message: `USSD push sent via ${push.channel || operator} (ClickPesa)`,
+        message: `USSD push sent via ${mno} (MaliPoPay)`,
         provider_response: push
       }
     );
 
-    if (mapClickPesaStatus(push.status) === "PROCESSING") {
-      pollPaymentStatus(reference, phone, provider);
-    }
+    pollPaymentStatus(reference, phone);
 
     return res.json({
       success: true,
       provider,
       operator,
-      data: push
+      data: {
+        reference,
+        malipopay_reference: malipopayRef,
+        status: push.status,
+        customer: push.customer
+      }
     });
-
-    throw new Error("Unsupported payment provider");
   } catch (error) {
     console.error("CREATE PAYMENT ERROR:", error.details || error.response?.data || error.message);
 
@@ -562,43 +487,6 @@ app.post("/webhook", async (req, res) => {
   try {
     const body = req.body || {};
     console.log("WEBHOOK RECEIVED:", JSON.stringify(body, null, 2));
-
-    if (body.event && body.data?.orderReference) {
-      const { event, data } = body;
-      const payment = await Payment.findOne({ reference: data.orderReference });
-
-      if (!payment) {
-        return res.status(404).json({ success: false, error: "Payment not found" });
-      }
-
-      if (payment.status === "COMPLETED") {
-        return res.status(200).json({ success: true });
-      }
-
-      const meta = extractClickpesaMeta({
-        status: data.status,
-        message: data.message,
-        event,
-        source: "WEBHOOK"
-      });
-
-      await Payment.findOneAndUpdate(
-        { reference: payment.reference },
-        {
-          status: meta.status,
-          reason: meta.reason,
-          order_tracking_id: data.id || payment.order_tracking_id,
-          transaction_id: data.id || data.paymentReference || payment.transaction_id,
-          result: data.status,
-          message: meta.message,
-          amount: Number(data.collectedAmount) || payment.amount,
-          provider_response: data
-        }
-      );
-
-      console.log("ClickPesa webhook", meta.status, "for", payment.reference);
-      return res.status(200).json({ success: true });
-    }
 
     const event = body.event || body.type;
     const data = body.data || body;
@@ -816,18 +704,16 @@ app.get("/admin/payments", async (req, res) => {
 
 app.post("/admin/sync-payments", async (req, res) => {
   const pending = await Payment.find({
+    provider: "malipopay",
     status: { $in: ["PROCESSING", "TIMEOUT", "PENDING"] },
-    $or: [
-      { provider: "clickpesa", reference: { $exists: true, $ne: null } },
-      { provider: "malipopay", order_tracking_id: { $exists: true, $ne: null } }
-    ]
+    order_tracking_id: { $exists: true, $ne: null }
   })
     .sort({ _id: -1 })
     .limit(10);
 
   const results = [];
   for (const payment of pending) {
-    results.push(await syncProviderPayment(payment));
+    results.push(await syncMalipopayPayment(payment));
   }
 
   res.json({ success: true, synced: results.length });
