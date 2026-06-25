@@ -11,7 +11,13 @@ const {
   getPaymentFailureMessage,
   extractPaymentMeta: extractMalipopayMeta
 } = require("./malipopay");
-const { getAccessToken } = require("./clickpesa");
+const {
+  initiateUssdPush,
+  getPaymentStatus: getClickpesaStatus,
+  mapClickPesaStatus,
+  extractPaymentMeta: extractClickpesaMeta,
+  getAccessToken
+} = require("./clickpesa");
 const {
   toInternationalPhone,
   detectOperator,
@@ -59,7 +65,7 @@ const HALOTEL_POLL_INTERVAL_MS = 10000;
 const HALOTEL_MAX_POLL_ATTEMPTS = 30;
 
 app.get("/", (req, res) => {
-  res.send("UnlockVIP Backend Running (MaliPoPay)");
+  res.send("UnlockVIP Backend Running (ClickPesa + MaliPoPay)");
 });
 
 app.get("/health", async (req, res) => {
@@ -68,7 +74,7 @@ app.get("/health", async (req, res) => {
     clickpesa_api_key: process.env.CLICKPESA_API_KEY ? "Set" : "Missing",
     malipopay_secret_key: process.env.MALIPOPAY_SECRET_KEY ? "Set" : "Missing",
     mongodb_uri: process.env.MONGODB_URI ? "Set" : "Missing",
-    routing: "All networks → MaliPoPay",
+    routing: "Vodacom/Airtel→MaliPoPay, Tigo/Halotel→ClickPesa",
     timestamp: Math.floor(Date.now() / 1000)
   };
 
@@ -153,7 +159,35 @@ function buildMalipopayUpdate(statusData, source) {
   };
 }
 
+function buildClickpesaUpdate(statusData, source) {
+  const meta = extractClickpesaMeta({
+    status: statusData?.status,
+    message: statusData?.message,
+    source
+  });
+
+  return {
+    status: meta.status,
+    reason: meta.reason,
+    message: meta.message,
+    amount: Number(statusData?.collectedAmount) || undefined,
+    transaction_id: statusData?.id || statusData?.paymentReference,
+    result: statusData?.status,
+    resultcode: String(statusData?.status_code ?? ""),
+    provider_response: statusData
+  };
+}
+
 async function queryProviderStatus(payment, options = {}) {
+  if (payment.provider === "clickpesa") {
+    const ref = payment.reference;
+    if (!ref) {
+      throw new Error("Missing ClickPesa order reference");
+    }
+    const data = await getClickpesaStatus(ref);
+    return { provider: "clickpesa", data };
+  }
+
   if (!payment?.order_tracking_id && !payment?.reference) {
     throw new Error("Missing MaliPoPay reference");
   }
@@ -163,6 +197,9 @@ async function queryProviderStatus(payment, options = {}) {
 }
 
 function buildProviderUpdate(provider, statusData, source) {
+  if (provider === "clickpesa") {
+    return buildClickpesaUpdate(statusData, source);
+  }
   return buildMalipopayUpdate(statusData, source);
 }
 
@@ -199,7 +236,7 @@ async function finalizePolling(localReference) {
       return;
     }
   } catch (error) {
-    console.error("Final MaliPoPay check failed for", localReference, error.message);
+    console.error("Final status check failed for", localReference, error.message);
   }
 
   await Payment.findOneAndUpdate(
@@ -264,7 +301,7 @@ async function fixStalePollingRecords() {
   }
 }
 
-async function syncMalipopayPayment(payment) {
+async function syncProviderPayment(payment) {
   if (!payment?.order_tracking_id && !payment?.reference) {
     return payment;
   }
@@ -275,12 +312,16 @@ async function syncMalipopayPayment(payment) {
       return payment;
     }
 
+    const syncReason =
+      update.status === "COMPLETED"
+        ? payment.provider === "clickpesa"
+          ? "SYNCED_FROM_CLICKPESA"
+          : "SYNCED_FROM_MALIPOPAY"
+        : update.reason;
+
     return Payment.findOneAndUpdate(
       { reference: payment.reference },
-      {
-        ...update,
-        reason: update.status === "COMPLETED" ? "SYNCED_FROM_MALIPOPAY" : update.reason
-      },
+      { ...update, reason: syncReason },
       { new: true }
     );
   } catch (error) {
@@ -289,9 +330,9 @@ async function syncMalipopayPayment(payment) {
   }
 }
 
-function pollPaymentStatus(localReference, phone) {
+function pollPaymentStatus(localReference, phone, provider) {
   let attempts = 0;
-  const halotel = isHalotelPhone(phone);
+  const halotel = provider !== "clickpesa" && isHalotelPhone(phone);
   const intervalMs = halotel ? HALOTEL_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
   const maxAttempts = halotel ? HALOTEL_MAX_POLL_ATTEMPTS : MAX_POLL_ATTEMPTS;
 
@@ -443,7 +484,7 @@ app.post("/create-payment", async (req, res) => {
         }
       );
 
-      pollPaymentStatus(reference, phone);
+      pollPaymentStatus(reference, phone, provider);
 
       return res.json({
         success: true,
@@ -457,6 +498,36 @@ app.post("/create-payment", async (req, res) => {
         }
       });
     }
+
+    const push = await initiateUssdPush({
+      amount,
+      orderReference: reference,
+      phoneNumber: phone
+    });
+
+    await Payment.findOneAndUpdate(
+      { reference },
+      {
+        status: "PROCESSING",
+        reason: "USSD_SENT",
+        order_tracking_id: push.id,
+        transaction_id: push.id,
+        result: push.status,
+        message: `USSD push sent via ${push.channel || operator} (ClickPesa)`,
+        provider_response: push
+      }
+    );
+
+    if (mapClickPesaStatus(push.status) === "PROCESSING") {
+      pollPaymentStatus(reference, phone, provider);
+    }
+
+    return res.json({
+      success: true,
+      provider,
+      operator,
+      data: push
+    });
 
     throw new Error("Unsupported payment provider");
   } catch (error) {
@@ -491,6 +562,43 @@ app.post("/webhook", async (req, res) => {
   try {
     const body = req.body || {};
     console.log("WEBHOOK RECEIVED:", JSON.stringify(body, null, 2));
+
+    if (body.event && body.data?.orderReference) {
+      const { event, data } = body;
+      const payment = await Payment.findOne({ reference: data.orderReference });
+
+      if (!payment) {
+        return res.status(404).json({ success: false, error: "Payment not found" });
+      }
+
+      if (payment.status === "COMPLETED") {
+        return res.status(200).json({ success: true });
+      }
+
+      const meta = extractClickpesaMeta({
+        status: data.status,
+        message: data.message,
+        event,
+        source: "WEBHOOK"
+      });
+
+      await Payment.findOneAndUpdate(
+        { reference: payment.reference },
+        {
+          status: meta.status,
+          reason: meta.reason,
+          order_tracking_id: data.id || payment.order_tracking_id,
+          transaction_id: data.id || data.paymentReference || payment.transaction_id,
+          result: data.status,
+          message: meta.message,
+          amount: Number(data.collectedAmount) || payment.amount,
+          provider_response: data
+        }
+      );
+
+      console.log("ClickPesa webhook", meta.status, "for", payment.reference);
+      return res.status(200).json({ success: true });
+    }
 
     const event = body.event || body.type;
     const data = body.data || body;
@@ -708,16 +816,18 @@ app.get("/admin/payments", async (req, res) => {
 
 app.post("/admin/sync-payments", async (req, res) => {
   const pending = await Payment.find({
-    provider: "malipopay",
     status: { $in: ["PROCESSING", "TIMEOUT", "PENDING"] },
-    order_tracking_id: { $exists: true, $ne: null }
+    $or: [
+      { provider: "clickpesa", reference: { $exists: true, $ne: null } },
+      { provider: "malipopay", order_tracking_id: { $exists: true, $ne: null } }
+    ]
   })
     .sort({ _id: -1 })
     .limit(10);
 
   const results = [];
   for (const payment of pending) {
-    results.push(await syncMalipopayPayment(payment));
+    results.push(await syncProviderPayment(payment));
   }
 
   res.json({ success: true, synced: results.length });
