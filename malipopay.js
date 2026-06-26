@@ -18,7 +18,7 @@ function apiHeaders() {
     apiToken: token
   };
 
-  if (process.env.MALIPOPAY_KEY_ID) {
+  if (process.env.MALIPOPAY_KEY_ID && process.env.MALIPOPAY_USE_KEY_ID === "true") {
     headers["x-key-id"] = process.env.MALIPOPAY_KEY_ID;
   }
 
@@ -230,6 +230,31 @@ async function collectHalotelPayment({ amount, phoneNumber, reference, descripti
     reference,
     description,
     type: "HALOPESA_TZ_PUSH"
+  });
+}
+
+async function disbursePayment({ amount, phoneNumber, reference, description }) {
+  const phone = toInternationalPhone(phoneNumber);
+  const pushType = resolvePaymentMethodType(phone);
+
+  if (!pushType) {
+    const err = new Error(
+      `Unsupported Tanzanian number prefix ${phone.substring(3, 6)}. Use a valid Vodacom, Airtel, Tigo, or Halotel number.`
+    );
+    err.code = "UNSUPPORTED_PREFIX";
+    throw err;
+  }
+
+  return apiRequest("POST", "/api/v1/payment", {
+    mode: "PAYOUT",
+    amount: Number(amount),
+    currency: "TZS",
+    reference,
+    description: description || `UnlockVIP disbursement ${reference}`,
+    paymentMethodDetails: {
+      type: pushType,
+      phoneNumber: phone
+    }
   });
 }
 
@@ -483,6 +508,7 @@ function extractPaymentMeta({ status, message, event, source = "QUERY" }) {
 
 module.exports = {
   collectPayment,
+  disbursePayment,
   createPaymentIntent,
   resolvePaymentMethodType,
   needsExplicitPaymentMethod,
