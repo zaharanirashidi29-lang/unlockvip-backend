@@ -25,17 +25,26 @@ function apiHeaders() {
   return headers;
 }
 
-let apiCooldownUntil = 0;
+let queryCooldownUntil = 0;
 let lastApiCallAt = 0;
-const MIN_API_GAP_MS = 3000;
+const MIN_API_GAP_MS = 1500;
+const QUERY_COOLDOWN_MS = 45000;
 const verifyCache = new Map();
+
+function isWriteRequest(method, path) {
+  return method === "POST" || method === "PUT" || method === "PATCH";
+}
+
+function isQueryCooldownActive() {
+  return Date.now() < queryCooldownUntil;
+}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForApiSlot() {
-  if (Date.now() < apiCooldownUntil) {
+async function waitForApiSlot({ isWrite = false } = {}) {
+  if (!isWrite && isQueryCooldownActive()) {
     const err = new Error("Too many payment requests. Please wait a moment and try again.");
     err.code = 429;
     throw err;
@@ -111,15 +120,17 @@ function isPaymentRecord(data) {
   );
 }
 
-async function apiRequest(method, path, data) {
-  await waitForApiSlot();
+async function apiRequest(method, path, data, options = {}) {
+  const isWrite = options.isWrite ?? isWriteRequest(method, path);
+  await waitForApiSlot({ isWrite });
 
   try {
     const { data: body } = await axios({
       method,
       url: `${BASE_URL}${path}`,
       data,
-      headers: apiHeaders()
+      headers: apiHeaders(),
+      timeout: options.timeout || 30000
     });
 
     if (body?.success === false) {
@@ -131,8 +142,8 @@ async function apiRequest(method, path, data) {
 
     return unwrapMalipopayData(body);
   } catch (error) {
-    if (error.response?.status === 429) {
-      apiCooldownUntil = Date.now() + 90000;
+    if (error.response?.status === 429 && !isWrite) {
+      queryCooldownUntil = Date.now() + QUERY_COOLDOWN_MS;
     }
 
     if (error.details || !error.response?.data) {
@@ -287,9 +298,10 @@ async function verifyPayment(reference, options = {}) {
     }
   }
 
-  const data = await apiRequest("GET", `/api/v1/payment/verify/${encodeURIComponent(reference)}`);
-  const ttl =
-    isMalipopayPaymentComplete(data) ? 300000 : 15000;
+  const data = await apiRequest("GET", `/api/v1/payment/verify/${encodeURIComponent(reference)}`, undefined, {
+    isWrite: false
+  });
+  const ttl = isMalipopayPaymentComplete(data) ? 300000 : 20000;
   verifyCache.set(reference, { data, expiry: Date.now() + ttl });
   return data;
 }
@@ -378,9 +390,35 @@ async function searchPaymentByReferences(refs) {
 }
 
 async function resolvePaymentStatus(payment, options = {}) {
+  const { lightweight = false } = options;
   const refs = [...new Set([payment.order_tracking_id, payment.reference].filter(Boolean))];
   let lastData = null;
   let lastError = null;
+
+  for (const ref of refs) {
+    try {
+      const data = await verifyPayment(ref, options);
+      if (!isPaymentRecord(data)) {
+        continue;
+      }
+      lastData = data;
+      if (isMalipopayPaymentComplete(data)) {
+        return data;
+      }
+    } catch (error) {
+      lastError = error;
+      if (error.code === 429) {
+        throw error;
+      }
+    }
+  }
+
+  if (lightweight) {
+    if (lastData) {
+      return lastData;
+    }
+    throw lastError || new Error("Missing MaliPoPay reference");
+  }
 
   for (const ref of refs) {
     try {
@@ -527,5 +565,6 @@ module.exports = {
   isMalipopaySuccessStatus,
   isMalipopayPaymentComplete,
   normalizeMalipopayStatusData,
-  extractPaymentMeta
+  extractPaymentMeta,
+  isQueryCooldownActive
 };

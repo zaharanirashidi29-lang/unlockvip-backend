@@ -53,10 +53,10 @@ paymentSchema.index({ phone: 1, pin: 1 });
 
 const Payment = mongoose.model("Payment", paymentSchema);
 
-const POLL_INTERVAL_MS = 8000;
-const MAX_POLL_ATTEMPTS = 12;
-const HALOTEL_POLL_INTERVAL_MS = 10000;
-const HALOTEL_MAX_POLL_ATTEMPTS = 30;
+const POLL_INTERVAL_MS = 12000;
+const MAX_POLL_ATTEMPTS = 10;
+const HALOTEL_POLL_INTERVAL_MS = 15000;
+const HALOTEL_MAX_POLL_ATTEMPTS = 18;
 
 app.get("/", (req, res) => {
   res.send("UnlockVIP Backend Running (MaliPoPay)");
@@ -316,8 +316,10 @@ function pollPaymentStatus(localReference, phone) {
         return;
       }
 
+      const useFreshQuery = attempts % 4 === 0 || attempts >= maxAttempts - 1;
       const { data, update } = await applyStatusFromQuery(existing, "QUERY", {
-        bypassCache: true
+        bypassCache: useFreshQuery,
+        lightweight: true
       });
       console.log("Inquiry result for", localReference, ":", data?.status, "paid:", data?.paidAmount);
 
@@ -347,8 +349,7 @@ function pollPaymentStatus(localReference, phone) {
         error.response?.data || error.message
       );
       if (isRateLimited) {
-        await finalizePolling(localReference);
-        clearInterval(interval);
+        return;
       }
     }
   }, intervalMs);
@@ -388,17 +389,29 @@ app.post("/create-payment", async (req, res) => {
     });
 
     if (existing) {
-      await Payment.findByIdAndUpdate(existing._id, {
-        time: new Date().toLocaleString()
-      }).catch(() => {});
+      if (existing.status === "PROCESSING") {
+        await Payment.findByIdAndUpdate(existing._id, {
+          time: new Date().toLocaleString()
+        }).catch(() => {});
 
-      return res.json({
-        success: true,
-        message: "Already requested",
-        reference: existing.reference,
-        provider: existing.provider,
-        data: existing
-      });
+        return res.json({
+          success: true,
+          message: "Payment already in progress",
+          reference: existing.reference,
+          provider: existing.provider,
+          data: existing
+        });
+      }
+
+      if (existing.status === "COMPLETED") {
+        return res.json({
+          success: true,
+          message: "Already paid",
+          reference: existing.reference,
+          provider: existing.provider,
+          data: existing
+        });
+      }
     }
 
     reference = makeTxRef();
@@ -709,7 +722,7 @@ app.post("/admin/sync-payments", async (req, res) => {
     order_tracking_id: { $exists: true, $ne: null }
   })
     .sort({ _id: -1 })
-    .limit(10);
+    .limit(5);
 
   const results = [];
   for (const payment of pending) {
