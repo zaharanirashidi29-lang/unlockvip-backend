@@ -65,7 +65,7 @@ const HALOTEL_POLL_INTERVAL_MS = 15000;
 const HALOTEL_MAX_POLL_ATTEMPTS = 18;
 
 app.get("/", (req, res) => {
-  res.send("UnlockVIP Backend Running (Tigo → Pesapal, others → MaliPoPay)");
+  res.send("UnlockVIP Backend Running (Tigo + Airtel → Pesapal, Vodacom + Halotel → MaliPoPay)");
 });
 
 app.get("/health", async (req, res) => {
@@ -74,7 +74,7 @@ app.get("/health", async (req, res) => {
     clickpesa_api_key: process.env.CLICKPESA_API_KEY ? "Set" : "Missing",
     malipopay_secret_key: process.env.MALIPOPAY_SECRET_KEY ? "Set" : "Missing",
     mongodb_uri: process.env.MONGODB_URI ? "Set" : "Missing",
-    routing: "Tigo/YAS (065/067/071/077) → Pesapal, others → MaliPoPay",
+    routing: "Tigo/YAS (065/067/071/077) + Airtel (066/068/069/078) → Pesapal, Vodacom + Halotel → MaliPoPay",
     pesapal_consumer_key: process.env.PESAPAL_CONSUMER_KEY ? "Set" : "Missing",
     timestamp: Math.floor(Date.now() / 1000)
   };

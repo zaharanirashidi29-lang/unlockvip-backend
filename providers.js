@@ -1,10 +1,20 @@
-const { toInternationalPhone, detectOperator, isTigoPhone } = require("./malipopay");
+const {
+  toInternationalPhone,
+  detectOperator,
+  isTigoPhone,
+  isAirtelPhone,
+  getMobilePrefix2
+} = require("./malipopay");
 const { formatClickpesaError } = require("./clickpesa");
 const { formatMalipopayError } = require("./malipopay");
 const { formatPesapalError } = require("./pesapal");
 
+function isPesapalPhone(phone) {
+  return isTigoPhone(phone) || isAirtelPhone(phone);
+}
+
 function resolveProvider(phone) {
-  if (isTigoPhone(phone)) {
+  if (isPesapalPhone(phone)) {
     return "pesapal";
   }
   return "malipopay";
@@ -24,6 +34,9 @@ module.exports = {
   toInternationalPhone,
   detectOperator,
   isTigoPhone,
+  isAirtelPhone,
+  isPesapalPhone,
+  getMobilePrefix2,
   resolveProvider,
   formatApiError
 };

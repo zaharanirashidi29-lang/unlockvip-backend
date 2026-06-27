@@ -59,6 +59,7 @@ async function waitForApiSlot({ isWrite = false } = {}) {
 }
 
 const TIGO_PREFIXES = new Set(["65", "67", "71", "77"]);
+const AIRTEL_PREFIXES = new Set(["66", "68", "69", "78"]);
 
 function getMobilePrefix2(phone) {
   const normalized = toInternationalPhone(phone);
@@ -70,6 +71,10 @@ function getMobilePrefix2(phone) {
 
 function isTigoPhone(phone) {
   return TIGO_PREFIXES.has(getMobilePrefix2(phone));
+}
+
+function isAirtelPhone(phone) {
+  return AIRTEL_PREFIXES.has(getMobilePrefix2(phone));
 }
 
 function detectOperator(phone) {
@@ -673,6 +678,7 @@ module.exports = {
   toInternationalPhone,
   getMobilePrefix2,
   isTigoPhone,
+  isAirtelPhone,
   detectOperator,
   formatMalipopayError,
   mapMalipopayStatus,
