@@ -13,6 +13,12 @@ const {
 } = require("./malipopay");
 const { getAccessToken } = require("./clickpesa");
 const {
+  createPaymentOrder,
+  getTransactionStatus,
+  buildPesapalUpdate,
+  isPesapalPaymentComplete
+} = require("./pesapal");
+const {
   toInternationalPhone,
   detectOperator,
   resolveProvider,
@@ -59,7 +65,7 @@ const HALOTEL_POLL_INTERVAL_MS = 15000;
 const HALOTEL_MAX_POLL_ATTEMPTS = 18;
 
 app.get("/", (req, res) => {
-  res.send("UnlockVIP Backend Running (MaliPoPay)");
+  res.send("UnlockVIP Backend Running (Tigo → Pesapal, others → MaliPoPay)");
 });
 
 app.get("/health", async (req, res) => {
@@ -68,7 +74,8 @@ app.get("/health", async (req, res) => {
     clickpesa_api_key: process.env.CLICKPESA_API_KEY ? "Set" : "Missing",
     malipopay_secret_key: process.env.MALIPOPAY_SECRET_KEY ? "Set" : "Missing",
     mongodb_uri: process.env.MONGODB_URI ? "Set" : "Missing",
-    routing: "All networks → MaliPoPay",
+    routing: "Tigo (71/65/67) → Pesapal, others → MaliPoPay",
+    pesapal_consumer_key: process.env.PESAPAL_CONSUMER_KEY ? "Set" : "Missing",
     timestamp: Math.floor(Date.now() / 1000)
   };
 
@@ -88,6 +95,42 @@ function normalizePhone(phone) {
 
 function makeTxRef() {
   return "ORD" + Date.now();
+}
+
+function getPublicBaseUrl() {
+  return (
+    process.env.PUBLIC_BASE_URL ||
+    process.env.BACKEND_URL ||
+    "https://unlockvip-backend-1.onrender.com"
+  ).replace(/\/$/, "");
+}
+
+function buildCheckoutUrls(reference) {
+  const base = getPublicBaseUrl();
+  return {
+    checkout_path: `/checkout/${reference}`,
+    checkout_url: `${base}/pay/${reference}`,
+    pay_path: `/pay/${reference}`,
+    pay_url: `${base}/pay/${reference}`
+  };
+}
+
+function buildPesapalPaymentResponse(payment, order) {
+  const checkout = buildCheckoutUrls(payment.reference);
+  return {
+    success: true,
+    provider: "pesapal",
+    operator: detectOperator(payment.phone),
+    requires_checkout: true,
+    ...checkout,
+    data: {
+      reference: payment.reference,
+      order_tracking_id: order?.orderTrackingId || payment.order_tracking_id,
+      status: payment.status || "PROCESSING",
+      checkout_url: checkout.checkout_url,
+      redirect_url: checkout.checkout_url
+    }
+  };
 }
 
 function clientError(error, provider, fallback = "Payment failed") {
@@ -154,6 +197,15 @@ function buildMalipopayUpdate(statusData, source) {
 }
 
 async function queryProviderStatus(payment, options = {}) {
+  if (payment?.provider === "pesapal") {
+    if (!payment?.order_tracking_id) {
+      throw new Error("Missing Pesapal order tracking id");
+    }
+
+    const data = await getTransactionStatus(payment.order_tracking_id);
+    return { provider: "pesapal", data };
+  }
+
   if (!payment?.order_tracking_id && !payment?.reference) {
     throw new Error("Missing MaliPoPay reference");
   }
@@ -163,6 +215,9 @@ async function queryProviderStatus(payment, options = {}) {
 }
 
 function buildProviderUpdate(provider, statusData, source) {
+  if (provider === "pesapal") {
+    return buildPesapalUpdate(statusData, source);
+  }
   return buildMalipopayUpdate(statusData, source);
 }
 
@@ -394,6 +449,13 @@ app.post("/create-payment", async (req, res) => {
           time: new Date().toLocaleString()
         }).catch(() => {});
 
+        if (existing.provider === "pesapal") {
+          return res.json({
+            ...buildPesapalPaymentResponse(existing),
+            message: "Payment already in progress"
+          });
+        }
+
         return res.json({
           success: true,
           message: "Payment already in progress",
@@ -427,6 +489,36 @@ app.post("/create-payment", async (req, res) => {
       message: "Payment request created",
       time: new Date().toLocaleString()
     }).save();
+
+    if (provider === "pesapal") {
+      const order = await createPaymentOrder({
+        reference,
+        phone,
+        amount,
+        description: "UnlockVIP subscription payment"
+      });
+
+      const updated = await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: "PROCESSING",
+          reason: "CHECKOUT_READY",
+          order_tracking_id: order.orderTrackingId,
+          message: `Pesapal checkout ready for ${operator}`,
+          provider_response: {
+            redirect_url: order.redirectUrl,
+            order_tracking_id: order.orderTrackingId,
+            merchant_reference: order.merchantReference,
+            raw: order.raw
+          }
+        },
+        { new: true }
+      );
+
+      pollPaymentStatus(reference, phone);
+
+      return res.json(buildPesapalPaymentResponse(updated, order));
+    }
 
     const push = await collectPayment({
       amount,
@@ -496,6 +588,105 @@ app.post("/create-payment", async (req, res) => {
   }
 });
 
+async function handlePesapalIpn(req, res) {
+  try {
+    const orderTrackingId = req.query.OrderTrackingId;
+    const merchantReference = req.query.OrderMerchantReference;
+
+    if (!orderTrackingId && !merchantReference) {
+      return res.status(400).json({ success: false, error: "Missing Pesapal IPN parameters" });
+    }
+
+    const lookup = [];
+    if (orderTrackingId) {
+      lookup.push({ order_tracking_id: orderTrackingId });
+    }
+    if (merchantReference) {
+      lookup.push({ reference: merchantReference });
+    }
+
+    const payment = await Payment.findOne({ $or: lookup });
+
+    if (!payment) {
+      return res.status(404).json({ success: false, error: "Payment not found" });
+    }
+
+    if (payment.status === "COMPLETED") {
+      return res.status(200).json({ success: true, status: "COMPLETED" });
+    }
+
+    const statusData = await getTransactionStatus(orderTrackingId || payment.order_tracking_id);
+    const update = buildPesapalUpdate(statusData, "WEBHOOK");
+
+    await Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      {
+        ...update,
+        order_tracking_id: orderTrackingId || payment.order_tracking_id
+      }
+    );
+
+    console.log("Pesapal IPN", payment.reference, update.status);
+    return res.status(200).json({ success: true, status: update.status });
+  } catch (error) {
+    console.error("PESAPAL IPN ERROR:", error.message);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+}
+
+app.get("/webhook", handlePesapalIpn);
+
+app.get("/checkout/:reference", async (req, res) => {
+  try {
+    const payment = await Payment.findOne({ reference: req.params.reference });
+
+    if (!payment || payment.provider !== "pesapal") {
+      return res.status(404).send("Payment not found");
+    }
+
+    const redirectUrl = payment.provider_response?.redirect_url;
+    if (!redirectUrl) {
+      return res.status(404).send("Pesapal checkout not available");
+    }
+
+    return res.redirect(302, redirectUrl);
+  } catch (error) {
+    console.error("CHECKOUT ERROR:", error.message);
+    return res.status(500).send("Checkout failed");
+  }
+});
+
+app.get("/pay/:reference", async (req, res) => {
+  try {
+    const payment = await Payment.findOne({ reference: req.params.reference });
+
+    if (!payment || payment.provider !== "pesapal") {
+      return res.status(404).send("Payment not found");
+    }
+
+    const checkoutPath = `/checkout/${payment.reference}`;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>UnlockVIP Payment</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: #0b1020; color: #eef2ff; font-family: system-ui, sans-serif; }
+  </style>
+</head>
+<body>
+  <iframe src="${checkoutPath}" title="UnlockVIP payment" style="width:100%;height:100%;border:0;background:#fff"></iframe>
+</body>
+</html>`);
+  } catch (error) {
+    console.error("PAY PAGE ERROR:", error.message);
+    return res.status(500).send("Payment page failed");
+  }
+});
+
 app.post("/webhook", async (req, res) => {
   try {
     const body = req.body || {};
@@ -522,6 +713,18 @@ app.post("/webhook", async (req, res) => {
 
     if (!payment) {
       return res.status(404).json({ success: false, error: "Payment not found" });
+    }
+
+    if (payment.provider === "pesapal") {
+      return handlePesapalIpn(
+        {
+          query: {
+            OrderTrackingId: data.order_tracking_id || data.OrderTrackingId || payment.order_tracking_id,
+            OrderMerchantReference: localReference || payment.reference
+          }
+        },
+        res
+      );
     }
 
     if (payment.status === "COMPLETED") {
