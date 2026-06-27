@@ -58,15 +58,28 @@ async function waitForApiSlot({ isWrite = false } = {}) {
   lastApiCallAt = Date.now();
 }
 
-function detectOperator(phone) {
-  const normalized = toInternationalPhone(phone);
-  const prefix3 = normalized.substring(3, 6);
+const TIGO_PREFIXES = new Set(["65", "67", "71", "77"]);
 
-  if (/^(74|75|76|79)/.test(prefix3)) return "M-Pesa (Vodacom)";
-  if (/^(66|68|69|78)/.test(prefix3)) return "Airtel Money";
-  if (/^(71|65|67)/.test(prefix3)) return "Mixx by YAS (Tigo Pesa)";
-  if (/^(61|62|63)/.test(prefix3)) return "Halopesa";
-  return `Network (${prefix3 || "unknown"})`;
+function getMobilePrefix2(phone) {
+  const normalized = toInternationalPhone(phone);
+  if (!normalized.startsWith("255") || normalized.length < 5) {
+    return "";
+  }
+  return normalized.substring(3, 5);
+}
+
+function isTigoPhone(phone) {
+  return TIGO_PREFIXES.has(getMobilePrefix2(phone));
+}
+
+function detectOperator(phone) {
+  const prefix2 = getMobilePrefix2(phone);
+
+  if (["74", "75", "76", "79"].includes(prefix2)) return "M-Pesa (Vodacom)";
+  if (["66", "68", "69", "78"].includes(prefix2)) return "Airtel Money";
+  if (isTigoPhone(phone)) return "Mixx by YAS (Tigo Pesa)";
+  if (["61", "62", "63"].includes(prefix2)) return "Halopesa";
+  return `Network (${prefix2 || "unknown"})`;
 }
 
 function formatMalipopayError(error) {
@@ -158,21 +171,31 @@ async function apiRequest(method, path, data, options = {}) {
   }
 }
 
-function resolvePaymentMethodType(phone) {
-  const prefix3 = toInternationalPhone(phone).substring(3, 6);
+function resolveDisbursementProvider(phone) {
+  const prefix2 = getMobilePrefix2(phone);
 
-  if (/^(74|75|76|79)/.test(prefix3)) return "MPESA_TZ_PUSH";
-  if (/^(66|68|69|78)/.test(prefix3)) return "AIRTELMONEY_TZ_PUSH";
-  if (/^(71|65|67)/.test(prefix3)) return "TIGOPESA_TZ_PUSH";
-  if (/^(61|62|63)/.test(prefix3)) return "HALOPESA_TZ_PUSH";
+  if (["74", "75", "76", "79"].includes(prefix2)) return "Vodacom";
+  if (["66", "68", "69", "78"].includes(prefix2)) return "Airtel";
+  if (isTigoPhone(phone)) return "Tigo";
+  if (["61", "62", "63"].includes(prefix2)) return "Halotel";
+
+  return null;
+}
+
+function resolvePaymentMethodType(phone) {
+  const prefix2 = getMobilePrefix2(phone);
+
+  if (["74", "75", "76", "79"].includes(prefix2)) return "MPESA_TZ_PUSH";
+  if (["66", "68", "69", "78"].includes(prefix2)) return "AIRTELMONEY_TZ_PUSH";
+  if (isTigoPhone(phone)) return "TIGOPESA_TZ_PUSH";
+  if (["61", "62", "63"].includes(prefix2)) return "HALOPESA_TZ_PUSH";
 
   return null;
 }
 
 function needsExplicitPaymentMethod(phone) {
-  const prefix3 = toInternationalPhone(phone).substring(3, 6);
   // MaliPoPay collection auto-routing fails for 066 (Airtel). Halotel handled separately.
-  return /^66/.test(prefix3);
+  return getMobilePrefix2(phone) === "66";
 }
 
 async function createPaymentIntent({ amount, phoneNumber, reference, description, type }) {
@@ -203,8 +226,7 @@ async function createPaymentIntent({ amount, phoneNumber, reference, description
 }
 
 function isHalotelPhone(phone) {
-  const prefix3 = toInternationalPhone(phone).substring(3, 6);
-  return /^(61|62|63)/.test(prefix3);
+  return ["61", "62", "63"].includes(getMobilePrefix2(phone));
 }
 
 function getPaymentFailureMessage(push, operator = "Halotel") {
@@ -244,11 +266,78 @@ async function collectHalotelPayment({ amount, phoneNumber, reference, descripti
   });
 }
 
+async function disburseViaCollectionEndpoint({ amount, phoneNumber, reference, description, provider }) {
+  return apiRequest(
+    "POST",
+    "/api/v1/payment/disbursement",
+    {
+      reference,
+      description: description || `UnlockVIP disbursement ${reference}`,
+      amount: Number(amount),
+      phoneNumber,
+      provider
+    },
+    { isWrite: true }
+  );
+}
+
+async function disburseViaPayoutIntent({ amount, phoneNumber, reference, description, pushType }) {
+  return apiRequest(
+    "POST",
+    "/api/v1/payment",
+    {
+      mode: "PAYOUT",
+      amount: Number(amount),
+      currency: "TZS",
+      reference,
+      description: description || `UnlockVIP disbursement ${reference}`,
+      paymentMethodDetails: {
+        type: pushType,
+        phoneNumber
+      }
+    },
+    { isWrite: true }
+  );
+}
+
+function normalizeDisbursementResult(data, method) {
+  const status = String(data?.status || "").toUpperCase();
+  const failureReason = data?.failureReason || data?.message;
+
+  if (status === "FAILED" || data?.failure === true) {
+    const err = new Error(failureReason || "Disbursement failed");
+    err.code = "DISBURSEMENT_FAILED";
+    err.details = { method, ...data };
+    throw err;
+  }
+
+  return { method, ...data };
+}
+
+async function approvePayment(reference, approved = true) {
+  return apiRequest(
+    "POST",
+    "/api/v1/payment/approve",
+    { reference, approved },
+    { isWrite: true }
+  );
+}
+
+async function confirmPaymentApproval(reference, approved = true) {
+  return apiRequest(
+    "POST",
+    "/api/v1/payment/approve/confirm",
+    { reference, approved },
+    { isWrite: true }
+  );
+}
+
 async function disbursePayment({ amount, phoneNumber, reference, description }) {
   const phone = toInternationalPhone(phoneNumber);
+  const provider = resolveDisbursementProvider(phone);
   const pushType = resolvePaymentMethodType(phone);
 
-  if (!pushType) {
+  if (!provider || !pushType) {
     const err = new Error(
       `Unsupported Tanzanian number prefix ${phone.substring(3, 6)}. Use a valid Vodacom, Airtel, Tigo, or Halotel number.`
     );
@@ -256,17 +345,37 @@ async function disbursePayment({ amount, phoneNumber, reference, description }) 
     throw err;
   }
 
-  return apiRequest("POST", "/api/v1/payment", {
-    mode: "PAYOUT",
-    amount: Number(amount),
-    currency: "TZS",
-    reference,
-    description: description || `UnlockVIP disbursement ${reference}`,
-    paymentMethodDetails: {
-      type: pushType,
-      phoneNumber: phone
+  let data;
+  let method = "disbursement";
+
+  try {
+    data = await disburseViaCollectionEndpoint({
+      amount,
+      phoneNumber: phone,
+      reference,
+      description,
+      provider
+    });
+  } catch (error) {
+    const authBlocked =
+      error.code === 403 ||
+      /authentication token missing|unauthorized/i.test(String(error.message || ""));
+
+    if (!authBlocked) {
+      throw error;
     }
-  });
+
+    method = "payout_intent";
+    data = await disburseViaPayoutIntent({
+      amount,
+      phoneNumber: phone,
+      reference,
+      description,
+      pushType
+    });
+  }
+
+  return normalizeDisbursementResult(data, method);
 }
 
 async function collectPayment({ amount, phoneNumber, reference, description }) {
@@ -547,6 +656,9 @@ function extractPaymentMeta({ status, message, event, source = "QUERY" }) {
 module.exports = {
   collectPayment,
   disbursePayment,
+  approvePayment,
+  confirmPaymentApproval,
+  resolveDisbursementProvider,
   createPaymentIntent,
   resolvePaymentMethodType,
   needsExplicitPaymentMethod,
@@ -559,6 +671,8 @@ module.exports = {
   getPaymentByReference,
   searchPayments,
   toInternationalPhone,
+  getMobilePrefix2,
+  isTigoPhone,
   detectOperator,
   formatMalipopayError,
   mapMalipopayStatus,

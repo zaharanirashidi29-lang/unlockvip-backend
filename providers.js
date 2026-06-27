@@ -1,13 +1,7 @@
-const { toInternationalPhone, detectOperator } = require("./malipopay");
+const { toInternationalPhone, detectOperator, isTigoPhone } = require("./malipopay");
 const { formatClickpesaError } = require("./clickpesa");
 const { formatMalipopayError } = require("./malipopay");
 const { formatPesapalError } = require("./pesapal");
-
-function isTigoPhone(phone) {
-  const normalized = toInternationalPhone(phone);
-  const prefix3 = normalized.substring(3, 6);
-  return /^(71|65|67)/.test(prefix3);
-}
 
 function resolveProvider(phone) {
   if (isTigoPhone(phone)) {
