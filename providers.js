@@ -13,10 +13,7 @@ function isPesapalPhone(phone) {
   return isTigoPhone(phone) || isAirtelPhone(phone);
 }
 
-function resolveProvider(phone) {
-  if (isPesapalPhone(phone)) {
-    return "pesapal";
-  }
+function resolveProvider() {
   return "malipopay";
 }
 
