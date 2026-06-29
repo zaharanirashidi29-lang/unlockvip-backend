@@ -3,17 +3,17 @@ const { resolveProvider, detectOperator, isPesapalPhone } = require("./providers
 const { toInternationalPhone } = require("./malipopay");
 
 const testNumbers = [
-  { label: "Vodacom 079", phone: "0794316132", expectProvider: "malipopay" },
-  { label: "Vodacom 074", phone: "0742000001", expectProvider: "malipopay" },
-  { label: "Airtel 066", phone: "0667392184", expectProvider: "malipopay" },
-  { label: "Airtel 068", phone: "0687392184", expectProvider: "malipopay" },
-  { label: "Airtel 078", phone: "0784000001", expectProvider: "malipopay" },
-  { label: "Tigo 065", phone: "0652000001", expectProvider: "malipopay" },
-  { label: "Tigo 067", phone: "0672000001", expectProvider: "malipopay" },
-  { label: "Tigo 071", phone: "0712000001", expectProvider: "malipopay" },
-  { label: "Tigo 077", phone: "0771990575", expectProvider: "malipopay" },
-  { label: "Halotel 061", phone: "0617119863", expectProvider: "malipopay" },
-  { label: "Halotel 062", phone: "0622000001", expectProvider: "malipopay" }
+  { label: "Vodacom 079", phone: "0794316132", expectProvider: "grebo" },
+  { label: "Vodacom 074", phone: "0742000001", expectProvider: "grebo" },
+  { label: "Airtel 066", phone: "0667392184", expectProvider: "grebo" },
+  { label: "Airtel 068", phone: "0687392184", expectProvider: "grebo" },
+  { label: "Airtel 078", phone: "0784000001", expectProvider: "grebo" },
+  { label: "Tigo 065", phone: "0652000001", expectProvider: "grebo" },
+  { label: "Tigo 067", phone: "0672000001", expectProvider: "grebo" },
+  { label: "Tigo 071", phone: "0712000001", expectProvider: "grebo" },
+  { label: "Tigo 077", phone: "0771990575", expectProvider: "grebo" },
+  { label: "Halotel 061", phone: "0617119863", expectProvider: "grebo" },
+  { label: "Halotel 062", phone: "0622000001", expectProvider: "grebo" }
 ];
 
 let failed = 0;

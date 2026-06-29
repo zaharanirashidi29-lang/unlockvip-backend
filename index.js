@@ -19,6 +19,13 @@ const {
   isPesapalPaymentComplete
 } = require("./pesapal");
 const {
+  createDeposit,
+  resolvePaymentStatus: resolveGreboPaymentStatus,
+  buildGreboUpdate,
+  isGreboWebhook,
+  verifyWebhookSignature
+} = require("./grebo");
+const {
   toInternationalPhone,
   detectOperator,
   resolveProvider,
@@ -29,6 +36,40 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.use(cors());
+
+app.post(
+  "/webhook/grebo",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    try {
+      const rawBody = req.body?.length ? req.body.toString("utf8") : "";
+      const signature = req.headers["x-webhook-signature"];
+      const timestamp = req.headers["x-webhook-timestamp"];
+      const secret = process.env.GREBO_WEBHOOK_SECRET;
+
+      if (secret) {
+        const valid = verifyWebhookSignature({
+          rawBody,
+          signature,
+          timestamp,
+          secret
+        });
+        if (!valid) {
+          console.error("GREBO WEBHOOK: invalid signature");
+          return res.status(401).json({ success: false, error: "Invalid signature" });
+        }
+      }
+
+      const body = rawBody ? JSON.parse(rawBody) : {};
+      await processGreboWebhook(body);
+      return res.status(200).json({ success: true });
+    } catch (error) {
+      console.error("GREBO WEBHOOK ERROR:", error.message);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  }
+);
+
 app.use(express.json());
 
 mongoose
@@ -65,7 +106,7 @@ const HALOTEL_POLL_INTERVAL_MS = 15000;
 const HALOTEL_MAX_POLL_ATTEMPTS = 18;
 
 app.get("/", (req, res) => {
-  res.send("UnlockVIP Backend Running (Tigo + Airtel → Pesapal, Vodacom + Halotel → MaliPoPay)");
+  res.send("UnlockVIP Backend Running (All payments → Grebo Pay)");
 });
 
 app.get("/health", async (req, res) => {
@@ -74,7 +115,9 @@ app.get("/health", async (req, res) => {
     clickpesa_api_key: process.env.CLICKPESA_API_KEY ? "Set" : "Missing",
     malipopay_secret_key: process.env.MALIPOPAY_SECRET_KEY ? "Set" : "Missing",
     mongodb_uri: process.env.MONGODB_URI ? "Set" : "Missing",
-    routing: "Tigo/YAS (065/067/071/077) + Airtel (066/068/069/078) → Pesapal, Vodacom + Halotel → MaliPoPay",
+    routing: "All networks → Grebo Pay",
+    grebo_api_key: process.env.GREBO_API_KEY ? "Set" : "Missing",
+    grebo_webhook_secret: process.env.GREBO_WEBHOOK_SECRET ? "Set" : "Missing",
     pesapal_consumer_key: process.env.PESAPAL_CONSUMER_KEY ? "Set" : "Missing",
     timestamp: Math.floor(Date.now() / 1000)
   };
@@ -206,6 +249,11 @@ async function queryProviderStatus(payment, options = {}) {
     return { provider: "pesapal", data };
   }
 
+  if (payment?.provider === "grebo") {
+    const data = await resolveGreboPaymentStatus(payment);
+    return { provider: "grebo", data };
+  }
+
   if (!payment?.order_tracking_id && !payment?.reference) {
     throw new Error("Missing MaliPoPay reference");
   }
@@ -218,7 +266,82 @@ function buildProviderUpdate(provider, statusData, source) {
   if (provider === "pesapal") {
     return buildPesapalUpdate(statusData, source);
   }
+  if (provider === "grebo") {
+    return buildGreboUpdate(statusData, source);
+  }
   return buildMalipopayUpdate(statusData, source);
+}
+
+async function processGreboWebhook(body) {
+  const event = String(body?.event || "").toLowerCase();
+  const data = body?.data || body;
+  const greboRef = data?.id;
+  const localReference = data?.reference;
+
+  if (!greboRef && !localReference) {
+    throw new Error("Missing Grebo transaction reference");
+  }
+
+  const lookup = [];
+  if (greboRef) {
+    lookup.push({ order_tracking_id: greboRef }, { transaction_id: greboRef });
+  }
+  if (localReference) {
+    lookup.push({ reference: localReference });
+  }
+
+  const payment = await Payment.findOne({ $or: lookup });
+  if (!payment) {
+    console.log("GREBO WEBHOOK: payment not found", localReference || greboRef);
+    return;
+  }
+
+  if (payment.status === "COMPLETED") {
+    return;
+  }
+
+  const update = buildGreboUpdate(data, "WEBHOOK");
+
+  if (event === "transaction.failed" || update.status === "FAILED") {
+    await Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      {
+        ...update,
+        reason: "WEBHOOK_FAILED",
+        order_tracking_id: greboRef || payment.order_tracking_id,
+        transaction_id: greboRef || payment.transaction_id,
+        provider_response: data
+      }
+    );
+    console.log("Grebo webhook FAILED for", payment.reference);
+    return;
+  }
+
+  if (event === "transaction.completed" || update.status === "COMPLETED") {
+    await Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      {
+        ...update,
+        reason: "WEBHOOK_CONFIRMED",
+        order_tracking_id: greboRef || payment.order_tracking_id,
+        transaction_id: greboRef || payment.transaction_id,
+        provider_response: data
+      }
+    );
+    console.log("Grebo webhook COMPLETED for", payment.reference);
+    return;
+  }
+
+  await Payment.findOneAndUpdate(
+    { reference: payment.reference },
+    {
+      ...update,
+      order_tracking_id: greboRef || payment.order_tracking_id,
+      transaction_id: greboRef || payment.transaction_id,
+      provider_response: data
+    }
+  );
+  console.log("Grebo webhook update for", payment.reference, update.status);
 }
 
 async function applyStatusFromQuery(payment, source, options = {}) {
@@ -316,6 +439,31 @@ async function fixStalePollingRecords() {
 
   if (result.modifiedCount > 0) {
     console.log("Fixed stale polling records:", result.modifiedCount);
+  }
+}
+
+async function syncGreboPayment(payment) {
+  if (!payment?.order_tracking_id && !payment?.reference) {
+    return payment;
+  }
+
+  try {
+    const { update } = await applyStatusFromQuery(payment, "SYNC", { bypassCache: true });
+    if (update.status === payment.status && update.reason === payment.reason) {
+      return payment;
+    }
+
+    return Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      {
+        ...update,
+        reason: update.status === "COMPLETED" ? "SYNCED_FROM_GREBO" : update.reason
+      },
+      { new: true }
+    );
+  } catch (error) {
+    console.error("Grebo sync error for", payment.reference, error.message);
+    return payment;
   }
 }
 
@@ -520,6 +668,54 @@ app.post("/create-payment", async (req, res) => {
       return res.json(buildPesapalPaymentResponse(updated, order));
     }
 
+    if (provider === "grebo") {
+      const callbackUrl = `${getPublicBaseUrl()}/webhook/grebo`;
+      const deposit = await createDeposit({
+        amount,
+        phone,
+        reference,
+        callbackUrl
+      });
+
+      if (deposit?.status !== "success" || !deposit?.data) {
+        throw new Error(deposit?.message || deposit?.error || "Grebo deposit failed");
+      }
+
+      const greboTx = deposit.data;
+      const greboStatus = String(greboTx.status || "").toLowerCase();
+
+      if (greboStatus === "failed") {
+        throw new Error("Grebo payment failed to start");
+      }
+
+      await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: "PROCESSING",
+          reason: "USSD_SENT",
+          order_tracking_id: greboTx.id,
+          transaction_id: greboTx.id,
+          result: greboTx.status,
+          message: `USSD push sent via ${operator} (Grebo)`,
+          provider_response: greboTx
+        }
+      );
+
+      pollPaymentStatus(reference, phone);
+
+      return res.json({
+        success: true,
+        provider,
+        operator,
+        data: {
+          reference,
+          grebo_id: greboTx.id,
+          status: greboTx.status,
+          method: greboTx.method
+        }
+      });
+    }
+
     const push = await collectPayment({
       amount,
       phoneNumber: phone,
@@ -563,7 +759,7 @@ app.post("/create-payment", async (req, res) => {
   } catch (error) {
     console.error("CREATE PAYMENT ERROR:", error.details || error.response?.data || error.message);
 
-    const formatted = formatApiError(error, provider || "malipopay");
+    const formatted = formatApiError(error, provider || "grebo");
     const apiMessage = formatted.message;
     const operator = detectOperator(req.body?.phone || "");
 
@@ -692,6 +888,11 @@ app.post("/webhook", async (req, res) => {
     const body = req.body || {};
     console.log("WEBHOOK RECEIVED:", JSON.stringify(body, null, 2));
 
+    if (isGreboWebhook(body)) {
+      await processGreboWebhook(body);
+      return res.status(200).json({ success: true });
+    }
+
     const event = body.event || body.type;
     const data = body.data || body;
     const malipopayRef = data.reference || data.orderReference;
@@ -725,6 +926,11 @@ app.post("/webhook", async (req, res) => {
         },
         res
       );
+    }
+
+    if (payment.provider === "grebo") {
+      await processGreboWebhook(body);
+      return res.status(200).json({ success: true });
     }
 
     if (payment.status === "COMPLETED") {
@@ -907,7 +1113,7 @@ app.post("/query-transaction", async (req, res) => {
     const payment = await Payment.findOne({ reference: req.body?.reference }).catch(() => null);
     res
       .status(500)
-      .json(clientError(error, payment?.provider || "malipopay", "Failed to query payment"));
+      .json(clientError(error, payment?.provider || "grebo", "Failed to query payment"));
   }
 });
 
@@ -920,16 +1126,20 @@ app.get("/admin/payments", async (req, res) => {
 
 app.post("/admin/sync-payments", async (req, res) => {
   const pending = await Payment.find({
-    provider: "malipopay",
+    provider: { $in: ["grebo", "malipopay"] },
     status: { $in: ["PROCESSING", "TIMEOUT", "PENDING"] },
     order_tracking_id: { $exists: true, $ne: null }
   })
     .sort({ _id: -1 })
-    .limit(5);
+    .limit(10);
 
   const results = [];
   for (const payment of pending) {
-    results.push(await syncMalipopayPayment(payment));
+    if (payment.provider === "grebo") {
+      results.push(await syncGreboPayment(payment));
+    } else {
+      results.push(await syncMalipopayPayment(payment));
+    }
   }
 
   res.json({ success: true, synced: results.length });
