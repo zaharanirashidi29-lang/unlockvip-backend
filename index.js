@@ -17,7 +17,8 @@ const {
   getTransactionStatus,
   buildPesapalUpdate,
   isPesapalPaymentComplete,
-  getCallbackUrl
+  getCallbackUrl,
+  testPesapalAuth
 } = require("./pesapal");
 const {
   createDeposit,
@@ -130,6 +131,12 @@ app.get("/health", async (req, res) => {
     checks.clickpesa_api = "Authenticated";
   } catch (err) {
     checks.clickpesa_api = err.message;
+  }
+
+  try {
+    checks.pesapal_api = await testPesapalAuth();
+  } catch (err) {
+    checks.pesapal_api = err.message;
   }
 
   res.json(checks);

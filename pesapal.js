@@ -5,8 +5,8 @@ const BASE_URL =
     ? "https://cybqa.pesapal.com/pesapalv3/api"
     : "https://pay.pesapal.com/v3/api";
 
-const CONSUMER_KEY = process.env.PESAPAL_CONSUMER_KEY || "";
-const CONSUMER_SECRET = process.env.PESAPAL_CONSUMER_SECRET || "";
+const CONSUMER_KEY = String(process.env.PESAPAL_CONSUMER_KEY || "").trim();
+const CONSUMER_SECRET = String(process.env.PESAPAL_CONSUMER_SECRET || "").trim();
 
 let cachedToken = null;
 let cachedIpnId = process.env.PESAPAL_IPN_ID || null;
@@ -218,6 +218,11 @@ async function getTransactionStatus(orderTrackingId) {
   return data;
 }
 
+async function testPesapalAuth() {
+  await requestToken();
+  return "Authenticated";
+}
+
 module.exports = {
   createPaymentOrder,
   getTransactionStatus,
@@ -225,5 +230,6 @@ module.exports = {
   buildPesapalUpdate,
   isPesapalPaymentComplete,
   formatPesapalError,
-  getCallbackUrl
+  getCallbackUrl,
+  testPesapalAuth
 };
