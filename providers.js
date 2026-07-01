@@ -11,11 +11,15 @@ const { formatPesapalError } = require("./pesapal");
 const { formatGreboError } = require("./grebo");
 
 function isPesapalPhone(phone) {
-  return isTigoPhone(phone) || isAirtelPhone(phone);
+  return isTigoPhone(phone);
 }
 
 function resolveProvider() {
-  return "grebo";
+  return "malipopay";
+}
+
+function getRoutingLabel() {
+  return "All networks → MaliPoPay";
 }
 
 function formatApiError(error, provider) {
@@ -39,5 +43,6 @@ module.exports = {
   isPesapalPhone,
   getMobilePrefix2,
   resolveProvider,
+  getRoutingLabel,
   formatApiError
 };
