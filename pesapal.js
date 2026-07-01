@@ -11,29 +11,12 @@ const CONSUMER_SECRET = process.env.PESAPAL_CONSUMER_SECRET || "";
 let cachedToken = null;
 let cachedIpnId = process.env.PESAPAL_IPN_ID || null;
 
-function getPublicBaseUrl() {
-  return (
-    process.env.PUBLIC_BASE_URL ||
-    process.env.BACKEND_URL ||
-    "https://unlockvip-backend-1.onrender.com"
-  ).replace(/\/$/, "");
-}
-
-function getIpnUrl() {
-  return (
-    process.env.PESAPAL_IPN_URL || `${getPublicBaseUrl()}/webhook/pesapal`
-  ).replace(/\/$/, "");
-}
-
 function getCallbackUrl() {
   return (
-    process.env.PESAPAL_CALLBACK_URL || `${getPublicBaseUrl()}/pesapal/callback`
-  ).replace(/\/$/, "");
-}
-
-function getCancellationUrl() {
-  const url = process.env.PESAPAL_CANCEL_URL;
-  return url ? String(url).replace(/\/$/, "") : undefined;
+    process.env.PESAPAL_CALLBACK_URL ||
+    process.env.CALLBACK_URL ||
+    "https://unlockvip-backend-1.onrender.com/webhook"
+  );
 }
 
 function authHeaders(token) {
@@ -49,6 +32,7 @@ function formatPesapalError(error) {
   const message =
     data?.message ||
     data?.error?.message ||
+    data?.error?.code ||
     error.message ||
     "Pesapal request failed";
 
@@ -81,12 +65,9 @@ async function requestToken() {
   );
 
   if (!data.token) {
-    const message =
-      data.error?.code ||
-      data.error?.message ||
-      data.message ||
-      "Pesapal authentication failed";
-    throw new Error(message);
+    throw new Error(
+      data.error?.code || data.error?.message || data.message || "Pesapal authentication failed"
+    );
   }
 
   cachedToken = {
@@ -105,7 +86,7 @@ async function ensureIpnId(token) {
   const { data } = await axios.post(
     `${BASE_URL}/URLSetup/RegisterIPN`,
     {
-      url: getIpnUrl(),
+      url: getCallbackUrl(),
       ipn_notification_type: "GET"
     },
     {
@@ -188,32 +169,24 @@ async function createPaymentOrder({ reference, phone, amount, description }) {
   const token = await requestToken();
   const notificationId = await ensureIpnId(token);
   const callbackUrl = getCallbackUrl();
-  const cancellationUrl = getCancellationUrl();
-  const phoneNumber = String(phone).replace(/\D/g, "");
-
-  const payload = {
-    id: reference,
-    currency: "TZS",
-    amount: Number(amount),
-    description: description || "UnlockVIP subscription payment",
-    callback_url: callbackUrl,
-    redirect_mode: "PARENT_WINDOW",
-    notification_id: notificationId,
-    billing_address: {
-      phone_number: phoneNumber,
-      country_code: "TZ",
-      first_name: "Customer",
-      last_name: "UnlockVIP"
-    }
-  };
-
-  if (cancellationUrl) {
-    payload.cancellation_url = cancellationUrl;
-  }
 
   const { data } = await axios.post(
     `${BASE_URL}/Transactions/SubmitOrderRequest`,
-    payload,
+    {
+      id: reference,
+      currency: "TZS",
+      amount: Number(amount),
+      description: description || "UnlockVIP subscription payment",
+      callback_url: callbackUrl,
+      redirect_mode: "PARENT_WINDOW",
+      notification_id: notificationId,
+      billing_address: {
+        phone_number: String(phone).replace(/\D/g, ""),
+        country_code: "TZ",
+        first_name: "Customer",
+        last_name: "UnlockVIP"
+      }
+    },
     {
       headers: authHeaders(token),
       timeout: 30000
@@ -252,8 +225,5 @@ module.exports = {
   buildPesapalUpdate,
   isPesapalPaymentComplete,
   formatPesapalError,
-  getPublicBaseUrl,
-  getIpnUrl,
-  getCallbackUrl,
-  getCancellationUrl
+  getCallbackUrl
 };

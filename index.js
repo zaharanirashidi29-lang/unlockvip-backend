@@ -17,7 +17,6 @@ const {
   getTransactionStatus,
   buildPesapalUpdate,
   isPesapalPaymentComplete,
-  getIpnUrl,
   getCallbackUrl
 } = require("./pesapal");
 const {
@@ -122,7 +121,6 @@ app.get("/health", async (req, res) => {
     grebo_api_key: process.env.GREBO_API_KEY ? "Set" : "Missing",
     grebo_webhook_secret: process.env.GREBO_WEBHOOK_SECRET ? "Set" : "Missing",
     pesapal_consumer_key: process.env.PESAPAL_CONSUMER_KEY ? "Set" : "Missing",
-    pesapal_ipn_url: getIpnUrl(),
     pesapal_callback_url: getCallbackUrl(),
     timestamp: Math.floor(Date.now() / 1000)
   };
@@ -165,11 +163,6 @@ function buildCheckoutUrls(reference) {
 
 function buildPesapalPaymentResponse(payment, order) {
   const checkout = buildCheckoutUrls(payment.reference);
-  const pesapalUrl =
-    order?.redirectUrl ||
-    payment.provider_response?.redirect_url ||
-    payment.provider_response?.pesapal_redirect_url;
-
   return {
     success: true,
     provider: "pesapal",
@@ -181,8 +174,7 @@ function buildPesapalPaymentResponse(payment, order) {
       order_tracking_id: order?.orderTrackingId || payment.order_tracking_id,
       status: payment.status || "PROCESSING",
       checkout_url: checkout.checkout_url,
-      redirect_url: checkout.checkout_url,
-      pesapal_payment_url: pesapalUrl
+      redirect_url: checkout.checkout_url
     }
   };
 }
@@ -691,7 +683,6 @@ app.post("/create-payment", async (req, res) => {
           message: `Pesapal checkout ready for ${operator}`,
           provider_response: {
             redirect_url: order.redirectUrl,
-            pesapal_redirect_url: order.redirectUrl,
             order_tracking_id: order.orderTrackingId,
             merchant_reference: order.merchantReference,
             raw: order.raw
@@ -821,35 +812,10 @@ app.post("/create-payment", async (req, res) => {
   }
 });
 
-async function applyPesapalStatusUpdate(payment, orderTrackingId, source) {
-  const trackingId = orderTrackingId || payment.order_tracking_id;
-  const statusData = await getTransactionStatus(trackingId);
-  const update = buildPesapalUpdate(statusData, source);
-
-  await Payment.findOneAndUpdate(
-    { reference: payment.reference },
-    {
-      ...update,
-      order_tracking_id: trackingId || payment.order_tracking_id
-    }
-  );
-
-  return { payment, statusData, update };
-}
-
-function buildPesapalIpnAck(res, payment, orderTrackingId) {
-  return res.status(200).json({
-    orderNotificationType: "IPNCHANGE",
-    orderTrackingId: orderTrackingId || payment.order_tracking_id,
-    orderMerchantReference: payment.reference,
-    status: 200
-  });
-}
-
 async function handlePesapalIpn(req, res) {
   try {
-    const orderTrackingId = req.query.OrderTrackingId || req.body?.OrderTrackingId;
-    const merchantReference = req.query.OrderMerchantReference || req.body?.OrderMerchantReference;
+    const orderTrackingId = req.query.OrderTrackingId;
+    const merchantReference = req.query.OrderMerchantReference;
 
     if (!orderTrackingId && !merchantReference) {
       return res.status(400).json({ success: false, error: "Missing Pesapal IPN parameters" });
@@ -869,91 +835,30 @@ async function handlePesapalIpn(req, res) {
       return res.status(404).json({ success: false, error: "Payment not found" });
     }
 
-    if (payment.status !== "COMPLETED") {
-      const { update } = await applyPesapalStatusUpdate(payment, orderTrackingId, "WEBHOOK");
-      console.log("Pesapal IPN", payment.reference, update.status);
+    if (payment.status === "COMPLETED") {
+      return res.status(200).json({ success: true, status: "COMPLETED" });
     }
 
-    return buildPesapalIpnAck(res, payment, orderTrackingId);
+    const statusData = await getTransactionStatus(orderTrackingId || payment.order_tracking_id);
+    const update = buildPesapalUpdate(statusData, "WEBHOOK");
+
+    await Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      {
+        ...update,
+        order_tracking_id: orderTrackingId || payment.order_tracking_id
+      }
+    );
+
+    console.log("Pesapal IPN", payment.reference, update.status);
+    return res.status(200).json({ success: true, status: update.status });
   } catch (error) {
     console.error("PESAPAL IPN ERROR:", error.message);
-    return res.status(500).json({
-      orderNotificationType: "IPNCHANGE",
-      orderTrackingId: req.query?.OrderTrackingId || req.body?.OrderTrackingId || "",
-      orderMerchantReference: req.query?.OrderMerchantReference || req.body?.OrderMerchantReference || "",
-      status: 500
-    });
+    return res.status(500).json({ success: false, error: error.message });
   }
 }
 
-async function handlePesapalCallback(req, res) {
-  try {
-    const orderTrackingId = req.query.OrderTrackingId;
-    const merchantReference = req.query.OrderMerchantReference;
-
-    if (!orderTrackingId && !merchantReference) {
-      return res.status(400).send("Missing Pesapal callback parameters");
-    }
-
-    const lookup = [];
-    if (orderTrackingId) {
-      lookup.push({ order_tracking_id: orderTrackingId });
-    }
-    if (merchantReference) {
-      lookup.push({ reference: merchantReference });
-    }
-
-    const payment = await Payment.findOne({ $or: lookup });
-    if (!payment) {
-      return res.status(404).send("Payment not found");
-    }
-
-    const { update } = await applyPesapalStatusUpdate(payment, orderTrackingId, "CALLBACK");
-    const completed = update.status === "COMPLETED";
-    const failed = update.status === "FAILED";
-    const title = completed ? "Payment successful" : failed ? "Payment failed" : "Payment processing";
-    const message = update.message || title;
-
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${title}</title>
-  <style>
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b1020; color: #eef2ff; font-family: system-ui, sans-serif; }
-    .card { width: min(92vw, 420px); background: #151b2f; border-radius: 16px; padding: 24px; text-align: center; }
-    h1 { margin: 0 0 12px; font-size: 1.4rem; }
-    p { margin: 0; line-height: 1.5; color: #c7d2fe; }
-    .ref { margin-top: 16px; font-size: 0.9rem; color: #94a3b8; }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>${title}</h1>
-    <p>${message}</p>
-    <p class="ref">Reference: ${payment.reference}</p>
-  </div>
-</body>
-</html>`);
-  } catch (error) {
-    console.error("PESAPAL CALLBACK ERROR:", error.message);
-    return res.status(500).send("Payment callback failed");
-  }
-}
-
-app.get("/webhook/pesapal", handlePesapalIpn);
-app.post("/webhook/pesapal", handlePesapalIpn);
-app.get("/pesapal/callback", handlePesapalCallback);
-
-app.get("/webhook", async (req, res) => {
-  if (req.query.OrderTrackingId || req.query.OrderNotificationType) {
-    return handlePesapalIpn(req, res);
-  }
-
-  return res.status(200).json({ success: true, message: "Webhook ready" });
-});
+app.get("/webhook", handlePesapalIpn);
 
 app.get("/checkout/:reference", async (req, res) => {
   try {
@@ -983,12 +888,7 @@ app.get("/pay/:reference", async (req, res) => {
       return res.status(404).send("Payment not found");
     }
 
-    const pesapalUrl = payment.provider_response?.pesapal_redirect_url || payment.provider_response?.redirect_url;
-    if (!pesapalUrl) {
-      return res.status(404).send("Pesapal checkout not available");
-    }
-
-    const safeUrl = String(pesapalUrl).replace(/"/g, "&quot;");
+    const checkoutPath = `/checkout/${payment.reference}`;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -1002,7 +902,7 @@ app.get("/pay/:reference", async (req, res) => {
   </style>
 </head>
 <body>
-  <iframe src="${safeUrl}" title="UnlockVIP payment" allow="payment *" style="width:100%;height:100%;border:0;background:#fff"></iframe>
+  <iframe src="${checkoutPath}" title="UnlockVIP payment" style="width:100%;height:100%;border:0;background:#fff"></iframe>
 </body>
 </html>`);
   } catch (error) {

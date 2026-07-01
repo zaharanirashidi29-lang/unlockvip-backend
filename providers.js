@@ -11,15 +11,18 @@ const { formatPesapalError } = require("./pesapal");
 const { formatGreboError } = require("./grebo");
 
 function isPesapalPhone(phone) {
-  return isTigoPhone(phone);
+  return isTigoPhone(phone) || isAirtelPhone(phone);
 }
 
-function resolveProvider() {
+function resolveProvider(phone) {
+  if (isPesapalPhone(phone)) {
+    return "pesapal";
+  }
   return "malipopay";
 }
 
 function getRoutingLabel() {
-  return "All networks → MaliPoPay";
+  return "Tigo/YAS + Airtel → Pesapal, Vodacom + Halotel → MaliPoPay";
 }
 
 function formatApiError(error, provider) {
