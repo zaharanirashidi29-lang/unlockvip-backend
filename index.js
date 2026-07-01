@@ -888,7 +888,12 @@ app.get("/pay/:reference", async (req, res) => {
       return res.status(404).send("Payment not found");
     }
 
-    const checkoutPath = `/checkout/${payment.reference}`;
+    const pesapalUrl = payment.provider_response?.redirect_url;
+    if (!pesapalUrl) {
+      return res.status(404).send("Pesapal checkout not available");
+    }
+
+    const safeUrl = String(pesapalUrl).replace(/"/g, "&quot;");
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -902,7 +907,7 @@ app.get("/pay/:reference", async (req, res) => {
   </style>
 </head>
 <body>
-  <iframe src="${checkoutPath}" title="UnlockVIP payment" style="width:100%;height:100%;border:0;background:#fff"></iframe>
+  <iframe src="${safeUrl}" title="UnlockVIP payment" allow="payment *" style="width:100%;height:100%;border:0;background:#fff"></iframe>
 </body>
 </html>`);
   } catch (error) {

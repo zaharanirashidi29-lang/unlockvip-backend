@@ -5,9 +5,9 @@ const { toInternationalPhone } = require("./malipopay");
 const testNumbers = [
   { label: "Vodacom 079", phone: "0794316132", expectProvider: "malipopay" },
   { label: "Vodacom 074", phone: "0742000001", expectProvider: "malipopay" },
-  { label: "Airtel 066", phone: "0667392184", expectProvider: "pesapal" },
-  { label: "Airtel 068", phone: "0687392184", expectProvider: "pesapal" },
-  { label: "Airtel 078", phone: "0784000001", expectProvider: "pesapal" },
+  { label: "Airtel 066", phone: "0667392184", expectProvider: "malipopay" },
+  { label: "Airtel 068", phone: "0687392184", expectProvider: "malipopay" },
+  { label: "Airtel 078", phone: "0784000001", expectProvider: "malipopay" },
   { label: "Tigo 065", phone: "0652000001", expectProvider: "pesapal" },
   { label: "Tigo 067", phone: "0672000001", expectProvider: "pesapal" },
   { label: "Tigo 071", phone: "0712000001", expectProvider: "pesapal" },
