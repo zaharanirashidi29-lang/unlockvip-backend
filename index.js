@@ -31,7 +31,9 @@ const {
   resolvePaymentStatus: resolveGreboPaymentStatus,
   buildGreboUpdate,
   isGreboWebhook,
-  verifyWebhookSignature
+  verifyWebhookSignature,
+  enrichPaymentForAdmin,
+  extractGreboFailureMessage
 } = require("./grebo");
 const {
   toInternationalPhone,
@@ -354,7 +356,9 @@ async function processGreboWebhook(body) {
       { reference: payment.reference },
       {
         ...update,
+        status: "FAILED",
         reason: "WEBHOOK_FAILED",
+        message: update.message || extractGreboFailureMessage(data),
         order_tracking_id: greboRef || payment.order_tracking_id,
         transaction_id: greboRef || payment.transaction_id,
         provider_response: data
@@ -420,7 +424,10 @@ async function finalizePolling(localReference) {
     }
 
     if (update.status === "FAILED") {
-      await Payment.findOneAndUpdate({ reference: localReference }, update);
+      await Payment.findOneAndUpdate(
+        { reference: localReference },
+        { ...update, status: "FAILED" }
+      );
       return;
     }
   } catch (error) {
@@ -645,7 +652,10 @@ function pollPaymentStatus(localReference, phone, provider) {
       }
 
       if (update.status === "FAILED") {
-        await Payment.findOneAndUpdate({ reference: localReference }, update);
+        await Payment.findOneAndUpdate(
+          { reference: localReference },
+          { ...update, status: "FAILED" }
+        );
         console.log("Status set to FAILED via FAILED_BY_QUERY for", localReference);
         clearInterval(interval);
       }
@@ -760,7 +770,7 @@ app.post("/create-payment", async (req, res) => {
       const greboStatus = String(greboTx.status || "").toLowerCase();
 
       if (greboStatus === "failed") {
-        throw new Error("Grebo payment failed to start");
+        throw new Error(extractGreboFailureMessage(greboTx));
       }
 
       await Payment.findOneAndUpdate(
@@ -1274,7 +1284,7 @@ app.get("/admin/payments", async (req, res) => {
   const { status } = req.query;
   const filter = status ? { status } : {};
   const data = await Payment.find(filter).sort({ _id: -1 });
-  res.json(data);
+  res.json(data.map(enrichPaymentForAdmin));
 });
 
 app.post("/admin/sync-payments", async (req, res) => {

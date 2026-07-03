@@ -106,9 +106,59 @@ function normalizeGreboStatus(status) {
   return "PROCESSING";
 }
 
+function extractGreboFailureMessage(data) {
+  if (!data) return "Grebo payment failed";
+
+  const candidates = [
+    data.failure_reason,
+    data.failure_message,
+    data.failureReason,
+    data.error_message,
+    data.error,
+    data.message,
+    data.description,
+    data.reason
+  ];
+
+  for (const candidate of candidates) {
+    const text = String(candidate || "").trim();
+    if (!text) continue;
+    const lower = text.toLowerCase();
+    if (lower === "failed" || lower === "error" || lower === "success") continue;
+    return text;
+  }
+
+  const status = String(data.status || "").toLowerCase();
+  if (status === "cancelled" || status === "canceled") {
+    return "Payment cancelled by customer";
+  }
+  if (status === "expired") {
+    return "Payment expired";
+  }
+  if (status === "failed") {
+    return "Grebo payment failed";
+  }
+
+  return "Grebo payment failed";
+}
+
+function isGreboFailed(data) {
+  const status = String(data?.status || "").toLowerCase();
+  return ["failed", "cancelled", "canceled", "expired", "error"].includes(status);
+}
+
 function buildGreboUpdate(statusData, source) {
   const mapped = normalizeGreboStatus(statusData?.status);
   const amount = greboAmountTzs(statusData);
+
+  let message;
+  if (mapped === "COMPLETED") {
+    message = "Payment successful via Grebo";
+  } else if (mapped === "FAILED") {
+    message = extractGreboFailureMessage(statusData);
+  } else {
+    message = "Waiting for customer to authorize payment";
+  }
 
   return {
     status: mapped,
@@ -118,15 +168,47 @@ function buildGreboUpdate(statusData, source) {
           ? "WEBHOOK_CONFIRMED"
           : "CONFIRMED_BY_QUERY"
         : mapped === "FAILED"
-          ? "PAYMENT_FAILED"
+          ? source === "WEBHOOK"
+            ? "WEBHOOK_FAILED"
+            : "FAILED_BY_QUERY"
           : "USSD_SENT",
-    message: `Grebo ${statusData?.status || mapped}`,
+    message,
     amount: amount || undefined,
     transaction_id: statusData?.id,
     result: statusData?.status,
     resultcode: statusData?.status,
     provider_response: statusData
   };
+}
+
+function enrichPaymentForAdmin(payment) {
+  const doc = payment?.toObject ? payment.toObject() : { ...payment };
+  const response = doc.provider_response || {};
+  const greboStatus = String(response.status || doc.result || "").toLowerCase();
+
+  doc.grebo_status = response.status || doc.result || null;
+  doc.grebo_transaction_id =
+    response.id || doc.transaction_id || doc.order_tracking_id || null;
+
+  const failed =
+    doc.status === "FAILED" ||
+    isGreboFailed(response) ||
+    doc.reason === "WEBHOOK_FAILED" ||
+    doc.reason === "PAYMENT_FAILED" ||
+    doc.reason === "FAILED_BY_QUERY";
+
+  if (failed) {
+    doc.grebo_failed = true;
+    doc.grebo_failure = extractGreboFailureMessage(response) || doc.message || "Payment failed";
+    if (!doc.message || doc.message === "Grebo failed") {
+      doc.message = doc.grebo_failure;
+    }
+  } else {
+    doc.grebo_failed = false;
+    doc.grebo_failure = null;
+  }
+
+  return doc;
 }
 
 function isGreboWebhook(body) {
@@ -164,7 +246,10 @@ module.exports = {
   resolvePaymentStatus,
   greboAmountTzs,
   normalizeGreboStatus,
+  extractGreboFailureMessage,
+  isGreboFailed,
   buildGreboUpdate,
+  enrichPaymentForAdmin,
   isGreboWebhook,
   verifyWebhookSignature,
   formatGreboError
