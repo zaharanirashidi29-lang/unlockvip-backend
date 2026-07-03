@@ -11,7 +11,13 @@ const {
   getPaymentFailureMessage,
   extractPaymentMeta: extractMalipopayMeta
 } = require("./malipopay");
-const { getAccessToken } = require("./clickpesa");
+const {
+  initiateUssdPush,
+  getPaymentStatus: getClickpesaStatus,
+  mapClickPesaStatus,
+  extractPaymentMeta: extractClickpesaMeta,
+  getAccessToken
+} = require("./clickpesa");
 const {
   createPaymentOrder,
   getTransactionStatus,
@@ -249,7 +255,35 @@ function buildMalipopayUpdate(statusData, source) {
   };
 }
 
+function buildClickpesaUpdate(statusData, source) {
+  const meta = extractClickpesaMeta({
+    status: statusData?.status,
+    message: statusData?.message,
+    source
+  });
+
+  return {
+    status: meta.status,
+    reason: meta.reason,
+    message: meta.message,
+    amount: Number(statusData?.collectedAmount) || undefined,
+    transaction_id: statusData?.id || statusData?.paymentReference,
+    result: statusData?.status,
+    resultcode: String(statusData?.status_code ?? ""),
+    provider_response: statusData
+  };
+}
+
 async function queryProviderStatus(payment, options = {}) {
+  if (payment?.provider === "clickpesa") {
+    if (!payment?.reference) {
+      throw new Error("Missing ClickPesa order reference");
+    }
+
+    const data = await getClickpesaStatus(payment.reference);
+    return { provider: "clickpesa", data };
+  }
+
   if (payment?.provider === "pesapal") {
     if (!payment?.order_tracking_id) {
       throw new Error("Missing Pesapal order tracking id");
@@ -273,6 +307,9 @@ async function queryProviderStatus(payment, options = {}) {
 }
 
 function buildProviderUpdate(provider, statusData, source) {
+  if (provider === "clickpesa") {
+    return buildClickpesaUpdate(statusData, source);
+  }
   if (provider === "pesapal") {
     return buildPesapalUpdate(statusData, source);
   }
@@ -452,6 +489,39 @@ async function fixStalePollingRecords() {
   }
 }
 
+async function syncProviderPayment(payment) {
+  if (!payment?.order_tracking_id && !payment?.reference) {
+    return payment;
+  }
+
+  try {
+    const { update } = await applyStatusFromQuery(payment, "SYNC", { bypassCache: true });
+    if (update.status === payment.status && update.reason === payment.reason) {
+      return payment;
+    }
+
+    const syncReason =
+      update.status === "COMPLETED"
+        ? payment.provider === "clickpesa"
+          ? "SYNCED_FROM_CLICKPESA"
+          : payment.provider === "pesapal"
+            ? "SYNCED_FROM_PESAPAL"
+            : payment.provider === "grebo"
+              ? "SYNCED_FROM_GREBO"
+              : "SYNCED_FROM_MALIPOPAY"
+        : update.reason;
+
+    return Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      { ...update, reason: syncReason },
+      { new: true }
+    );
+  } catch (error) {
+    console.error("Sync error for", payment.reference, error.message);
+    return payment;
+  }
+}
+
 async function syncGreboPayment(payment) {
   if (!payment?.order_tracking_id && !payment?.reference) {
     return payment;
@@ -527,9 +597,9 @@ async function syncMalipopayPayment(payment) {
   }
 }
 
-function pollPaymentStatus(localReference, phone) {
+function pollPaymentStatus(localReference, phone, provider) {
   let attempts = 0;
-  const halotel = isHalotelPhone(phone);
+  const halotel = provider !== "clickpesa" && isHalotelPhone(phone);
   const intervalMs = halotel ? HALOTEL_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
   const maxAttempts = halotel ? HALOTEL_MAX_POLL_ATTEMPTS : MAX_POLL_ATTEMPTS;
 
@@ -673,34 +743,47 @@ app.post("/create-payment", async (req, res) => {
       time: new Date().toLocaleString()
     }).save();
 
-    if (provider === "pesapal") {
-      const order = await createPaymentOrder({
-        reference,
-        phone,
+    if (provider === "malipopay") {
+      const push = await collectPayment({
         amount,
+        phoneNumber: phone,
+        reference,
         description: "UnlockVIP subscription payment"
       });
 
-      const updated = await Payment.findOneAndUpdate(
+      if (String(push.status || "").toUpperCase() === "FAILED") {
+        throw new Error(getPaymentFailureMessage(push, operator));
+      }
+
+      const mno = push.customer?.mno || detectOperator(phone);
+      const malipopayRef = push.reference;
+
+      await Payment.findOneAndUpdate(
         { reference },
         {
           status: "PROCESSING",
-          reason: "CHECKOUT_READY",
-          order_tracking_id: order.orderTrackingId,
-          message: `Pesapal checkout ready for ${operator}`,
-          provider_response: {
-            redirect_url: order.redirectUrl,
-            order_tracking_id: order.orderTrackingId,
-            merchant_reference: order.merchantReference,
-            raw: order.raw
-          }
-        },
-        { new: true }
+          reason: "USSD_SENT",
+          order_tracking_id: malipopayRef,
+          transaction_id: push.id,
+          result: push.status,
+          message: `USSD push sent via ${mno} (MaliPoPay)`,
+          provider_response: push
+        }
       );
 
-      pollPaymentStatus(reference, phone);
+      pollPaymentStatus(reference, phone, provider);
 
-      return res.json(buildPesapalPaymentResponse(updated, order));
+      return res.json({
+        success: true,
+        provider,
+        operator,
+        data: {
+          reference,
+          malipopay_reference: malipopayRef,
+          status: push.status,
+          customer: push.customer
+        }
+      });
     }
 
     if (provider === "grebo") {
@@ -736,7 +819,7 @@ app.post("/create-payment", async (req, res) => {
         }
       );
 
-      pollPaymentStatus(reference, phone);
+      pollPaymentStatus(reference, phone, provider);
 
       return res.json({
         success: true,
@@ -751,45 +834,34 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    const push = await collectPayment({
+    const push = await initiateUssdPush({
       amount,
-      phoneNumber: phone,
-      reference,
-      description: "UnlockVIP subscription payment"
+      orderReference: reference,
+      phoneNumber: phone
     });
-
-    if (String(push.status || "").toUpperCase() === "FAILED") {
-      throw new Error(getPaymentFailureMessage(push, operator));
-    }
-
-    const mno = push.customer?.mno || detectOperator(phone);
-    const malipopayRef = push.reference;
 
     await Payment.findOneAndUpdate(
       { reference },
       {
         status: "PROCESSING",
         reason: "USSD_SENT",
-        order_tracking_id: malipopayRef,
+        order_tracking_id: push.id,
         transaction_id: push.id,
         result: push.status,
-        message: `USSD push sent via ${mno} (MaliPoPay)`,
+        message: `USSD push sent via ${push.channel || operator} (ClickPesa)`,
         provider_response: push
       }
     );
 
-    pollPaymentStatus(reference, phone);
+    if (mapClickPesaStatus(push.status) === "PROCESSING") {
+      pollPaymentStatus(reference, phone, provider);
+    }
 
     return res.json({
       success: true,
       provider,
       operator,
-      data: {
-        reference,
-        malipopay_reference: malipopayRef,
-        status: push.status,
-        customer: push.customer
-      }
+      data: push
     });
   } catch (error) {
     console.error("CREATE PAYMENT ERROR:", error.details || error.response?.data || error.message);
@@ -930,6 +1002,43 @@ app.post("/webhook", async (req, res) => {
 
     if (isGreboWebhook(body)) {
       await processGreboWebhook(body);
+      return res.status(200).json({ success: true });
+    }
+
+    if (body.event && body.data?.orderReference) {
+      const { event, data } = body;
+      const payment = await Payment.findOne({ reference: data.orderReference });
+
+      if (!payment) {
+        return res.status(404).json({ success: false, error: "Payment not found" });
+      }
+
+      if (payment.status === "COMPLETED") {
+        return res.status(200).json({ success: true });
+      }
+
+      const meta = extractClickpesaMeta({
+        status: data.status,
+        message: data.message,
+        event,
+        source: "WEBHOOK"
+      });
+
+      await Payment.findOneAndUpdate(
+        { reference: payment.reference },
+        {
+          status: meta.status,
+          reason: meta.reason,
+          order_tracking_id: data.id || payment.order_tracking_id,
+          transaction_id: data.id || data.paymentReference || payment.transaction_id,
+          result: data.status,
+          message: meta.message,
+          amount: Number(data.collectedAmount) || payment.amount,
+          provider_response: data
+        }
+      );
+
+      console.log("ClickPesa webhook", meta.status, "for", payment.reference);
       return res.status(200).json({ success: true });
     }
 
@@ -1166,16 +1275,21 @@ app.get("/admin/payments", async (req, res) => {
 
 app.post("/admin/sync-payments", async (req, res) => {
   const pending = await Payment.find({
-    provider: { $in: ["grebo", "malipopay", "pesapal"] },
+    provider: { $in: ["grebo", "malipopay", "pesapal", "clickpesa"] },
     status: { $in: ["PROCESSING", "TIMEOUT", "PENDING"] },
-    order_tracking_id: { $exists: true, $ne: null }
+    $or: [
+      { provider: "clickpesa", reference: { $exists: true, $ne: null } },
+      { order_tracking_id: { $exists: true, $ne: null } }
+    ]
   })
     .sort({ _id: -1 })
     .limit(10);
 
   const results = [];
   for (const payment of pending) {
-    if (payment.provider === "grebo") {
+    if (payment.provider === "clickpesa") {
+      results.push(await syncProviderPayment(payment));
+    } else if (payment.provider === "grebo") {
       results.push(await syncGreboPayment(payment));
     } else if (payment.provider === "pesapal") {
       results.push(await syncPesapalPayment(payment));
