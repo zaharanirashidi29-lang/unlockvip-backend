@@ -11,19 +11,12 @@ const { formatMalipopayError } = require("./malipopay");
 const { formatPesapalError } = require("./pesapal");
 const { formatGreboError } = require("./grebo");
 
-function isClickPesaPhone(phone) {
-  return isTigoPhone(phone) || isHalotelPhone(phone);
-}
-
-function resolveProvider(phone) {
-  if (isClickPesaPhone(phone)) {
-    return "clickpesa";
-  }
-  return "malipopay";
+function resolveProvider() {
+  return "grebo";
 }
 
 function getRoutingLabel() {
-  return "Tigo/YAS + Halotel → ClickPesa USSD push, Vodacom + Airtel → MaliPoPay";
+  return "All networks → Grebo USSD push";
 }
 
 function formatApiError(error, provider) {
@@ -45,7 +38,6 @@ module.exports = {
   isTigoPhone,
   isAirtelPhone,
   isHalotelPhone,
-  isClickPesaPhone,
   getMobilePrefix2,
   resolveProvider,
   getRoutingLabel,

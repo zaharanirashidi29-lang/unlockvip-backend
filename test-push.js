@@ -1,11 +1,12 @@
 require("dotenv").config();
 const { resolveProvider, detectOperator, toInternationalPhone } = require("./providers");
-const { collectPayment } = require("./malipopay");
-const { initiateUssdPush } = require("./clickpesa");
+const { createDeposit } = require("./grebo");
 
 const phone = process.argv[2] || "255794316132";
 const amount = Number(process.argv[3] || 3061);
 const reference = "ORD" + Date.now();
+const callbackUrl =
+  process.env.CALLBACK_URL || "https://unlockvip-backend-1.onrender.com/webhook/grebo";
 
 (async () => {
   try {
@@ -18,23 +19,13 @@ const reference = "ORD" + Date.now();
     console.log("Provider:", provider);
     console.log("Reference:", reference);
 
-    if (provider === "malipopay") {
-      const result = await collectPayment({
-        amount,
-        phoneNumber,
-        reference,
-        description: "UnlockVIP payment test"
-      });
-      console.log("MaliPoPay SUCCESS:", JSON.stringify(result, null, 2));
-      return;
-    }
-
-    const result = await initiateUssdPush({
+    const result = await createDeposit({
       amount,
-      orderReference: reference,
-      phoneNumber
+      phone: phoneNumber,
+      reference,
+      callbackUrl
     });
-    console.log("ClickPesa SUCCESS:", JSON.stringify(result, null, 2));
+    console.log("Grebo SUCCESS:", JSON.stringify(result, null, 2));
   } catch (error) {
     console.error("ERROR STATUS:", error.response?.status);
     console.error("ERROR DATA:", JSON.stringify(error.response?.data || error.message, null, 2));

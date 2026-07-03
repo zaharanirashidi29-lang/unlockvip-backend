@@ -743,49 +743,6 @@ app.post("/create-payment", async (req, res) => {
       time: new Date().toLocaleString()
     }).save();
 
-    if (provider === "malipopay") {
-      const push = await collectPayment({
-        amount,
-        phoneNumber: phone,
-        reference,
-        description: "UnlockVIP subscription payment"
-      });
-
-      if (String(push.status || "").toUpperCase() === "FAILED") {
-        throw new Error(getPaymentFailureMessage(push, operator));
-      }
-
-      const mno = push.customer?.mno || detectOperator(phone);
-      const malipopayRef = push.reference;
-
-      await Payment.findOneAndUpdate(
-        { reference },
-        {
-          status: "PROCESSING",
-          reason: "USSD_SENT",
-          order_tracking_id: malipopayRef,
-          transaction_id: push.id,
-          result: push.status,
-          message: `USSD push sent via ${mno} (MaliPoPay)`,
-          provider_response: push
-        }
-      );
-
-      pollPaymentStatus(reference, phone, provider);
-
-      return res.json({
-        success: true,
-        provider,
-        operator,
-        data: {
-          reference,
-          malipopay_reference: malipopayRef,
-          status: push.status,
-          customer: push.customer
-        }
-      });
-    }
-
     if (provider === "grebo") {
       const callbackUrl = `${getPublicBaseUrl()}/webhook/grebo`;
       const deposit = await createDeposit({
@@ -834,39 +791,86 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
-    const push = await initiateUssdPush({
-      amount,
-      orderReference: reference,
-      phoneNumber: phone
-    });
+    if (provider === "malipopay") {
+      const push = await collectPayment({
+        amount,
+        phoneNumber: phone,
+        reference,
+        description: "UnlockVIP subscription payment"
+      });
 
-    await Payment.findOneAndUpdate(
-      { reference },
-      {
-        status: "PROCESSING",
-        reason: "USSD_SENT",
-        order_tracking_id: push.id,
-        transaction_id: push.id,
-        result: push.status,
-        message: `USSD push sent via ${push.channel || operator} (ClickPesa)`,
-        provider_response: push
+      if (String(push.status || "").toUpperCase() === "FAILED") {
+        throw new Error(getPaymentFailureMessage(push, operator));
       }
-    );
 
-    if (mapClickPesaStatus(push.status) === "PROCESSING") {
+      const mno = push.customer?.mno || detectOperator(phone);
+      const malipopayRef = push.reference;
+
+      await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: "PROCESSING",
+          reason: "USSD_SENT",
+          order_tracking_id: malipopayRef,
+          transaction_id: push.id,
+          result: push.status,
+          message: `USSD push sent via ${mno} (MaliPoPay)`,
+          provider_response: push
+        }
+      );
+
       pollPaymentStatus(reference, phone, provider);
+
+      return res.json({
+        success: true,
+        provider,
+        operator,
+        data: {
+          reference,
+          malipopay_reference: malipopayRef,
+          status: push.status,
+          customer: push.customer
+        }
+      });
     }
 
-    return res.json({
-      success: true,
-      provider,
-      operator,
-      data: push
-    });
+    if (provider === "clickpesa") {
+      const push = await initiateUssdPush({
+        amount,
+        orderReference: reference,
+        phoneNumber: phone
+      });
+
+      await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: "PROCESSING",
+          reason: "USSD_SENT",
+          order_tracking_id: push.id,
+          transaction_id: push.id,
+          result: push.status,
+          message: `USSD push sent via ${push.channel || operator} (ClickPesa)`,
+          provider_response: push
+        }
+      );
+
+      if (mapClickPesaStatus(push.status) === "PROCESSING") {
+        pollPaymentStatus(reference, phone, provider);
+      }
+
+      return res.json({
+        success: true,
+        provider,
+        operator,
+        data: push
+      });
+    }
+
+    throw new Error("Unsupported payment provider");
   } catch (error) {
     console.error("CREATE PAYMENT ERROR:", error.details || error.response?.data || error.message);
 
-    const formatted = formatApiError(error, provider || "malipopay");
+    const formatted = formatApiError(error, provider || "grebo");
     const apiMessage = formatted.message;
     const operator = detectOperator(req.body?.phone || "");
 
@@ -1262,7 +1266,7 @@ app.post("/query-transaction", async (req, res) => {
     const payment = await Payment.findOne({ reference: req.body?.reference }).catch(() => null);
     res
       .status(500)
-      .json(clientError(error, payment?.provider || "malipopay", "Failed to query payment"));
+      .json(clientError(error, payment?.provider || "grebo", "Failed to query payment"));
   }
 });
 
