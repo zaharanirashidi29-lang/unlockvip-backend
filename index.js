@@ -31,10 +31,19 @@ const {
   resolvePaymentStatus: resolveGreboPaymentStatus,
   buildGreboUpdate,
   isGreboWebhook,
-  verifyWebhookSignature,
-  enrichPaymentForAdmin,
+  verifyWebhookSignature: verifyGreboWebhookSignature,
+  enrichPaymentForAdmin: enrichGreboPaymentForAdmin,
   extractGreboFailureMessage
 } = require("./grebo");
+const {
+  createDeposit: createAblinerDeposit,
+  resolvePaymentStatus: resolveAblinerPaymentStatus,
+  buildAblinerUpdate,
+  isAblinerWebhook,
+  verifyWebhookSignature: verifyAblinerWebhookSignature,
+  enrichPaymentForAdmin: enrichAblinerPaymentForAdmin,
+  extractAblinerFailureMessage
+} = require("./abliner");
 const {
   toInternationalPhone,
   detectOperator,
@@ -59,7 +68,7 @@ app.post(
       const secret = process.env.GREBO_WEBHOOK_SECRET;
 
       if (secret) {
-        const valid = verifyWebhookSignature({
+        const valid = verifyGreboWebhookSignature({
           rawBody,
           signature,
           timestamp,
@@ -72,10 +81,43 @@ app.post(
       }
 
       const body = rawBody ? JSON.parse(rawBody) : {};
-      await processGreboWebhook(body);
+      await processTeslotyWebhook(body, "grebo");
       return res.status(200).json({ success: true });
     } catch (error) {
       console.error("GREBO WEBHOOK ERROR:", error.message);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  }
+);
+
+app.post(
+  "/webhook/abliner",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    try {
+      const rawBody = req.body?.length ? req.body.toString("utf8") : "";
+      const signature = req.headers["x-webhook-signature"];
+      const timestamp = req.headers["x-webhook-timestamp"];
+      const secret = process.env.ABLINER_WEBHOOK_SECRET;
+
+      if (secret) {
+        const valid = verifyAblinerWebhookSignature({
+          rawBody,
+          signature,
+          timestamp,
+          secret
+        });
+        if (!valid) {
+          console.error("ABLINER WEBHOOK: invalid signature");
+          return res.status(401).json({ success: false, error: "Invalid signature" });
+        }
+      }
+
+      const body = rawBody ? JSON.parse(rawBody) : {};
+      await processTeslotyWebhook(body, "abliner");
+      return res.status(200).json({ success: true });
+    } catch (error) {
+      console.error("ABLINER WEBHOOK ERROR:", error.message);
       return res.status(500).json({ success: false, error: error.message });
     }
   }
@@ -129,6 +171,8 @@ app.get("/health", async (req, res) => {
     routing: getRoutingLabel(),
     grebo_api_key: process.env.GREBO_API_KEY ? "Set" : "Missing",
     grebo_webhook_secret: process.env.GREBO_WEBHOOK_SECRET ? "Set" : "Missing",
+    abliner_api_key: process.env.ABLINER_API_KEY ? "Set" : "Missing",
+    abliner_webhook_secret: process.env.ABLINER_WEBHOOK_SECRET ? "Set" : "Missing",
     pesapal_consumer_key: process.env.PESAPAL_CONSUMER_KEY ? "Set" : "Missing",
     pesapal_callback_url: getCallbackUrl(),
     timestamp: Math.floor(Date.now() / 1000)
@@ -300,6 +344,11 @@ async function queryProviderStatus(payment, options = {}) {
     return { provider: "grebo", data };
   }
 
+  if (payment?.provider === "abliner") {
+    const data = await resolveAblinerPaymentStatus(payment);
+    return { provider: "abliner", data };
+  }
+
   if (!payment?.order_tracking_id && !payment?.reference) {
     throw new Error("Missing MaliPoPay reference");
   }
@@ -318,30 +367,37 @@ function buildProviderUpdate(provider, statusData, source) {
   if (provider === "grebo") {
     return buildGreboUpdate(statusData, source);
   }
+  if (provider === "abliner") {
+    return buildAblinerUpdate(statusData, source);
+  }
   return buildMalipopayUpdate(statusData, source);
 }
 
-async function processGreboWebhook(body) {
+async function processTeslotyWebhook(body, provider) {
   const event = String(body?.event || "").toLowerCase();
   const data = body?.data || body;
-  const greboRef = data?.id;
+  const providerTxId = data?.id;
   const localReference = data?.reference;
+  const providerLabel = provider === "grebo" ? "Grebo" : "Abliner";
+  const buildUpdate = provider === "grebo" ? buildGreboUpdate : buildAblinerUpdate;
+  const extractFailure =
+    provider === "grebo" ? extractGreboFailureMessage : extractAblinerFailureMessage;
 
-  if (!greboRef && !localReference) {
-    throw new Error("Missing Grebo transaction reference");
+  if (!providerTxId && !localReference) {
+    throw new Error(`Missing ${providerLabel} transaction reference`);
   }
 
   const lookup = [];
-  if (greboRef) {
-    lookup.push({ order_tracking_id: greboRef }, { transaction_id: greboRef });
+  if (providerTxId) {
+    lookup.push({ order_tracking_id: providerTxId }, { transaction_id: providerTxId });
   }
   if (localReference) {
     lookup.push({ reference: localReference });
   }
 
-  const payment = await Payment.findOne({ $or: lookup });
+  const payment = await Payment.findOne({ $or: lookup, provider });
   if (!payment) {
-    console.log("GREBO WEBHOOK: payment not found", localReference || greboRef);
+    console.log(`${providerLabel.toUpperCase()} WEBHOOK: payment not found`, localReference || providerTxId);
     return;
   }
 
@@ -349,7 +405,7 @@ async function processGreboWebhook(body) {
     return;
   }
 
-  const update = buildGreboUpdate(data, "WEBHOOK");
+  const update = buildUpdate(data, "WEBHOOK");
 
   if (event === "transaction.failed" || update.status === "FAILED") {
     await Payment.findOneAndUpdate(
@@ -358,13 +414,13 @@ async function processGreboWebhook(body) {
         ...update,
         status: "FAILED",
         reason: "WEBHOOK_FAILED",
-        message: update.message || extractGreboFailureMessage(data),
-        order_tracking_id: greboRef || payment.order_tracking_id,
-        transaction_id: greboRef || payment.transaction_id,
+        message: update.message || extractFailure(data),
+        order_tracking_id: providerTxId || payment.order_tracking_id,
+        transaction_id: providerTxId || payment.transaction_id,
         provider_response: data
       }
     );
-    console.log("Grebo webhook FAILED for", payment.reference);
+    console.log(`${providerLabel} webhook FAILED for`, payment.reference);
     return;
   }
 
@@ -374,12 +430,12 @@ async function processGreboWebhook(body) {
       {
         ...update,
         reason: "WEBHOOK_CONFIRMED",
-        order_tracking_id: greboRef || payment.order_tracking_id,
-        transaction_id: greboRef || payment.transaction_id,
+        order_tracking_id: providerTxId || payment.order_tracking_id,
+        transaction_id: providerTxId || payment.transaction_id,
         provider_response: data
       }
     );
-    console.log("Grebo webhook COMPLETED for", payment.reference);
+    console.log(`${providerLabel} webhook COMPLETED for`, payment.reference);
     return;
   }
 
@@ -387,12 +443,12 @@ async function processGreboWebhook(body) {
     { reference: payment.reference },
     {
       ...update,
-      order_tracking_id: greboRef || payment.order_tracking_id,
-      transaction_id: greboRef || payment.transaction_id,
+      order_tracking_id: providerTxId || payment.order_tracking_id,
+      transaction_id: providerTxId || payment.transaction_id,
       provider_response: data
     }
   );
-  console.log("Grebo webhook update for", payment.reference, update.status);
+  console.log(`${providerLabel} webhook update for`, payment.reference, update.status);
 }
 
 async function applyStatusFromQuery(payment, source, options = {}) {
@@ -515,7 +571,9 @@ async function syncProviderPayment(payment) {
             ? "SYNCED_FROM_PESAPAL"
             : payment.provider === "grebo"
               ? "SYNCED_FROM_GREBO"
-              : "SYNCED_FROM_MALIPOPAY"
+              : payment.provider === "abliner"
+                ? "SYNCED_FROM_ABLINER"
+                : "SYNCED_FROM_MALIPOPAY"
         : update.reason;
 
     return Payment.findOneAndUpdate(
@@ -550,6 +608,31 @@ async function syncGreboPayment(payment) {
     );
   } catch (error) {
     console.error("Grebo sync error for", payment.reference, error.message);
+    return payment;
+  }
+}
+
+async function syncAblinerPayment(payment) {
+  if (!payment?.order_tracking_id && !payment?.reference) {
+    return payment;
+  }
+
+  try {
+    const { update } = await applyStatusFromQuery(payment, "SYNC", { bypassCache: true });
+    if (update.status === payment.status && update.reason === payment.reason) {
+      return payment;
+    }
+
+    return Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      {
+        ...update,
+        reason: update.status === "COMPLETED" ? "SYNCED_FROM_ABLINER" : update.reason
+      },
+      { new: true }
+    );
+  } catch (error) {
+    console.error("Abliner sync error for", payment.reference, error.message);
     return payment;
   }
 }
@@ -801,6 +884,55 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
+    if (provider === "abliner") {
+      const callbackUrl =
+        process.env.ABLINER_CALLBACK_URL || `${getPublicBaseUrl()}/webhook/abliner`;
+      const deposit = await createAblinerDeposit({
+        amount,
+        phone,
+        reference,
+        callbackUrl
+      });
+
+      if (deposit?.status !== "success" || !deposit?.data) {
+        throw new Error(deposit?.message || deposit?.error || "Abliner deposit failed");
+      }
+
+      const ablinerTx = deposit.data;
+      const ablinerStatus = String(ablinerTx.status || "").toLowerCase();
+
+      if (ablinerStatus === "failed") {
+        throw new Error(extractAblinerFailureMessage(ablinerTx));
+      }
+
+      await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: "PROCESSING",
+          reason: "USSD_SENT",
+          order_tracking_id: ablinerTx.id,
+          transaction_id: ablinerTx.id,
+          result: ablinerTx.status,
+          message: `USSD push sent via ${operator} (Abliner)`,
+          provider_response: ablinerTx
+        }
+      );
+
+      pollPaymentStatus(reference, phone, provider);
+
+      return res.json({
+        success: true,
+        provider,
+        operator,
+        data: {
+          reference,
+          abliner_id: ablinerTx.id,
+          status: ablinerTx.status,
+          method: ablinerTx.method
+        }
+      });
+    }
+
     if (provider === "malipopay") {
       const push = await collectPayment({
         amount,
@@ -1015,7 +1147,12 @@ app.post("/webhook", async (req, res) => {
     console.log("WEBHOOK RECEIVED:", JSON.stringify(body, null, 2));
 
     if (isGreboWebhook(body)) {
-      await processGreboWebhook(body);
+      await processTeslotyWebhook(body, "grebo");
+      return res.status(200).json({ success: true });
+    }
+
+    if (isAblinerWebhook(body)) {
+      await processTeslotyWebhook(body, "abliner");
       return res.status(200).json({ success: true });
     }
 
@@ -1092,7 +1229,12 @@ app.post("/webhook", async (req, res) => {
     }
 
     if (payment.provider === "grebo") {
-      await processGreboWebhook(body);
+      await processTeslotyWebhook(body, "grebo");
+      return res.status(200).json({ success: true });
+    }
+
+    if (payment.provider === "abliner") {
+      await processTeslotyWebhook(body, "abliner");
       return res.status(200).json({ success: true });
     }
 
@@ -1280,6 +1422,14 @@ app.post("/query-transaction", async (req, res) => {
   }
 });
 
+function enrichPaymentForAdmin(payment) {
+  const doc = payment?.toObject ? payment.toObject() : { ...payment };
+  if (doc.provider === "abliner") {
+    return enrichAblinerPaymentForAdmin(doc);
+  }
+  return enrichGreboPaymentForAdmin(doc);
+}
+
 app.get("/admin/payments", async (req, res) => {
   const { status } = req.query;
   const filter = status ? { status } : {};
@@ -1289,7 +1439,7 @@ app.get("/admin/payments", async (req, res) => {
 
 app.post("/admin/sync-payments", async (req, res) => {
   const pending = await Payment.find({
-    provider: { $in: ["grebo", "malipopay", "pesapal", "clickpesa"] },
+    provider: { $in: ["grebo", "abliner", "malipopay", "pesapal", "clickpesa"] },
     status: { $in: ["PROCESSING", "TIMEOUT", "PENDING"] },
     $or: [
       { provider: "clickpesa", reference: { $exists: true, $ne: null } },
@@ -1305,6 +1455,8 @@ app.post("/admin/sync-payments", async (req, res) => {
       results.push(await syncProviderPayment(payment));
     } else if (payment.provider === "grebo") {
       results.push(await syncGreboPayment(payment));
+    } else if (payment.provider === "abliner") {
+      results.push(await syncAblinerPayment(payment));
     } else if (payment.provider === "pesapal") {
       results.push(await syncPesapalPayment(payment));
     } else {

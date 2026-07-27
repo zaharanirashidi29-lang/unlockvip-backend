@@ -1,15 +1,12 @@
 const axios = require("axios");
 const crypto = require("crypto");
 
-const BASE_URL = (process.env.GREBO_API_BASE_URL || "https://grebo.tesloty.com").replace(
-  /\/$/,
-  ""
-);
+const BASE_URL = (process.env.ABLINER_API_BASE_URL || "https://abliner.net").replace(/\/$/, "");
 
 function getApiKey() {
-  const key = process.env.GREBO_API_KEY;
+  const key = process.env.ABLINER_API_KEY;
   if (!key) {
-    throw new Error("GREBO_API_KEY is required");
+    throw new Error("ABLINER_API_KEY is required");
   }
   return key;
 }
@@ -31,7 +28,7 @@ function normalizePhone(phone) {
 }
 
 function makeReference(prefix = "UNLOCKVIP") {
-  return `${prefix}-${Date.now()}`;
+  return `${prefix}${Date.now()}`;
 }
 
 async function getBalance() {
@@ -70,17 +67,17 @@ async function getTransaction(transactionId) {
 }
 
 async function resolvePaymentStatus(payment) {
-  const greboId = payment?.order_tracking_id || payment?.transaction_id;
+  const ablinerId = payment?.order_tracking_id || payment?.transaction_id;
   const reference = payment?.reference;
   const items = await listTransactions(100);
   const match = items.find(
     (item) =>
-      (greboId && item.id === greboId) ||
+      (ablinerId && item.id === ablinerId) ||
       (reference && item.reference === reference)
   );
 
   if (!match) {
-    const err = new Error("Grebo transaction not found");
+    const err = new Error("Abliner transaction not found");
     err.code = "NOT_FOUND";
     throw err;
   }
@@ -88,14 +85,14 @@ async function resolvePaymentStatus(payment) {
   return match;
 }
 
-function greboAmountTzs(data) {
+function ablinerAmountTzs(data) {
   if (data?.amount_tzs != null) return Number(data.amount_tzs);
   if (data?.amount != null) return Number(data.amount);
   if (data?.amount_cents != null) return Number(data.amount_cents) / 100;
   return undefined;
 }
 
-function normalizeGreboStatus(status) {
+function normalizeAblinerStatus(status) {
   const value = String(status || "").toLowerCase();
   if (value === "completed" || value === "success" || value === "successful") {
     return "COMPLETED";
@@ -106,8 +103,8 @@ function normalizeGreboStatus(status) {
   return "PROCESSING";
 }
 
-function extractGreboFailureMessage(data) {
-  if (!data) return "Grebo payment failed";
+function extractAblinerFailureMessage(data) {
+  if (!data) return "Abliner payment failed";
 
   const candidates = [
     data.failure_reason,
@@ -136,26 +133,26 @@ function extractGreboFailureMessage(data) {
     return "Payment expired";
   }
   if (status === "failed") {
-    return "Grebo payment failed";
+    return "Abliner payment failed";
   }
 
-  return "Grebo payment failed";
+  return "Abliner payment failed";
 }
 
-function isGreboFailed(data) {
+function isAblinerFailed(data) {
   const status = String(data?.status || "").toLowerCase();
   return ["failed", "cancelled", "canceled", "expired", "error"].includes(status);
 }
 
-function buildGreboUpdate(statusData, source) {
-  const mapped = normalizeGreboStatus(statusData?.status);
-  const amount = greboAmountTzs(statusData);
+function buildAblinerUpdate(statusData, source) {
+  const mapped = normalizeAblinerStatus(statusData?.status);
+  const amount = ablinerAmountTzs(statusData);
 
   let message;
   if (mapped === "COMPLETED") {
-    message = "Payment successful via Grebo";
+    message = "Payment successful via Abliner";
   } else if (mapped === "FAILED") {
-    message = extractGreboFailureMessage(statusData);
+    message = extractAblinerFailureMessage(statusData);
   } else {
     message = "Waiting for customer to authorize payment";
   }
@@ -184,39 +181,38 @@ function buildGreboUpdate(statusData, source) {
 function enrichPaymentForAdmin(payment) {
   const doc = payment?.toObject ? payment.toObject() : { ...payment };
   const response = doc.provider_response || {};
-  const greboStatus = String(response.status || doc.result || "").toLowerCase();
 
-  doc.grebo_status = response.status || doc.result || null;
-  doc.grebo_transaction_id =
+  doc.abliner_status = response.status || doc.result || null;
+  doc.abliner_transaction_id =
     response.id || doc.transaction_id || doc.order_tracking_id || null;
 
   const failed =
     doc.status === "FAILED" ||
-    isGreboFailed(response) ||
+    isAblinerFailed(response) ||
     doc.reason === "WEBHOOK_FAILED" ||
     doc.reason === "PAYMENT_FAILED" ||
     doc.reason === "FAILED_BY_QUERY";
 
   if (failed) {
-    doc.grebo_failed = true;
-    doc.grebo_failure = extractGreboFailureMessage(response) || doc.message || "Payment failed";
-    if (!doc.message || doc.message === "Grebo failed") {
-      doc.message = doc.grebo_failure;
+    doc.abliner_failed = true;
+    doc.abliner_failure = extractAblinerFailureMessage(response) || doc.message || "Payment failed";
+    if (!doc.message || doc.message === "Abliner failed") {
+      doc.message = doc.abliner_failure;
     }
   } else {
-    doc.grebo_failed = false;
-    doc.grebo_failure = null;
+    doc.abliner_failed = false;
+    doc.abliner_failure = null;
   }
 
-  doc.provider_status = doc.grebo_status;
-  doc.provider_failed = doc.grebo_failed;
-  doc.provider_failure = doc.grebo_failure;
-  doc.provider_transaction_id = doc.grebo_transaction_id;
+  doc.provider_status = doc.abliner_status;
+  doc.provider_failed = doc.abliner_failed;
+  doc.provider_failure = doc.abliner_failure;
+  doc.provider_transaction_id = doc.abliner_transaction_id;
 
   return doc;
 }
 
-function isGreboWebhook(body) {
+function isAblinerWebhook(body) {
   const event = String(body?.event || "").toLowerCase();
   return event.startsWith("transaction.");
 }
@@ -229,10 +225,10 @@ function verifyWebhookSignature({ rawBody, signature, timestamp, secret }) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-function formatGreboError(error) {
+function formatAblinerError(error) {
   const data = error.response?.data;
   return {
-    message: data?.message || error.message || "Grebo request failed",
+    message: data?.message || error.message || "Abliner request failed",
     error: data?.error || null,
     status: error.response?.status,
     requestId: data?.request_id || null,
@@ -249,13 +245,13 @@ module.exports = {
   listTransactions,
   getTransaction,
   resolvePaymentStatus,
-  greboAmountTzs,
-  normalizeGreboStatus,
-  extractGreboFailureMessage,
-  isGreboFailed,
-  buildGreboUpdate,
+  ablinerAmountTzs,
+  normalizeAblinerStatus,
+  extractAblinerFailureMessage,
+  isAblinerFailed,
+  buildAblinerUpdate,
   enrichPaymentForAdmin,
-  isGreboWebhook,
+  isAblinerWebhook,
   verifyWebhookSignature,
-  formatGreboError
+  formatAblinerError
 };

@@ -77,6 +77,10 @@ function isAirtelPhone(phone) {
   return AIRTEL_PREFIXES.has(getMobilePrefix2(phone));
 }
 
+function isVodacomPhone(phone) {
+  return ["74", "75", "76", "79"].includes(getMobilePrefix2(phone));
+}
+
 function detectOperator(phone) {
   const prefix2 = getMobilePrefix2(phone);
 
@@ -679,6 +683,7 @@ module.exports = {
   getMobilePrefix2,
   isTigoPhone,
   isAirtelPhone,
+  isVodacomPhone,
   detectOperator,
   formatMalipopayError,
   mapMalipopayStatus,
