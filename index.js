@@ -1431,10 +1431,44 @@ function enrichPaymentForAdmin(payment) {
 }
 
 app.get("/admin/payments", async (req, res) => {
-  const { status } = req.query;
-  const filter = status ? { status } : {};
-  const data = await Payment.find(filter).sort({ _id: -1 });
-  res.json(data.map(enrichPaymentForAdmin));
+  try {
+    const { status, page, limit, light } = req.query;
+    const filter = status ? { status } : {};
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.min(500, Math.max(1, Number(limit) || 100));
+    const skip = (pageNum - 1) * limitNum;
+    const lean = light !== "0";
+
+    let listQuery = Payment.find(filter)
+      .sort({ _id: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .lean();
+
+    if (lean) {
+      listQuery = listQuery.select(
+        "phone pin amount reference provider status reason time message result transaction_id order_tracking_id"
+      );
+    }
+
+    const [total, rows] = await Promise.all([
+      Payment.countDocuments(filter),
+      listQuery
+    ]);
+
+    const data = rows.map(enrichPaymentForAdmin);
+
+    res.json({
+      data,
+      page: pageNum,
+      limit: limitNum,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / limitNum))
+    });
+  } catch (error) {
+    console.error("ADMIN PAYMENTS ERROR:", error.message);
+    res.status(500).json({ success: false, error: "Failed to load payments" });
+  }
 });
 
 app.post("/admin/sync-payments", async (req, res) => {
