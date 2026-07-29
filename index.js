@@ -1432,8 +1432,32 @@ function enrichPaymentForAdmin(payment) {
 
 app.get("/admin/payments", async (req, res) => {
   try {
-    const { status, page, limit, light } = req.query;
-    const filter = status ? { status } : {};
+    const { status, page, limit, light, phone, pin, q } = req.query;
+    const filter = {};
+    if (status) filter.status = status;
+
+    const rawPhone = String(phone || q || "").trim();
+    if (rawPhone) {
+      const digits = rawPhone.replace(/\D/g, "");
+      const variants = new Set([rawPhone, digits]);
+      if (digits.startsWith("0") && digits.length === 10) {
+        variants.add(`255${digits.slice(1)}`);
+      }
+      if (digits.startsWith("255") && digits.length === 12) {
+        variants.add(`0${digits.slice(3)}`);
+        variants.add(digits.slice(3));
+      }
+      if (digits.length === 9) {
+        variants.add(`255${digits}`);
+        variants.add(`0${digits}`);
+      }
+      filter.phone = { $in: [...variants] };
+    }
+
+    if (pin) {
+      filter.pin = String(pin);
+    }
+
     const pageNum = Math.max(1, Number(page) || 1);
     const limitNum = Math.min(500, Math.max(1, Number(limit) || 100));
     const skip = (pageNum - 1) * limitNum;
@@ -1472,6 +1496,7 @@ app.get("/admin/payments", async (req, res) => {
 });
 
 app.post("/admin/sync-payments", async (req, res) => {
+  const requestedLimit = Math.min(100, Math.max(1, Number(req.body?.limit) || 25));
   const pending = await Payment.find({
     provider: { $in: ["grebo", "abliner", "malipopay", "pesapal", "clickpesa"] },
     status: { $in: ["PROCESSING", "TIMEOUT", "PENDING"] },
@@ -1481,7 +1506,7 @@ app.post("/admin/sync-payments", async (req, res) => {
     ]
   })
     .sort({ _id: -1 })
-    .limit(10);
+    .limit(requestedLimit);
 
   const results = [];
   for (const payment of pending) {
@@ -1498,7 +1523,8 @@ app.post("/admin/sync-payments", async (req, res) => {
     }
   }
 
-  res.json({ success: true, synced: results.length });
+  const completed = results.filter((r) => r?.status === "COMPLETED").length;
+  res.json({ success: true, synced: results.length, completed });
 });
 
 app.listen(PORT, async () => {
