@@ -13,15 +13,12 @@ const { formatPesapalError } = require("./pesapal");
 const { formatGreboError } = require("./grebo");
 const { formatAblinerError } = require("./abliner");
 
-function resolveProvider(phone) {
-  if (isVodacomPhone(phone)) {
-    return "grebo";
-  }
-  return "abliner";
+function resolveProvider(_phone) {
+  return "grebo";
 }
 
 function getRoutingLabel() {
-  return "Vodacom → Grebo | Airtel/Tigo/Halotel → Abliner";
+  return "All networks → Grebo";
 }
 
 function formatApiError(error, provider) {

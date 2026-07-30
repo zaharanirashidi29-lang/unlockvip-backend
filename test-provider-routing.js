@@ -7,15 +7,15 @@ const testNumbers = [
   { label: "Vodacom 074", phone: "0742000001", expectProvider: "grebo" },
   { label: "Vodacom 075", phone: "0752000001", expectProvider: "grebo" },
   { label: "Vodacom 076", phone: "0762000001", expectProvider: "grebo" },
-  { label: "Airtel 066", phone: "0667392184", expectProvider: "abliner" },
-  { label: "Airtel 068", phone: "0687392184", expectProvider: "abliner" },
-  { label: "Airtel 078", phone: "0784000001", expectProvider: "abliner" },
-  { label: "Tigo 065", phone: "0652000001", expectProvider: "abliner" },
-  { label: "Tigo 067", phone: "0672000001", expectProvider: "abliner" },
-  { label: "Tigo 071", phone: "0712000001", expectProvider: "abliner" },
-  { label: "Tigo 077", phone: "0771990575", expectProvider: "abliner" },
-  { label: "Halotel 061", phone: "0617119863", expectProvider: "abliner" },
-  { label: "Halotel 062", phone: "0622000001", expectProvider: "abliner" }
+  { label: "Airtel 066", phone: "0667392184", expectProvider: "grebo" },
+  { label: "Airtel 068", phone: "0687392184", expectProvider: "grebo" },
+  { label: "Airtel 078", phone: "0784000001", expectProvider: "grebo" },
+  { label: "Tigo 065", phone: "0652000001", expectProvider: "grebo" },
+  { label: "Tigo 067", phone: "0672000001", expectProvider: "grebo" },
+  { label: "Tigo 071", phone: "0712000001", expectProvider: "grebo" },
+  { label: "Tigo 077", phone: "0771990575", expectProvider: "grebo" },
+  { label: "Halotel 061", phone: "0617119863", expectProvider: "grebo" },
+  { label: "Halotel 062", phone: "0622000001", expectProvider: "grebo" }
 ];
 
 let failed = 0;
