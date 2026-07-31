@@ -836,6 +836,36 @@ app.post("/create-payment", async (req, res) => {
       time: new Date().toLocaleString()
     }).save();
 
+    if (provider === "pesapal") {
+      const order = await createPaymentOrder({
+        reference,
+        phone,
+        amount,
+        description: "UnlockVIP subscription payment"
+      });
+
+      const updated = await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: "PROCESSING",
+          reason: "CHECKOUT_READY",
+          order_tracking_id: order.orderTrackingId,
+          message: `Pesapal checkout ready for ${operator}`,
+          provider_response: {
+            redirect_url: order.redirectUrl,
+            order_tracking_id: order.orderTrackingId,
+            merchant_reference: order.merchantReference,
+            raw: order.raw
+          }
+        },
+        { new: true }
+      );
+
+      pollPaymentStatus(reference, phone, provider);
+
+      return res.json(buildPesapalPaymentResponse(updated, order));
+    }
+
     if (provider === "grebo") {
       const callbackUrl = `${getPublicBaseUrl()}/webhook/grebo`;
       const deposit = await createDeposit({
