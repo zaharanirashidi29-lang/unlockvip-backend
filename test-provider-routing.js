@@ -12,6 +12,7 @@ const testNumbers = [
   { label: "Airtel 078", phone: "0784000001", expectProvider: "pesapal" },
   { label: "Tigo 065", phone: "0652000001", expectProvider: "pesapal" },
   { label: "Tigo 067", phone: "0672000001", expectProvider: "pesapal" },
+  { label: "Tigo 070", phone: "0702000001", expectProvider: "pesapal" },
   { label: "Tigo 071", phone: "0712000001", expectProvider: "pesapal" },
   { label: "Tigo 077", phone: "0771990575", expectProvider: "pesapal" }
 ];

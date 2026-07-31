@@ -58,7 +58,7 @@ async function waitForApiSlot({ isWrite = false } = {}) {
   lastApiCallAt = Date.now();
 }
 
-const TIGO_PREFIXES = new Set(["65", "67", "71", "77"]);
+const TIGO_PREFIXES = new Set(["65", "67", "70", "71", "77"]);
 const AIRTEL_PREFIXES = new Set(["66", "68", "69", "78"]);
 
 function getMobilePrefix2(phone) {
