@@ -17,15 +17,12 @@ function isPesapalPhone(phone) {
   return isTigoPhone(phone) || isAirtelPhone(phone);
 }
 
-function resolveProvider(phone) {
-  if (isPesapalPhone(phone)) {
-    return "pesapal";
-  }
-  return "malipopay";
+function resolveProvider(_phone) {
+  return "grebo";
 }
 
 function getRoutingLabel() {
-  return "Tigo/YAS + Airtel → Pesapal, Vodacom + Halotel → MaliPoPay";
+  return "All networks → Grebo";
 }
 
 function formatApiError(error, provider) {
