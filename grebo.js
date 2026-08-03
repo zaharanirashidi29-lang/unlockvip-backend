@@ -36,7 +36,8 @@ function makeReference(prefix = "UNLOCKVIP") {
 
 async function getBalance() {
   const response = await axios.get(`${BASE_URL}/api/v1/balance`, {
-    headers: authHeaders()
+    headers: authHeaders(),
+    timeout: 20000
   });
   return response.data;
 }
@@ -59,7 +60,8 @@ async function createDeposit({ amount, phone, reference, callbackUrl, method = "
 async function listTransactions(limit = 100) {
   const response = await axios.get(`${BASE_URL}/api/v1/transactions`, {
     headers: authHeaders(),
-    params: { limit }
+    params: { limit },
+    timeout: 20000
   });
   return response.data?.data || [];
 }

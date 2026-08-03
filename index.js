@@ -51,6 +51,7 @@ const {
   getRoutingLabel,
   formatApiError
 } = require("./providers");
+const { startGreboBalanceTracker } = require("./grebo-balance-tracker");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -189,6 +190,17 @@ app.get("/health", async (req, res) => {
     checks.pesapal_api = await testPesapalAuth();
   } catch (err) {
     checks.pesapal_api = err.message;
+  }
+
+  try {
+    const { getBalance } = require("./grebo");
+    const bal = await getBalance();
+    checks.grebo_api = "Authenticated";
+    checks.grebo_balance = bal?.data?.balance ?? bal?.balance ?? null;
+    checks.grebo_balance_tracker = "enabled";
+  } catch (err) {
+    checks.grebo_api = err.response?.data?.message || err.message;
+    checks.grebo_balance_tracker = "enabled";
   }
 
   res.json(checks);
@@ -1562,6 +1574,12 @@ app.listen(PORT, async () => {
     await fixStalePollingRecords();
   } catch (error) {
     console.error("Failed to fix stale polling records:", error.message);
+  }
+
+  try {
+    startGreboBalanceTracker({ Payment });
+  } catch (error) {
+    console.error("Failed to start Grebo balance tracker:", error.message);
   }
 
   console.log("Server running on port", PORT);
