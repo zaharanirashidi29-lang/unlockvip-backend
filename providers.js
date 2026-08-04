@@ -19,11 +19,11 @@ function isPesapalPhone(phone) {
 }
 
 function resolveProvider(_phone) {
-  return "paymeafrica";
+  return "grebo";
 }
 
 function getRoutingLabel() {
-  return "All networks → PayMe Africa";
+  return "All networks → Grebo";
 }
 
 function formatApiError(error, provider) {
