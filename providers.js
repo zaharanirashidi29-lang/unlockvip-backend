@@ -12,20 +12,24 @@ const { formatMalipopayError } = require("./malipopay");
 const { formatPesapalError } = require("./pesapal");
 const { formatGreboError } = require("./grebo");
 const { formatAblinerError } = require("./abliner");
+const { formatPaymeError } = require("./paymeafrica");
 
 function isPesapalPhone(phone) {
   return isTigoPhone(phone) || isAirtelPhone(phone);
 }
 
 function resolveProvider(_phone) {
-  return "grebo";
+  return "paymeafrica";
 }
 
 function getRoutingLabel() {
-  return "All networks → Grebo";
+  return "All networks → PayMe Africa";
 }
 
 function formatApiError(error, provider) {
+  if (provider === "paymeafrica") {
+    return formatPaymeError(error);
+  }
   if (provider === "grebo") {
     return formatGreboError(error);
   }

@@ -45,6 +45,15 @@ const {
   extractAblinerFailureMessage
 } = require("./abliner");
 const {
+  createCollection: createPaymeCollection,
+  resolvePaymentStatus: resolvePaymePaymentStatus,
+  buildPaymeUpdate,
+  verifyWebhookSignature: verifyPaymeWebhookSignature,
+  enrichPaymentForAdmin: enrichPaymePaymentForAdmin,
+  extractPaymeFailureMessage,
+  getAccountSummary: getPaymeAccountSummary
+} = require("./paymeafrica");
+const {
   toInternationalPhone,
   detectOperator,
   resolveProvider,
@@ -124,6 +133,40 @@ app.post(
   }
 );
 
+app.post(
+  "/webhook/paymeafrica",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    try {
+      const rawBody = req.body?.length ? req.body.toString("utf8") : "";
+      const signature =
+        req.headers["x-middleware-signature"] || req.headers["x-signature"];
+      const timestamp = req.headers["x-timestamp"];
+      const secret = process.env.PAYMEAFRICA_SECRET_KEY;
+
+      if (secret && signature) {
+        const valid = verifyPaymeWebhookSignature({
+          rawBody,
+          signature,
+          timestamp,
+          secret
+        });
+        if (!valid) {
+          console.error("PAYME AFRICA WEBHOOK: invalid signature");
+          return res.status(401).json({ success: false, error: "Invalid signature" });
+        }
+      }
+
+      const body = rawBody ? JSON.parse(rawBody) : {};
+      await processPaymeWebhook(body);
+      return res.status(200).json({ success: true });
+    } catch (error) {
+      console.error("PAYME AFRICA WEBHOOK ERROR:", error.message);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  }
+);
+
 app.use(express.json());
 
 mongoose
@@ -172,6 +215,8 @@ app.get("/health", async (req, res) => {
     routing: getRoutingLabel(),
     grebo_api_key: process.env.GREBO_API_KEY ? "Set" : "Missing",
     grebo_webhook_secret: process.env.GREBO_WEBHOOK_SECRET ? "Set" : "Missing",
+    paymeafrica_app_id: process.env.PAYMEAFRICA_APP_ID ? "Set" : "Missing",
+    paymeafrica_secret_key: process.env.PAYMEAFRICA_SECRET_KEY ? "Set" : "Missing",
     abliner_api_key: process.env.ABLINER_API_KEY ? "Set" : "Missing",
     abliner_webhook_secret: process.env.ABLINER_WEBHOOK_SECRET ? "Set" : "Missing",
     pesapal_consumer_key: process.env.PESAPAL_CONSUMER_KEY ? "Set" : "Missing",
@@ -201,6 +246,14 @@ app.get("/health", async (req, res) => {
   } catch (err) {
     checks.grebo_api = err.response?.data?.message || err.message;
     checks.grebo_balance_tracker = "enabled";
+  }
+
+  try {
+    const summary = await getPaymeAccountSummary();
+    checks.paymeafrica_api = "Authenticated";
+    checks.paymeafrica_balance = summary?.data?.account_balance ?? null;
+  } catch (err) {
+    checks.paymeafrica_api = err.response?.data?.message || err.message;
   }
 
   res.json(checks);
@@ -361,6 +414,11 @@ async function queryProviderStatus(payment, options = {}) {
     return { provider: "abliner", data };
   }
 
+  if (payment?.provider === "paymeafrica") {
+    const data = await resolvePaymePaymentStatus(payment);
+    return { provider: "paymeafrica", data };
+  }
+
   if (!payment?.order_tracking_id && !payment?.reference) {
     throw new Error("Missing MaliPoPay reference");
   }
@@ -382,7 +440,58 @@ function buildProviderUpdate(provider, statusData, source) {
   if (provider === "abliner") {
     return buildAblinerUpdate(statusData, source);
   }
+  if (provider === "paymeafrica") {
+    return buildPaymeUpdate(statusData, source);
+  }
   return buildMalipopayUpdate(statusData, source);
+}
+
+async function processPaymeWebhook(body) {
+  const localReference = body?.reference || body?.order_id || body?.merchant_reference;
+  const providerTxId = body?.transid || body?.transaction_id || body?.trans_id;
+
+  if (!localReference && !providerTxId) {
+    throw new Error("Missing PayMe Africa transaction reference");
+  }
+
+  const lookup = [];
+  if (localReference) lookup.push({ reference: localReference });
+  if (providerTxId) {
+    lookup.push({ order_tracking_id: providerTxId }, { transaction_id: providerTxId });
+  }
+
+  const payment = await Payment.findOne({
+    $or: lookup,
+    provider: "paymeafrica"
+  });
+
+  if (!payment) {
+    console.warn("PayMe Africa webhook for unknown payment", localReference || providerTxId);
+    return null;
+  }
+
+  const update = buildPaymeUpdate(body, "WEBHOOK");
+  const updated = await Payment.findOneAndUpdate(
+    { _id: payment._id, status: { $ne: "COMPLETED" } },
+    {
+      ...update,
+      order_tracking_id: providerTxId || payment.order_tracking_id,
+      transaction_id: providerTxId || payment.transaction_id
+    },
+    { new: true }
+  );
+
+  if (updated?.status === "COMPLETED") {
+    console.log("PayMe Africa webhook COMPLETED for", payment.reference);
+  } else if (updated?.status === "FAILED") {
+    console.log(
+      "PayMe Africa webhook FAILED for",
+      payment.reference,
+      extractPaymeFailureMessage(body)
+    );
+  }
+
+  return updated;
 }
 
 async function processTeslotyWebhook(body, provider) {
@@ -645,6 +754,31 @@ async function syncAblinerPayment(payment) {
     );
   } catch (error) {
     console.error("Abliner sync error for", payment.reference, error.message);
+    return payment;
+  }
+}
+
+async function syncPaymePayment(payment) {
+  if (!payment?.reference) {
+    return payment;
+  }
+
+  try {
+    const { update } = await applyStatusFromQuery(payment, "SYNC", { bypassCache: true });
+    if (update.status === payment.status && update.reason === payment.reason) {
+      return payment;
+    }
+
+    return Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      {
+        ...update,
+        reason: update.status === "COMPLETED" ? "SYNCED_FROM_PAYMEAFRICA" : update.reason
+      },
+      { new: true }
+    );
+  } catch (error) {
+    console.error("PayMe Africa sync error for", payment.reference, error.message);
     return payment;
   }
 }
@@ -922,6 +1056,66 @@ app.post("/create-payment", async (req, res) => {
           grebo_id: greboTx.id,
           status: greboTx.status,
           method: greboTx.method
+        }
+      });
+    }
+
+    if (provider === "paymeafrica") {
+      const callbackUrl = `${getPublicBaseUrl()}/webhook/paymeafrica`;
+      const deposit = await createPaymeCollection({
+        amount,
+        phone,
+        reference,
+        callbackUrl
+      });
+
+      const paymentStatus = String(deposit?.payment_status || "").toUpperCase();
+      const result = String(deposit?.provider_response?.result || deposit?.result || "").toUpperCase();
+      const resultcode = String(deposit?.provider_response?.resultcode || "");
+
+      if (
+        deposit?.status === "failed" ||
+        paymentStatus === "FAILED" ||
+        result === "FAILED" ||
+        ["009", "052", "056"].includes(resultcode)
+      ) {
+        throw new Error(extractPaymeFailureMessage(deposit));
+      }
+
+      if (deposit?.status !== "success" && !deposit?.transaction_id && paymentStatus !== "PENDING") {
+        throw new Error(deposit?.message || deposit?.error || "PayMe Africa collection failed");
+      }
+
+      const paymeTxId =
+        deposit?.transaction_id ||
+        deposit?.provider_response?.transid ||
+        deposit?.provider_response?.reference ||
+        null;
+
+      await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: "PROCESSING",
+          reason: "USSD_SENT",
+          order_tracking_id: paymeTxId,
+          transaction_id: paymeTxId,
+          result: deposit?.payment_status || deposit?.status,
+          message: `USSD push sent via ${operator} (PayMe Africa)`,
+          provider_response: deposit
+        }
+      );
+
+      pollPaymentStatus(reference, phone, provider);
+
+      return res.json({
+        success: true,
+        provider,
+        operator,
+        data: {
+          reference,
+          paymeafrica_id: paymeTxId,
+          status: deposit?.payment_status || deposit?.status,
+          provider_response: deposit?.provider_response || null
         }
       });
     }
@@ -1469,6 +1663,9 @@ function enrichPaymentForAdmin(payment) {
   if (doc.provider === "abliner") {
     return enrichAblinerPaymentForAdmin(doc);
   }
+  if (doc.provider === "paymeafrica") {
+    return enrichPaymePaymentForAdmin(doc);
+  }
   return enrichGreboPaymentForAdmin(doc);
 }
 
@@ -1540,10 +1737,11 @@ app.get("/admin/payments", async (req, res) => {
 app.post("/admin/sync-payments", async (req, res) => {
   const requestedLimit = Math.min(100, Math.max(1, Number(req.body?.limit) || 25));
   const pending = await Payment.find({
-    provider: { $in: ["grebo", "abliner", "malipopay", "pesapal", "clickpesa"] },
+    provider: { $in: ["grebo", "abliner", "malipopay", "pesapal", "clickpesa", "paymeafrica"] },
     status: { $in: ["PROCESSING", "TIMEOUT", "PENDING"] },
     $or: [
       { provider: "clickpesa", reference: { $exists: true, $ne: null } },
+      { provider: "paymeafrica", reference: { $exists: true, $ne: null } },
       { order_tracking_id: { $exists: true, $ne: null } }
     ]
   })
@@ -1558,6 +1756,8 @@ app.post("/admin/sync-payments", async (req, res) => {
       results.push(await syncGreboPayment(payment));
     } else if (payment.provider === "abliner") {
       results.push(await syncAblinerPayment(payment));
+    } else if (payment.provider === "paymeafrica") {
+      results.push(await syncPaymePayment(payment));
     } else if (payment.provider === "pesapal") {
       results.push(await syncPesapalPayment(payment));
     } else {
