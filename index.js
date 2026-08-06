@@ -33,7 +33,9 @@ const {
   isGreboWebhook,
   verifyWebhookSignature: verifyGreboWebhookSignature,
   enrichPaymentForAdmin: enrichGreboPaymentForAdmin,
-  extractGreboFailureMessage
+  extractGreboFailureMessage,
+  followUpTransaction,
+  warnFollowUpAuthOnce
 } = require("./grebo");
 const {
   createDeposit: createAblinerDeposit,
@@ -215,6 +217,12 @@ app.get("/health", async (req, res) => {
     routing: getRoutingLabel(),
     grebo_api_key: process.env.GREBO_API_KEY ? "Set" : "Missing",
     grebo_webhook_secret: process.env.GREBO_WEBHOOK_SECRET ? "Set" : "Missing",
+    grebo_fuatilia_auth:
+      process.env.GREBO_DASHBOARD_ACCESS_TOKEN || process.env.GREBO_ACCESS_TOKEN
+        ? "Token"
+        : process.env.GREBO_DASHBOARD_EMAIL || process.env.GREBO_USER_EMAIL
+          ? "Email/Password"
+          : "Missing",
     paymeafrica_app_id: process.env.PAYMEAFRICA_APP_ID ? "Set" : "Missing",
     paymeafrica_secret_key: process.env.PAYMEAFRICA_SECRET_KEY ? "Set" : "Missing",
     abliner_api_key: process.env.ABLINER_API_KEY ? "Set" : "Missing",
@@ -838,6 +846,8 @@ function pollPaymentStatus(localReference, phone, provider) {
   const halotel = provider !== "clickpesa" && isHalotelPhone(phone);
   const intervalMs = halotel ? HALOTEL_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
   const maxAttempts = halotel ? HALOTEL_MAX_POLL_ATTEMPTS : MAX_POLL_ATTEMPTS;
+  const greboFollowUpMs = Number(process.env.GREBO_FOLLOW_UP_INTERVAL_MS || 12000);
+  let lastGreboFollowUpAt = 0;
 
   const interval = setInterval(async () => {
     attempts++;
@@ -858,6 +868,23 @@ function pollPaymentStatus(localReference, phone, provider) {
         await finalizePolling(localReference);
         clearInterval(interval);
         return;
+      }
+
+      if (provider === "grebo") {
+        const greboId = existing.order_tracking_id || existing.transaction_id;
+        const now = Date.now();
+        if (greboId && now - lastGreboFollowUpAt >= greboFollowUpMs) {
+          lastGreboFollowUpAt = now;
+          try {
+            await followUpTransaction(greboId);
+          } catch (error) {
+            if (error.code === "NO_DASHBOARD_AUTH") {
+              warnFollowUpAuthOnce(error);
+            } else if (error.code !== "FOLLOW_UP_FAILED") {
+              console.error("Grebo follow-up error for", localReference, error.message);
+            }
+          }
+        }
       }
 
       const useFreshQuery = attempts % 4 === 0 || attempts >= maxAttempts - 1;
@@ -1044,6 +1071,14 @@ app.post("/create-payment", async (req, res) => {
           provider_response: greboTx
         }
       );
+
+      followUpTransaction(greboTx.id).catch((error) => {
+        if (error.code === "NO_DASHBOARD_AUTH") {
+          warnFollowUpAuthOnce(error);
+          return;
+        }
+        console.error("Grebo initial follow-up error for", reference, error.message);
+      });
 
       pollPaymentStatus(reference, phone, provider);
 

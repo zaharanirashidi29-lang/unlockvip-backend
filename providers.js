@@ -14,17 +14,16 @@ const { formatGreboError } = require("./grebo");
 const { formatAblinerError } = require("./abliner");
 const { formatPaymeError } = require("./paymeafrica");
 
-function isPesapalPhone(phone) {
-  return isTigoPhone(phone);
+function isPesapalPhone(_phone) {
+  return false;
 }
 
-function resolveProvider(phone) {
-  if (isTigoPhone(phone)) return "pesapal";
+function resolveProvider(_phone) {
   return "grebo";
 }
 
 function getRoutingLabel() {
-  return "Tigo → Pesapal | Others → Grebo";
+  return "All networks → Grebo";
 }
 
 function formatApiError(error, provider) {

@@ -4,7 +4,14 @@
  * - polls Grebo transaction list and matches every open admin row by reference / grebo id
  * - marks COMPLETED / FAILED as soon as Grebo flips
  */
-const { getBalance, listTransactions, buildGreboUpdate } = require("./grebo");
+const {
+  getBalance,
+  listTransactions,
+  buildGreboUpdate,
+  followUpTransaction,
+  isGreboFollowUpConfigured,
+  warnFollowUpAuthOnce
+} = require("./grebo");
 
 function amountTzs(tx) {
   if (tx?.amount_tzs != null) return Number(tx.amount_tzs);
@@ -24,6 +31,8 @@ function isFailed(tx) {
 function startGreboBalanceTracker({
   Payment,
   intervalMs = Number(process.env.GREBO_BALANCE_POLL_MS || 5000),
+  followUpIntervalMs = Number(process.env.GREBO_FOLLOW_UP_INTERVAL_MS || 12000),
+  followUpBatchSize = Number(process.env.GREBO_FOLLOW_UP_BATCH || 5),
   expectedAmount = Number(process.env.PAYMENT_AMOUNT || 3061),
   openLimit = Number(process.env.GREBO_OPEN_SYNC_LIMIT || 300)
 } = {}) {
@@ -38,7 +47,11 @@ function startGreboBalanceTracker({
   let lastBalance = null;
   let running = false;
   const claimedByBalanceJump = new Set();
+  const lastFollowUpAt = new Map();
   const pollMs = Math.max(3000, intervalMs);
+  const followUpMs = Math.max(8000, followUpIntervalMs);
+  const followUpLimit = Math.max(1, followUpBatchSize);
+  const followUpEnabled = isGreboFollowUpConfigured();
 
   async function applyGreboTx(payment, tx, reason) {
     if (!payment || !tx) return null;
@@ -111,9 +124,48 @@ function startGreboBalanceTracker({
     return { byRef, byId };
   }
 
+  async function followUpPendingPayments(deposits) {
+    if (!followUpEnabled) {
+      warnFollowUpAuthOnce();
+      return { followed: 0 };
+    }
+
+    const pending = deposits
+      .filter((tx) => /^(pending|processing)$/i.test(String(tx?.status || "")))
+      .slice(0, followUpLimit);
+
+    let followed = 0;
+    const now = Date.now();
+
+    for (const tx of pending) {
+      const greboId = tx.id;
+      if (!greboId) continue;
+
+      const last = lastFollowUpAt.get(greboId) || 0;
+      if (now - last < followUpMs) continue;
+
+      lastFollowUpAt.set(greboId, now);
+      try {
+        await followUpTransaction(greboId);
+        followed += 1;
+      } catch (error) {
+        if (error.code === "NO_DASHBOARD_AUTH") {
+          warnFollowUpAuthOnce(error);
+          break;
+        }
+        if (error.code === "DASHBOARD_AUTH_FAILED") {
+          console.error("Grebo follow-up auth failed:", error.message);
+          break;
+        }
+        console.error("Grebo follow-up error:", greboId, error.message);
+      }
+    }
+
+    return { followed };
+  }
+
   async function syncAllOpenPayments(deposits) {
     const { byRef, byId } = indexDeposits(deposits);
-
     const open = await Payment.find({
       provider: "grebo",
       status: { $in: ["PROCESSING", "TIMEOUT", "PENDING"] }
@@ -161,6 +213,11 @@ function startGreboBalanceTracker({
       const txs = await listTransactions(100);
       const deposits = txs.filter((t) => String(t.type || "deposit") === "deposit");
 
+      const followUp = await followUpPendingPayments(deposits);
+      if (followUp.followed > 0) {
+        console.log(`Grebo tracker follow-up: triggered ${followUp.followed} Fuatilia checks`);
+      }
+
       if (lastBalance == null && Number.isFinite(balance)) {
         lastBalance = balance;
         console.log(
@@ -168,7 +225,9 @@ function startGreboBalanceTracker({
           balance,
           "TZS | poll=",
           pollMs,
-          "ms | syncing all open refs"
+          "ms | follow-up=",
+          followUpEnabled ? `${followUpMs}ms` : "disabled",
+          "| syncing all open refs"
         );
       } else if (
         Number.isFinite(balance) &&

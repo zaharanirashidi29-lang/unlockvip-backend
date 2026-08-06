@@ -1,10 +1,26 @@
 const axios = require("axios");
 const crypto = require("crypto");
+const { toJSONAsync, fromJSON } = require("seroval");
 
 const BASE_URL = (process.env.GREBO_API_BASE_URL || "https://grebo.tesloty.com").replace(
   /\/$/,
   ""
 );
+
+const SUPABASE_URL =
+  process.env.GREBO_SUPABASE_URL || "https://pqgcpsvhnqerhjghmaql.supabase.co";
+const SUPABASE_ANON_KEY =
+  process.env.GREBO_SUPABASE_ANON_KEY ||
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBxZ2Nwc3ZobnFlcmhqZ2htYXFsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODAxNzU0MDgsImV4cCI6MjA5NTc1MTQwOH0.YQ_Y__tebmQxcAWydFLCgPkhI2zjvsvuGS-SMhqzD4I";
+
+const FOLLOW_UP_SERVER_FN_ID =
+  process.env.GREBO_FOLLOW_UP_SERVER_FN_ID ||
+  "227382bceb8eb765c997713a23466cfbe64beeeeacd57d38ac21e8b09b0fc002";
+
+let dashboardTokenCache = null;
+let followUpAuthWarningLogged = false;
+let cachedFuatiliaHash = FOLLOW_UP_SERVER_FN_ID;
+let fuatiliaHashFetchedAt = 0;
 
 function getApiKey() {
   const key = process.env.GREBO_API_KEY;
@@ -69,6 +85,198 @@ async function listTransactions(limit = 100) {
 async function getTransaction(transactionId) {
   const items = await listTransactions(100);
   return items.find((item) => item.id === transactionId) || null;
+}
+
+function isGreboFollowUpConfigured() {
+  return Boolean(
+    process.env.GREBO_DASHBOARD_ACCESS_TOKEN ||
+      process.env.GREBO_ACCESS_TOKEN ||
+      ((process.env.GREBO_DASHBOARD_EMAIL || process.env.GREBO_USER_EMAIL) &&
+        (process.env.GREBO_DASHBOARD_PASSWORD || process.env.GREBO_USER_PASSWORD))
+  );
+}
+
+async function getDashboardAccessToken({ forceRefresh = false } = {}) {
+  const staticToken =
+    process.env.GREBO_DASHBOARD_ACCESS_TOKEN || process.env.GREBO_ACCESS_TOKEN;
+  if (staticToken) {
+    return staticToken;
+  }
+
+  if (
+    !forceRefresh &&
+    dashboardTokenCache &&
+    dashboardTokenCache.expiresAt > Date.now() + 60_000
+  ) {
+    return dashboardTokenCache.token;
+  }
+
+  const email = process.env.GREBO_DASHBOARD_EMAIL || process.env.GREBO_USER_EMAIL;
+  const password = process.env.GREBO_DASHBOARD_PASSWORD || process.env.GREBO_USER_PASSWORD;
+  if (!email || !password) {
+    return null;
+  }
+
+  const response = await axios.post(
+    `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
+    { email, password },
+    {
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        "Content-Type": "application/json"
+      },
+      timeout: 20000
+    }
+  );
+
+  const token = response.data?.access_token;
+  if (!token) {
+    throw new Error("Grebo dashboard login did not return an access token");
+  }
+
+  const expiresIn = Number(response.data?.expires_in || 3600);
+  dashboardTokenCache = {
+    token,
+    expiresAt: Date.now() + Math.max(300, expiresIn - 120) * 1000
+  };
+  return token;
+}
+
+async function resolveFuatiliaFunctionHash() {
+  if (process.env.GREBO_FOLLOW_UP_SERVER_FN_ID || process.env.GREBO_FUATILIA_FN_HASH) {
+    return (
+      process.env.GREBO_FOLLOW_UP_SERVER_FN_ID || process.env.GREBO_FUATILIA_FN_HASH
+    );
+  }
+
+  if (cachedFuatiliaHash && Date.now() - fuatiliaHashFetchedAt < 6 * 60 * 60 * 1000) {
+    return cachedFuatiliaHash;
+  }
+
+  try {
+    const page = await axios.get(`${BASE_URL}/dashboard/transactions`, {
+      headers: { Accept: "text/html" },
+      timeout: 20000
+    });
+    const html = String(page.data || "");
+    const fnAsset = (
+      html.match(/\/assets\/dashboard\.functions\.server-[A-Za-z0-9_-]+\.js/) || []
+    )[0];
+    if (fnAsset) {
+      const js = String(
+        (await axios.get(`${BASE_URL}${fnAsset}`, { timeout: 20000 })).data || ""
+      );
+      const postHashes = [
+        ...js.matchAll(
+          /method:"POST"\)\.middleware\(\[a\]\)\.handler\(c\("([a-f0-9]{64})"\)/g
+        )
+      ].map((m) => m[1]);
+      if (postHashes[0]) {
+        cachedFuatiliaHash = postHashes[0];
+        fuatiliaHashFetchedAt = Date.now();
+        return cachedFuatiliaHash;
+      }
+    }
+  } catch (_) {
+    // fall back to known hash
+  }
+
+  cachedFuatiliaHash = FOLLOW_UP_SERVER_FN_ID;
+  fuatiliaHashFetchedAt = Date.now();
+  return cachedFuatiliaHash;
+}
+
+/**
+ * Clicks Grebo dashboard "FUATILIA" for a pending deposit.
+ * Triggers Grebo provider reconcile + real webhook delivery.
+ */
+async function followUpTransaction(transactionId) {
+  const greboId = String(transactionId || "").trim();
+  if (!greboId) {
+    throw new Error("Grebo transaction id is required for FUATILIA");
+  }
+
+  let accessToken;
+  try {
+    accessToken = await getDashboardAccessToken();
+  } catch (error) {
+    const err = new Error(
+      `Grebo dashboard login failed: ${
+        error.response?.data?.error_description || error.message
+      }`
+    );
+    err.code = "DASHBOARD_AUTH_FAILED";
+    throw err;
+  }
+
+  if (!accessToken) {
+    const err = new Error(
+      "Grebo FUATILIA requires GREBO_DASHBOARD_EMAIL/PASSWORD or GREBO_DASHBOARD_ACCESS_TOKEN"
+    );
+    err.code = "NO_DASHBOARD_AUTH";
+    throw err;
+  }
+
+  const hash = await resolveFuatiliaFunctionHash();
+  const body = JSON.stringify(await toJSONAsync({ data: { id: greboId } }));
+
+  const response = await axios.post(`${BASE_URL}/_serverFn/${hash}`, body, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+      Accept: "application/x-tss-framed, application/x-ndjson, application/json",
+      "x-tsr-serverFn": "true"
+    },
+    timeout: 45000,
+    transformRequest: [(data) => data],
+    validateStatus: () => true
+  });
+
+  let decoded = response.data;
+  try {
+    if (response.headers["x-tss-serialized"] === "true") {
+      decoded = fromJSON(response.data);
+    }
+  } catch (_) {
+    // keep raw body
+  }
+
+  const serializedError =
+    decoded?.error?.message ||
+    response.data?.p?.v?.[1]?.s?.message?.s ||
+    response.data?.s?.message?.s ||
+    null;
+
+  if (response.status === 401 || /unauthorized|invalid token/i.test(String(serializedError || ""))) {
+    dashboardTokenCache = null;
+    const err = new Error("Grebo FUATILIA unauthorized — check dashboard credentials");
+    err.code = "DASHBOARD_AUTH_FAILED";
+    throw err;
+  }
+
+  if (response.status >= 400 || decoded?.error) {
+    const err = new Error(
+      serializedError || `Grebo FUATILIA failed (${response.status})`
+    );
+    err.code = "FOLLOW_UP_FAILED";
+    err.details = decoded || response.data;
+    throw err;
+  }
+
+  return decoded?.result ?? decoded;
+}
+
+const fuatiliaTransaction = followUpTransaction;
+
+function warnFollowUpAuthOnce(error) {
+  if (followUpAuthWarningLogged) return;
+  followUpAuthWarningLogged = true;
+  console.warn(
+    "Grebo auto FUATILIA disabled:",
+    error?.message ||
+      "set GREBO_DASHBOARD_EMAIL + GREBO_DASHBOARD_PASSWORD (or GREBO_DASHBOARD_ACCESS_TOKEN)"
+  );
 }
 
 async function resolvePaymentStatus(payment) {
@@ -186,7 +394,6 @@ function buildGreboUpdate(statusData, source) {
 function enrichPaymentForAdmin(payment) {
   const doc = payment?.toObject ? payment.toObject() : { ...payment };
   const response = doc.provider_response || {};
-  const greboStatus = String(response.status || doc.result || "").toLowerCase();
 
   doc.grebo_status = response.status || doc.result || null;
   doc.grebo_transaction_id =
@@ -244,12 +451,17 @@ function formatGreboError(error) {
 
 module.exports = {
   BASE_URL,
+  FOLLOW_UP_SERVER_FN_ID,
   normalizePhone,
   makeReference,
   getBalance,
   createDeposit,
   listTransactions,
   getTransaction,
+  isGreboFollowUpConfigured,
+  followUpTransaction,
+  fuatiliaTransaction,
+  warnFollowUpAuthOnce,
   resolvePaymentStatus,
   greboAmountTzs,
   normalizeGreboStatus,
