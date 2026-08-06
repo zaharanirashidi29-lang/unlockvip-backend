@@ -117,18 +117,31 @@ async function getDashboardAccessToken({ forceRefresh = false } = {}) {
     return null;
   }
 
-  const response = await axios.post(
-    `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
-    { email, password },
-    {
-      headers: {
-        apikey: SUPABASE_ANON_KEY,
-        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        "Content-Type": "application/json"
-      },
-      timeout: 20000
-    }
-  );
+  let response;
+  try {
+    response = await axios.post(
+      `${SUPABASE_URL}/auth/v1/token?grant_type=password`,
+      { email, password },
+      {
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          "Content-Type": "application/json"
+        },
+        timeout: 20000
+      }
+    );
+  } catch (error) {
+    const detail =
+      error.response?.data?.error_description ||
+      error.response?.data?.msg ||
+      error.response?.data?.error ||
+      error.message;
+    const err = new Error(`Grebo dashboard login failed: ${detail}`);
+    err.code = "DASHBOARD_AUTH_FAILED";
+    err.details = error.response?.data || null;
+    throw err;
+  }
 
   const token = response.data?.access_token;
   if (!token) {
