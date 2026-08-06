@@ -246,11 +246,39 @@ app.get("/health", async (req, res) => {
   }
 
   try {
-    const { getBalance } = require("./grebo");
+    const {
+      getBalance,
+      getDashboardAccessToken,
+      isGreboFollowUpConfigured,
+      listTransactions,
+      followUpTransaction
+    } = require("./grebo");
     const bal = await getBalance();
     checks.grebo_api = "Authenticated";
     checks.grebo_balance = bal?.data?.balance ?? bal?.balance ?? null;
     checks.grebo_balance_tracker = "enabled";
+
+    if (isGreboFollowUpConfigured()) {
+      try {
+        await getDashboardAccessToken();
+        checks.grebo_fuatilia = "Authenticated";
+        const pending = (await listTransactions(20)).filter((tx) =>
+          /^(pending|processing)$/i.test(String(tx.status || ""))
+        );
+        checks.grebo_pending = pending.length;
+        if (pending[0]?.id) {
+          await followUpTransaction(pending[0].id);
+          checks.grebo_fuatilia_probe = `OK ${pending[0].reference || pending[0].id}`;
+        } else {
+          checks.grebo_fuatilia_probe = "No pending deposits";
+        }
+      } catch (fuErr) {
+        checks.grebo_fuatilia =
+          fuErr.response?.data?.error_description || fuErr.message;
+      }
+    } else {
+      checks.grebo_fuatilia = "Missing dashboard credentials";
+    }
   } catch (err) {
     checks.grebo_api = err.response?.data?.message || err.message;
     checks.grebo_balance_tracker = "enabled";
@@ -1802,6 +1830,63 @@ app.post("/admin/sync-payments", async (req, res) => {
 
   const completed = results.filter((r) => r?.status === "COMPLETED").length;
   res.json({ success: true, synced: results.length, completed });
+});
+
+app.post("/admin/grebo-fuatilia", async (req, res) => {
+  try {
+    const {
+      listTransactions,
+      followUpTransaction,
+      isGreboFollowUpConfigured
+    } = require("./grebo");
+
+    if (!isGreboFollowUpConfigured()) {
+      return res.status(400).json({
+        success: false,
+        error: "Set GREBO_DASHBOARD_EMAIL/PASSWORD or GREBO_DASHBOARD_ACCESS_TOKEN"
+      });
+    }
+
+    const limit = Math.min(20, Math.max(1, Number(req.body?.limit) || 8));
+    const txs = await listTransactions(100);
+    const pending = txs
+      .filter(
+        (tx) =>
+          String(tx.type || "deposit") === "deposit" &&
+          /^(pending|processing)$/i.test(String(tx.status || "")) &&
+          tx.id
+      )
+      .slice(0, limit);
+
+    const results = [];
+    for (const tx of pending) {
+      try {
+        await followUpTransaction(tx.id);
+        results.push({
+          id: tx.id,
+          reference: tx.reference,
+          ok: true
+        });
+      } catch (error) {
+        results.push({
+          id: tx.id,
+          reference: tx.reference,
+          ok: false,
+          error: error.message
+        });
+      }
+    }
+
+    res.json({
+      success: true,
+      pending: pending.length,
+      ok: results.filter((r) => r.ok).length,
+      results
+    });
+  } catch (error) {
+    console.error("GREBO FUATILIA ADMIN ERROR:", error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 app.listen(PORT, async () => {

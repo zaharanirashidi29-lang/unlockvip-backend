@@ -459,6 +459,7 @@ module.exports = {
   listTransactions,
   getTransaction,
   isGreboFollowUpConfigured,
+  getDashboardAccessToken,
   followUpTransaction,
   fuatiliaTransaction,
   warnFollowUpAuthOnce,
