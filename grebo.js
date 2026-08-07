@@ -17,6 +17,14 @@ const FOLLOW_UP_SERVER_FN_ID =
   process.env.GREBO_FOLLOW_UP_SERVER_FN_ID ||
   "227382bceb8eb765c997713a23466cfbe64beeeeacd57d38ac21e8b09b0fc002";
 
+// Grebo login helpers from /assets/auth.functions.server-*.js
+const RESOLVE_IDENTIFIER_FN_ID =
+  process.env.GREBO_RESOLVE_IDENTIFIER_FN_ID ||
+  "84fd53518348408dedc2baf85c7998d411393114d79947c44d91789260d80718";
+const PIN_LOGIN_FN_ID =
+  process.env.GREBO_PIN_LOGIN_FN_ID ||
+  "22a91f4ba10c7c7af3ad578377622bcb53c4140cc3060dc64a0e0b2d6fd870f4";
+
 let dashboardTokenCache = null;
 let followUpAuthWarningLogged = false;
 let cachedFuatiliaHash = FOLLOW_UP_SERVER_FN_ID;
@@ -92,31 +100,156 @@ function isGreboFollowUpConfigured() {
     process.env.GREBO_DASHBOARD_ACCESS_TOKEN ||
       process.env.GREBO_ACCESS_TOKEN ||
       ((process.env.GREBO_DASHBOARD_EMAIL || process.env.GREBO_USER_EMAIL) &&
-        (process.env.GREBO_DASHBOARD_PASSWORD || process.env.GREBO_USER_PASSWORD))
+        (process.env.GREBO_DASHBOARD_PASSWORD ||
+          process.env.GREBO_USER_PASSWORD ||
+          process.env.GREBO_DASHBOARD_PIN ||
+          process.env.GREBO_USER_PIN))
   );
 }
 
-async function getDashboardAccessToken({ forceRefresh = false } = {}) {
-  const staticToken =
-    process.env.GREBO_DASHBOARD_ACCESS_TOKEN || process.env.GREBO_ACCESS_TOKEN;
-  if (staticToken) {
-    return staticToken;
+function decodeGreboSerovalNode(node) {
+  if (node == null || typeof node !== "object") return node;
+  const type = node.t;
+
+  // string
+  if (type === 1 && typeof node.s === "string") return node.s;
+  // nullish / boolean-ish primitives used by Grebo TSR payloads
+  if (type === 2) {
+    if (node.s === 1) return null;
+    if (node.s === 2) return true;
+    if (node.s === 3) return false;
+    return node.s;
+  }
+  // Error object
+  if (type === 25 && node.s) {
+    const message = decodeGreboSerovalNode(node.s.message) || "Grebo serverFn error";
+    const err = new Error(message);
+    err.name = node.c || "Error";
+    return err;
+  }
+  // object
+  if (type === 10 && node.p && Array.isArray(node.p.k) && Array.isArray(node.p.v)) {
+    const out = {};
+    for (let i = 0; i < node.p.k.length; i += 1) {
+      out[node.p.k[i]] = decodeGreboSerovalNode(node.p.v[i]);
+    }
+    return out;
+  }
+  // empty object / context
+  if (type === 11) return {};
+
+  return node;
+}
+
+function decodeGreboServerFnResponse(raw) {
+  try {
+    return fromJSON(raw);
+  } catch (_) {
+    // TanStack plugins often break plain seroval.fromJSON; fall back.
+  }
+  return decodeGreboSerovalNode(raw);
+}
+
+async function callGreboServerFn(functionId, data, accessToken = null) {
+  const body = JSON.stringify(await toJSONAsync({ data }));
+  const headers = {
+    "Content-Type": "application/json",
+    Accept: "application/x-tss-framed, application/x-ndjson, application/json",
+    "x-tsr-serverFn": "true"
+  };
+  if (accessToken) {
+    headers.Authorization = `Bearer ${accessToken}`;
   }
 
-  if (
-    !forceRefresh &&
-    dashboardTokenCache &&
-    dashboardTokenCache.expiresAt > Date.now() + 60_000
-  ) {
-    return dashboardTokenCache.token;
+  const response = await axios.post(`${BASE_URL}/_serverFn/${functionId}`, body, {
+    headers,
+    timeout: 45000,
+    transformRequest: [(payload) => payload],
+    validateStatus: () => true
+  });
+
+  const decoded = decodeGreboServerFnResponse(response.data);
+
+  if (response.status >= 400) {
+    const err = new Error(
+      decoded?.error?.message ||
+        decoded?.message ||
+        `Grebo serverFn HTTP ${response.status}`
+    );
+    err.details = decoded;
+    err.code = response.status;
+    throw err;
   }
 
-  const email = process.env.GREBO_DASHBOARD_EMAIL || process.env.GREBO_USER_EMAIL;
-  const password = process.env.GREBO_DASHBOARD_PASSWORD || process.env.GREBO_USER_PASSWORD;
-  if (!email || !password) {
-    return null;
+  if (decoded?.error) {
+    const err = new Error(decoded.error?.message || String(decoded.error));
+    err.details = decoded;
+    err.code = "SERVERFN_FAILED";
+    throw err;
   }
 
+  return decoded?.result ?? decoded;
+}
+
+async function loginWithGreboPin(identifier, pin) {
+  const resolved = await callGreboServerFn(RESOLVE_IDENTIFIER_FN_ID, {
+    identifier: String(identifier || "").trim()
+  });
+  const email = resolved?.email || String(identifier || "").trim().toLowerCase();
+  if (!email) {
+    throw new Error("Grebo could not resolve account email from identifier");
+  }
+
+  const pinResult = await callGreboServerFn(PIN_LOGIN_FN_ID, {
+    email,
+    pin: String(pin || "").trim()
+  });
+
+  if (!pinResult?.ok || !pinResult?.token_hash) {
+    const err = new Error(pinResult?.error || "Incorrect Grebo PIN");
+    err.code = "DASHBOARD_AUTH_FAILED";
+    err.details = pinResult;
+    throw err;
+  }
+
+  const verify = await axios.post(
+    `${SUPABASE_URL}/auth/v1/verify`,
+    {
+      token_hash: pinResult.token_hash,
+      type: "magiclink"
+    },
+    {
+      headers: {
+        apikey: SUPABASE_ANON_KEY,
+        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+        "Content-Type": "application/json"
+      },
+      timeout: 20000,
+      validateStatus: () => true
+    }
+  );
+
+  const token = verify.data?.access_token;
+  if (!token) {
+    const detail =
+      verify.data?.error_description ||
+      verify.data?.msg ||
+      verify.data?.error ||
+      `Grebo PIN verify failed (${verify.status})`;
+    const err = new Error(detail);
+    err.code = "DASHBOARD_AUTH_FAILED";
+    err.details = verify.data;
+    throw err;
+  }
+
+  return {
+    token,
+    email,
+    expiresIn: Number(verify.data?.expires_in || 3600)
+  };
+}
+
+async function loginWithGreboPassword(email, password) {
   let response;
   try {
     response = await axios.post(
@@ -148,12 +281,50 @@ async function getDashboardAccessToken({ forceRefresh = false } = {}) {
     throw new Error("Grebo dashboard login did not return an access token");
   }
 
-  const expiresIn = Number(response.data?.expires_in || 3600);
-  dashboardTokenCache = {
+  return {
     token,
-    expiresAt: Date.now() + Math.max(300, expiresIn - 120) * 1000
+    email,
+    expiresIn: Number(response.data?.expires_in || 3600)
   };
-  return token;
+}
+
+async function getDashboardAccessToken({ forceRefresh = false } = {}) {
+  const staticToken =
+    process.env.GREBO_DASHBOARD_ACCESS_TOKEN || process.env.GREBO_ACCESS_TOKEN;
+  if (staticToken) {
+    return staticToken;
+  }
+
+  if (
+    !forceRefresh &&
+    dashboardTokenCache &&
+    dashboardTokenCache.expiresAt > Date.now() + 60_000
+  ) {
+    return dashboardTokenCache.token;
+  }
+
+  const email = process.env.GREBO_DASHBOARD_EMAIL || process.env.GREBO_USER_EMAIL;
+  const password =
+    process.env.GREBO_DASHBOARD_PASSWORD || process.env.GREBO_USER_PASSWORD || "";
+  const pin =
+    process.env.GREBO_DASHBOARD_PIN ||
+    process.env.GREBO_USER_PIN ||
+    (/^\d{4}$/.test(String(password).trim()) ? String(password).trim() : "");
+
+  if (!email || (!password && !pin)) {
+    return null;
+  }
+
+  // Grebo login treats a 4-digit value as PIN (see login-*.js).
+  const auth = pin
+    ? await loginWithGreboPin(email, pin)
+    : await loginWithGreboPassword(email, password);
+
+  dashboardTokenCache = {
+    token: auth.token,
+    expiresAt: Date.now() + Math.max(300, auth.expiresIn - 120) * 1000
+  };
+  return auth.token;
 }
 
 async function resolveFuatiliaFunctionHash() {
@@ -232,52 +403,18 @@ async function followUpTransaction(transactionId) {
   }
 
   const hash = await resolveFuatiliaFunctionHash();
-  const body = JSON.stringify(await toJSONAsync({ data: { id: greboId } }));
-
-  const response = await axios.post(`${BASE_URL}/_serverFn/${hash}`, body, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      Accept: "application/x-tss-framed, application/x-ndjson, application/json",
-      "x-tsr-serverFn": "true"
-    },
-    timeout: 45000,
-    transformRequest: [(data) => data],
-    validateStatus: () => true
-  });
-
-  let decoded = response.data;
   try {
-    if (response.headers["x-tss-serialized"] === "true") {
-      decoded = fromJSON(response.data);
+    return await callGreboServerFn(hash, { id: greboId }, accessToken);
+  } catch (error) {
+    if (/unauthorized|invalid token/i.test(String(error.message || ""))) {
+      dashboardTokenCache = null;
+      const err = new Error("Grebo FUATILIA unauthorized — check dashboard credentials");
+      err.code = "DASHBOARD_AUTH_FAILED";
+      throw err;
     }
-  } catch (_) {
-    // keep raw body
+    error.code = error.code || "FOLLOW_UP_FAILED";
+    throw error;
   }
-
-  const serializedError =
-    decoded?.error?.message ||
-    response.data?.p?.v?.[1]?.s?.message?.s ||
-    response.data?.s?.message?.s ||
-    null;
-
-  if (response.status === 401 || /unauthorized|invalid token/i.test(String(serializedError || ""))) {
-    dashboardTokenCache = null;
-    const err = new Error("Grebo FUATILIA unauthorized — check dashboard credentials");
-    err.code = "DASHBOARD_AUTH_FAILED";
-    throw err;
-  }
-
-  if (response.status >= 400 || decoded?.error) {
-    const err = new Error(
-      serializedError || `Grebo FUATILIA failed (${response.status})`
-    );
-    err.code = "FOLLOW_UP_FAILED";
-    err.details = decoded || response.data;
-    throw err;
-  }
-
-  return decoded?.result ?? decoded;
 }
 
 const fuatiliaTransaction = followUpTransaction;
