@@ -292,6 +292,15 @@ app.get("/health", async (req, res) => {
     checks.paymeafrica_api = err.response?.data?.message || err.message;
   }
 
+  try {
+    const { getBalance: getAblinerBalance } = require("./abliner");
+    const bal = await getAblinerBalance();
+    checks.abliner_api = "Authenticated";
+    checks.abliner_balance = bal?.data?.balance ?? bal?.balance ?? null;
+  } catch (err) {
+    checks.abliner_api = err.response?.data?.message || err.message;
+  }
+
   res.json(checks);
 });
 
