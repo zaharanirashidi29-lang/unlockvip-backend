@@ -1,9 +1,14 @@
 const axios = require("axios");
 
-const BASE_URL = (process.env.WENACY_API_BASE_URL || "https://wenac.space").replace(
-  /\/$/,
-  ""
-);
+function normalizeBaseUrl(raw) {
+  let url = String(raw || "https://wenac.space").trim();
+  // Common env typo: ttps:// instead of https://
+  if (/^ttps:\/\//i.test(url)) url = `h${url}`;
+  if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+  return url.replace(/\/$/, "");
+}
+
+const BASE_URL = normalizeBaseUrl(process.env.WENACY_API_BASE_URL);
 
 function getApiKey() {
   const key = process.env.WENACY_API_KEY;
