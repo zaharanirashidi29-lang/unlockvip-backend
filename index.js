@@ -47,6 +47,13 @@ const {
   extractAblinerFailureMessage
 } = require("./abliner");
 const {
+  createCharge: createWenacyCharge,
+  resolvePaymentStatus: resolveWenacyPaymentStatus,
+  buildWenacyUpdate,
+  enrichPaymentForAdmin: enrichWenacyPaymentForAdmin,
+  extractWenacyFailureMessage
+} = require("./wenacy");
+const {
   createCollection: createPaymeCollection,
   resolvePaymentStatus: resolvePaymePaymentStatus,
   buildPaymeUpdate,
@@ -134,6 +141,16 @@ app.post(
     }
   }
 );
+
+app.post("/webhook/wenacy", express.json(), async (req, res) => {
+  try {
+    await processWenacyWebhook(req.body || {});
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error("WENACY WEBHOOK ERROR:", error.message);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 app.post(
   "/webhook/paymeafrica",
@@ -227,6 +244,7 @@ app.get("/health", async (req, res) => {
     paymeafrica_secret_key: process.env.PAYMEAFRICA_SECRET_KEY ? "Set" : "Missing",
     abliner_api_key: process.env.ABLINER_API_KEY ? "Set" : "Missing",
     abliner_webhook_secret: process.env.ABLINER_WEBHOOK_SECRET ? "Set" : "Missing",
+    wenacy_api_key: process.env.WENACY_API_KEY ? "Set" : "Missing",
     pesapal_consumer_key: process.env.PESAPAL_CONSUMER_KEY ? "Set" : "Missing",
     pesapal_callback_url: getCallbackUrl(),
     timestamp: Math.floor(Date.now() / 1000)
@@ -299,6 +317,30 @@ app.get("/health", async (req, res) => {
     checks.abliner_balance = bal?.data?.balance ?? bal?.balance ?? null;
   } catch (err) {
     checks.abliner_api = err.response?.data?.message || err.message;
+  }
+
+  try {
+    if (!process.env.WENACY_API_KEY) {
+      checks.wenacy_api = "Missing API key";
+    } else {
+      const { getStatus } = require("./wenacy");
+      const probe = await getStatus(`HEALTH${Date.now()}`);
+      if (probe?.success === false && /unauthor|invalid.*key|api key/i.test(JSON.stringify(probe))) {
+        checks.wenacy_api = probe.message || probe.error || "Unauthorized";
+      } else {
+        checks.wenacy_api = "Authenticated";
+      }
+    }
+  } catch (err) {
+    const status = err.response?.status;
+    const msg = err.response?.data?.message || err.response?.data?.error || err.message;
+    if (status === 401 || status === 403) {
+      checks.wenacy_api = msg || "Unauthorized";
+    } else if (status === 404 || /not found|hakupatikana|unknown/i.test(String(msg || ""))) {
+      checks.wenacy_api = "Authenticated";
+    } else {
+      checks.wenacy_api = msg;
+    }
   }
 
   res.json(checks);
@@ -459,6 +501,11 @@ async function queryProviderStatus(payment, options = {}) {
     return { provider: "abliner", data };
   }
 
+  if (payment?.provider === "wenacy") {
+    const data = await resolveWenacyPaymentStatus(payment);
+    return { provider: "wenacy", data };
+  }
+
   if (payment?.provider === "paymeafrica") {
     const data = await resolvePaymePaymentStatus(payment);
     return { provider: "paymeafrica", data };
@@ -485,10 +532,64 @@ function buildProviderUpdate(provider, statusData, source) {
   if (provider === "abliner") {
     return buildAblinerUpdate(statusData, source);
   }
+  if (provider === "wenacy") {
+    return buildWenacyUpdate(statusData, source);
+  }
   if (provider === "paymeafrica") {
     return buildPaymeUpdate(statusData, source);
   }
   return buildMalipopayUpdate(statusData, source);
+}
+
+async function processWenacyWebhook(body) {
+  const localReference = body?.reference;
+  const providerTxId = body?.transaction_id || body?.provider_reference;
+
+  if (!localReference && !providerTxId) {
+    throw new Error("Missing Wenacy transaction reference");
+  }
+
+  const lookup = [];
+  if (localReference) lookup.push({ reference: localReference });
+  if (providerTxId) {
+    lookup.push({ order_tracking_id: providerTxId }, { transaction_id: providerTxId });
+  }
+
+  const payment = await Payment.findOne({ $or: lookup, provider: "wenacy" });
+  if (!payment) {
+    console.warn("Wenacy webhook for unknown payment", localReference || providerTxId);
+    return null;
+  }
+
+  if (payment.status === "COMPLETED") {
+    return payment;
+  }
+
+  const update = buildWenacyUpdate(body, "WEBHOOK");
+  const updated = await Payment.findOneAndUpdate(
+    { _id: payment._id, status: { $ne: "COMPLETED" } },
+    {
+      ...update,
+      order_tracking_id: providerTxId || payment.order_tracking_id,
+      transaction_id: providerTxId || payment.transaction_id,
+      provider_response: body
+    },
+    { new: true }
+  );
+
+  if (updated?.status === "COMPLETED") {
+    console.log("Wenacy webhook COMPLETED for", payment.reference);
+  } else if (updated?.status === "FAILED") {
+    console.log(
+      "Wenacy webhook FAILED for",
+      payment.reference,
+      extractWenacyFailureMessage(body)
+    );
+  } else {
+    console.log("Wenacy webhook update for", payment.reference, update.status);
+  }
+
+  return updated;
 }
 
 async function processPaymeWebhook(body) {
@@ -739,7 +840,9 @@ async function syncProviderPayment(payment) {
               ? "SYNCED_FROM_GREBO"
               : payment.provider === "abliner"
                 ? "SYNCED_FROM_ABLINER"
-                : "SYNCED_FROM_MALIPOPAY"
+                : payment.provider === "wenacy"
+                  ? "SYNCED_FROM_WENACY"
+                  : "SYNCED_FROM_MALIPOPAY"
         : update.reason;
 
     return Payment.findOneAndUpdate(
@@ -799,6 +902,31 @@ async function syncAblinerPayment(payment) {
     );
   } catch (error) {
     console.error("Abliner sync error for", payment.reference, error.message);
+    return payment;
+  }
+}
+
+async function syncWenacyPayment(payment) {
+  if (!payment?.reference) {
+    return payment;
+  }
+
+  try {
+    const { update } = await applyStatusFromQuery(payment, "SYNC", { bypassCache: true });
+    if (update.status === payment.status && update.reason === payment.reason) {
+      return payment;
+    }
+
+    return Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      {
+        ...update,
+        reason: update.status === "COMPLETED" ? "SYNCED_FROM_WENACY" : update.reason
+      },
+      { new: true }
+    );
+  } catch (error) {
+    console.error("Wenacy sync error for", payment.reference, error.message);
     return payment;
   }
 }
@@ -1241,6 +1369,60 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
+    if (provider === "wenacy") {
+      const callbackUrl =
+        process.env.WENACY_CALLBACK_URL || `${getPublicBaseUrl()}/webhook/wenacy`;
+      const charge = await createWenacyCharge({
+        amount,
+        phone,
+        reference,
+        callbackUrl,
+        description: "UnlockVIP subscription payment"
+      });
+
+      if (!charge?.success && String(charge?.status || "").toLowerCase() === "failed") {
+        throw new Error(extractWenacyFailureMessage(charge));
+      }
+
+      if (!charge?.success && !charge?.transaction_id && !charge?.reference) {
+        throw new Error(charge?.message || charge?.error || "Wenacy charge failed");
+      }
+
+      const wenacyStatus = String(charge.status || "").toLowerCase();
+      if (wenacyStatus === "failed") {
+        throw new Error(extractWenacyFailureMessage(charge));
+      }
+
+      const wenacyTxId = charge.transaction_id || charge.order_id || null;
+
+      await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: "PROCESSING",
+          reason: "USSD_SENT",
+          order_tracking_id: wenacyTxId,
+          transaction_id: wenacyTxId,
+          result: charge.status,
+          message: `USSD push sent via ${operator} (Wenacy)`,
+          provider_response: charge
+        }
+      );
+
+      pollPaymentStatus(reference, phone, provider);
+
+      return res.json({
+        success: true,
+        provider,
+        operator,
+        data: {
+          reference,
+          wenacy_id: wenacyTxId,
+          status: charge.status,
+          amount: charge.amount
+        }
+      });
+    }
+
     if (provider === "malipopay") {
       const push = await collectPayment({
         amount,
@@ -1546,6 +1728,11 @@ app.post("/webhook", async (req, res) => {
       return res.status(200).json({ success: true });
     }
 
+    if (payment.provider === "wenacy") {
+      await processWenacyWebhook(body);
+      return res.status(200).json({ success: true });
+    }
+
     if (payment.status === "COMPLETED") {
       return res.status(200).json({ success: true });
     }
@@ -1735,6 +1922,9 @@ function enrichPaymentForAdmin(payment) {
   if (doc.provider === "abliner") {
     return enrichAblinerPaymentForAdmin(doc);
   }
+  if (doc.provider === "wenacy") {
+    return enrichWenacyPaymentForAdmin(doc);
+  }
   if (doc.provider === "paymeafrica") {
     return enrichPaymePaymentForAdmin(doc);
   }
@@ -1809,11 +1999,14 @@ app.get("/admin/payments", async (req, res) => {
 app.post("/admin/sync-payments", async (req, res) => {
   const requestedLimit = Math.min(100, Math.max(1, Number(req.body?.limit) || 25));
   const pending = await Payment.find({
-    provider: { $in: ["grebo", "abliner", "malipopay", "pesapal", "clickpesa", "paymeafrica"] },
+    provider: {
+      $in: ["grebo", "abliner", "wenacy", "malipopay", "pesapal", "clickpesa", "paymeafrica"]
+    },
     status: { $in: ["PROCESSING", "TIMEOUT", "PENDING"] },
     $or: [
       { provider: "clickpesa", reference: { $exists: true, $ne: null } },
       { provider: "paymeafrica", reference: { $exists: true, $ne: null } },
+      { provider: "wenacy", reference: { $exists: true, $ne: null } },
       { order_tracking_id: { $exists: true, $ne: null } }
     ]
   })
@@ -1828,6 +2021,8 @@ app.post("/admin/sync-payments", async (req, res) => {
       results.push(await syncGreboPayment(payment));
     } else if (payment.provider === "abliner") {
       results.push(await syncAblinerPayment(payment));
+    } else if (payment.provider === "wenacy") {
+      results.push(await syncWenacyPayment(payment));
     } else if (payment.provider === "paymeafrica") {
       results.push(await syncPaymePayment(payment));
     } else if (payment.provider === "pesapal") {

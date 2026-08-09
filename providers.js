@@ -13,22 +13,26 @@ const { formatPesapalError } = require("./pesapal");
 const { formatGreboError } = require("./grebo");
 const { formatAblinerError } = require("./abliner");
 const { formatPaymeError } = require("./paymeafrica");
+const { formatWenacyError } = require("./wenacy");
 
 function isPesapalPhone(_phone) {
   return false;
 }
 
 function resolveProvider(_phone) {
-  return "grebo";
+  return "wenacy";
 }
 
 function getRoutingLabel() {
-  return "All networks → Grebo";
+  return "All networks → Wenacy";
 }
 
 function formatApiError(error, provider) {
   if (provider === "paymeafrica") {
     return formatPaymeError(error);
+  }
+  if (provider === "wenacy") {
+    return formatWenacyError(error);
   }
   if (provider === "grebo") {
     return formatGreboError(error);
