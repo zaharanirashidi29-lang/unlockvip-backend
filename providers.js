@@ -19,11 +19,11 @@ function isPesapalPhone(_phone) {
 }
 
 function resolveProvider(_phone) {
-  return "abliner";
+  return "grebo";
 }
 
 function getRoutingLabel() {
-  return "All networks → Abliner";
+  return "All networks → Grebo";
 }
 
 function formatApiError(error, provider) {
