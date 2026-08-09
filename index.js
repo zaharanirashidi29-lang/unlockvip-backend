@@ -355,9 +355,9 @@ function makeTxRef() {
 }
 
 function getPublicBaseUrl() {
-  return (
-    process.env.PUBLIC_BASE_URL ||
-    process.env.BACKEND_URL ||
+  const { normalizeHttpUrl } = require("./wenacy");
+  return normalizeHttpUrl(
+    process.env.PUBLIC_BASE_URL || process.env.BACKEND_URL,
     "https://unlockvip-backend-1.onrender.com"
   ).replace(/\/$/, "");
 }
@@ -1370,8 +1370,11 @@ app.post("/create-payment", async (req, res) => {
     }
 
     if (provider === "wenacy") {
-      const callbackUrl =
-        process.env.WENACY_CALLBACK_URL || `${getPublicBaseUrl()}/webhook/wenacy`;
+      const { normalizeHttpUrl } = require("./wenacy");
+      const callbackUrl = normalizeHttpUrl(
+        process.env.WENACY_CALLBACK_URL,
+        `${getPublicBaseUrl()}/webhook/wenacy`
+      );
       const charge = await createWenacyCharge({
         amount,
         phone,

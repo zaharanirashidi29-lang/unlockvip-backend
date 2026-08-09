@@ -1,11 +1,23 @@
 const axios = require("axios");
 
-function normalizeBaseUrl(raw) {
-  let url = String(raw || "https://wenac.space").trim();
+function normalizeHttpUrl(raw, fallback = "") {
+  let url = String(raw ?? "").trim();
+  // Strip accidental wrapping quotes from env dashboards
+  if (
+    (url.startsWith('"') && url.endsWith('"')) ||
+    (url.startsWith("'") && url.endsWith("'"))
+  ) {
+    url = url.slice(1, -1).trim();
+  }
+  if (!url) return fallback;
   // Common env typo: ttps:// instead of https://
   if (/^ttps:\/\//i.test(url)) url = `h${url}`;
   if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
-  return url.replace(/\/$/, "");
+  return url;
+}
+
+function normalizeBaseUrl(raw) {
+  return normalizeHttpUrl(raw, "https://wenac.space").replace(/\/$/, "");
 }
 
 const BASE_URL = normalizeBaseUrl(process.env.WENACY_API_BASE_URL);
@@ -45,6 +57,7 @@ async function createCharge({
   callbackUrl,
   description = "UnlockVIP subscription payment"
 }) {
+  const safeCallback = normalizeHttpUrl(callbackUrl);
   const response = await axios.post(
     `${BASE_URL}/api/public/v1/charge`,
     {
@@ -52,7 +65,7 @@ async function createCharge({
       phone: normalizePhone(phone),
       reference,
       description,
-      ...(callbackUrl ? { callback_url: callbackUrl } : {})
+      ...(safeCallback ? { callback_url: safeCallback } : {})
     },
     { headers: authHeaders(), timeout: 45000 }
   );
@@ -223,6 +236,8 @@ function formatWenacyError(error) {
 
 module.exports = {
   BASE_URL,
+  normalizeHttpUrl,
+  normalizeBaseUrl,
   normalizePhone,
   makeReference,
   createCharge,
