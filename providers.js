@@ -20,11 +20,11 @@ function isPesapalPhone(_phone) {
 }
 
 function resolveProvider(_phone) {
-  return "wenacy";
+  return "grebo";
 }
 
 function getRoutingLabel() {
-  return "All networks → Wenacy";
+  return "All networks → grebo";
 }
 
 function formatApiError(error, provider) {
