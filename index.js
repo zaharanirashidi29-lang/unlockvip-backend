@@ -54,6 +54,15 @@ const {
   extractWenacyFailureMessage
 } = require("./wenacy");
 const {
+  createPayment: createSnippePayment,
+  resolvePaymentStatus: resolveSnippePaymentStatus,
+  buildSnippeUpdate,
+  enrichPaymentForAdmin: enrichSnippePaymentForAdmin,
+  extractSnippeFailureMessage,
+  verifyWebhookSignature: verifySnippeWebhookSignature,
+  getBalance: getSnippeBalance
+} = require("./snippe");
+const {
   createCollection: createPaymeCollection,
   resolvePaymentStatus: resolvePaymePaymentStatus,
   buildPaymeUpdate,
@@ -153,6 +162,56 @@ app.post("/webhook/wenacy", express.json(), async (req, res) => {
 });
 
 app.post(
+  "/webhook/snippe",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    try {
+      const rawBody = req.body?.length ? req.body.toString("utf8") : "";
+      const signature = req.headers["x-webhook-signature"];
+      const timestamp = req.headers["x-webhook-timestamp"];
+      const secret = process.env.SNIPPE_WEBHOOK_SECRET;
+
+      if (secret) {
+        const valid = verifySnippeWebhookSignature({
+          rawBody,
+          signature,
+          timestamp,
+          secret
+        });
+        if (!valid) {
+          console.error("SNIPPE WEBHOOK: invalid signature");
+          return res.status(401).json({ success: false, error: "Invalid signature" });
+        }
+      }
+
+      const body = rawBody ? JSON.parse(rawBody) : {};
+      await processSnippeWebhook(body, req.headers["x-webhook-event"]);
+      return res.status(200).json({ success: true });
+    } catch (error) {
+      console.error("SNIPPE WEBHOOK ERROR:", error.message);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  }
+);
+
+// Legacy path used by older Snippe docs / clear.js
+app.post(
+  "/webhooks/snippe",
+  express.raw({ type: "application/json" }),
+  async (req, res) => {
+    try {
+      const rawBody = req.body?.length ? req.body.toString("utf8") : "";
+      const body = rawBody ? JSON.parse(rawBody) : {};
+      await processSnippeWebhook(body, req.headers["x-webhook-event"]);
+      return res.status(200).send("Webhook received");
+    } catch (error) {
+      console.error("SNIPPE WEBHOOK ERROR:", error.message);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  }
+);
+
+app.post(
   "/webhook/paymeafrica",
   express.raw({ type: "application/json" }),
   async (req, res) => {
@@ -247,6 +306,7 @@ app.get("/health", async (req, res) => {
     abliner_api_key: process.env.ABLINER_API_KEY ? "Set" : "Missing",
     abliner_webhook_secret: process.env.ABLINER_WEBHOOK_SECRET ? "Set" : "Missing",
     wenacy_api_key: process.env.WENACY_API_KEY ? "Set" : "Missing",
+    snippe_api_key: process.env.SNIPPE_API_KEY ? "Set" : "Missing",
     pesapal_consumer_key: process.env.PESAPAL_CONSUMER_KEY ? "Set" : "Missing",
     pesapal_callback_url: getCallbackUrl(),
     timestamp: Math.floor(Date.now() / 1000)
@@ -343,6 +403,20 @@ app.get("/health", async (req, res) => {
     } else {
       checks.wenacy_api = msg;
     }
+  }
+
+  try {
+    if (!process.env.SNIPPE_API_KEY) {
+      checks.snippe_api = "Missing API key";
+    } else {
+      const bal = await getSnippeBalance();
+      checks.snippe_api = "Authenticated";
+      checks.snippe_balance =
+        bal?.available?.value ?? bal?.balance?.value ?? bal?.balance ?? null;
+    }
+  } catch (err) {
+    checks.snippe_api =
+      err.response?.data?.message || err.response?.data?.error || err.message;
   }
 
   res.json(checks);
@@ -508,6 +582,11 @@ async function queryProviderStatus(payment, options = {}) {
     return { provider: "wenacy", data };
   }
 
+  if (payment?.provider === "snippe") {
+    const data = await resolveSnippePaymentStatus(payment);
+    return { provider: "snippe", data };
+  }
+
   if (payment?.provider === "paymeafrica") {
     const data = await resolvePaymePaymentStatus(payment);
     return { provider: "paymeafrica", data };
@@ -536,6 +615,9 @@ function buildProviderUpdate(provider, statusData, source) {
   }
   if (provider === "wenacy") {
     return buildWenacyUpdate(statusData, source);
+  }
+  if (provider === "snippe") {
+    return buildSnippeUpdate(statusData, source);
   }
   if (provider === "paymeafrica") {
     return buildPaymeUpdate(statusData, source);
@@ -589,6 +671,69 @@ async function processWenacyWebhook(body) {
     );
   } else {
     console.log("Wenacy webhook update for", payment.reference, update.status);
+  }
+
+  return updated;
+}
+
+async function processSnippeWebhook(body, headerEvent) {
+  const event = String(headerEvent || body?.type || body?.event || "").toLowerCase();
+  const data = body?.data || body || {};
+  const snippeRef = data.reference || data.external_reference || data.id;
+  const localReference = data.metadata?.order_id || data.merchantReference;
+
+  if (!snippeRef && !localReference) {
+    throw new Error("Missing Snippe payment reference");
+  }
+
+  const lookup = [];
+  if (localReference) lookup.push({ reference: localReference });
+  if (snippeRef) {
+    lookup.push({ order_tracking_id: snippeRef }, { transaction_id: snippeRef });
+  }
+
+  const payment = await Payment.findOne({ $or: lookup, provider: "snippe" });
+  if (!payment) {
+    console.warn("Snippe webhook for unknown payment", localReference || snippeRef);
+    return null;
+  }
+
+  if (payment.status === "COMPLETED") {
+    return payment;
+  }
+
+  let statusOverride = data.status;
+  if (event === "payment.completed") statusOverride = "completed";
+  if (
+    event === "payment.failed" ||
+    event === "payment.voided" ||
+    event === "payment.expired"
+  ) {
+    statusOverride = "failed";
+  }
+
+  const update = buildSnippeUpdate({ ...data, status: statusOverride }, "WEBHOOK");
+  const updated = await Payment.findOneAndUpdate(
+    { _id: payment._id, status: { $ne: "COMPLETED" } },
+    {
+      ...update,
+      order_tracking_id: snippeRef || payment.order_tracking_id,
+      transaction_id: snippeRef || payment.transaction_id,
+      provider_response: data
+    },
+    { new: true }
+  );
+
+  if (updated?.status === "COMPLETED") {
+    console.log("Snippe webhook COMPLETED for", payment.reference);
+  } else if (updated?.status === "FAILED") {
+    console.log(
+      "Snippe webhook FAILED for",
+      payment.reference,
+      extractSnippeFailureMessage(data)
+    );
+  } else {
+    console.log("Snippe webhook update for", payment.reference, update.status);
   }
 
   return updated;
@@ -929,6 +1074,31 @@ async function syncWenacyPayment(payment) {
     );
   } catch (error) {
     console.error("Wenacy sync error for", payment.reference, error.message);
+    return payment;
+  }
+}
+
+async function syncSnippePayment(payment) {
+  if (!payment?.reference && !payment?.order_tracking_id) {
+    return payment;
+  }
+
+  try {
+    const { update } = await applyStatusFromQuery(payment, "SYNC", { bypassCache: true });
+    if (update.status === payment.status && update.reason === payment.reason) {
+      return payment;
+    }
+
+    return Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      {
+        ...update,
+        reason: update.status === "COMPLETED" ? "SYNCED_FROM_SNIPPE" : update.reason
+      },
+      { new: true }
+    );
+  } catch (error) {
+    console.error("Snippe sync error for", payment.reference, error.message);
     return payment;
   }
 }
@@ -1437,6 +1607,54 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
+    if (provider === "snippe") {
+      const webhookUrl =
+        process.env.SNIPPE_WEBHOOK_URL || `${getPublicBaseUrl()}/webhook/snippe`;
+      const push = await createSnippePayment({
+        amount,
+        phone,
+        reference,
+        webhookUrl
+      });
+
+      const snippeStatus = String(push?.status || "").toLowerCase();
+      if (snippeStatus === "failed") {
+        throw new Error(extractSnippeFailureMessage(push));
+      }
+
+      const snippeRef = push?.reference;
+      if (!snippeRef) {
+        throw new Error("Snippe did not return a payment reference");
+      }
+
+      await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: "PROCESSING",
+          reason: "USSD_SENT",
+          order_tracking_id: snippeRef,
+          transaction_id: snippeRef,
+          result: push.status,
+          message: `USSD push sent via ${operator} (Snippe)`,
+          provider_response: push
+        }
+      );
+
+      pollPaymentStatus(reference, phone, provider);
+
+      return res.json({
+        success: true,
+        provider,
+        operator,
+        data: {
+          reference,
+          snippe_reference: snippeRef,
+          status: push.status,
+          amount: push?.amount?.value || amount
+        }
+      });
+    }
+
     if (provider === "malipopay") {
       const push = await collectPayment({
         amount,
@@ -1747,6 +1965,11 @@ app.post("/webhook", async (req, res) => {
       return res.status(200).json({ success: true });
     }
 
+    if (payment.provider === "snippe") {
+      await processSnippeWebhook(body, body.event || body.type);
+      return res.status(200).json({ success: true });
+    }
+
     if (payment.status === "COMPLETED") {
       return res.status(200).json({ success: true });
     }
@@ -1939,6 +2162,9 @@ function enrichPaymentForAdmin(payment) {
   if (doc.provider === "wenacy") {
     return enrichWenacyPaymentForAdmin(doc);
   }
+  if (doc.provider === "snippe") {
+    return enrichSnippePaymentForAdmin(doc);
+  }
   if (doc.provider === "paymeafrica") {
     return enrichPaymePaymentForAdmin(doc);
   }
@@ -2014,13 +2240,14 @@ app.post("/admin/sync-payments", async (req, res) => {
   const requestedLimit = Math.min(100, Math.max(1, Number(req.body?.limit) || 25));
   const pending = await Payment.find({
     provider: {
-      $in: ["grebo", "abliner", "wenacy", "malipopay", "pesapal", "clickpesa", "paymeafrica"]
+      $in: ["grebo", "abliner", "wenacy", "snippe", "malipopay", "pesapal", "clickpesa", "paymeafrica"]
     },
     status: { $in: ["PROCESSING", "TIMEOUT", "PENDING"] },
     $or: [
       { provider: "clickpesa", reference: { $exists: true, $ne: null } },
       { provider: "paymeafrica", reference: { $exists: true, $ne: null } },
       { provider: "wenacy", reference: { $exists: true, $ne: null } },
+      { provider: "snippe", order_tracking_id: { $exists: true, $ne: null } },
       { order_tracking_id: { $exists: true, $ne: null } }
     ]
   })
@@ -2037,6 +2264,8 @@ app.post("/admin/sync-payments", async (req, res) => {
       results.push(await syncAblinerPayment(payment));
     } else if (payment.provider === "wenacy") {
       results.push(await syncWenacyPayment(payment));
+    } else if (payment.provider === "snippe") {
+      results.push(await syncSnippePayment(payment));
     } else if (payment.provider === "paymeafrica") {
       results.push(await syncPaymePayment(payment));
     } else if (payment.provider === "pesapal") {

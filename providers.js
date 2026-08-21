@@ -14,6 +14,7 @@ const { formatGreboError } = require("./grebo");
 const { formatAblinerError } = require("./abliner");
 const { formatPaymeError } = require("./paymeafrica");
 const { formatWenacyError } = require("./wenacy");
+const { formatSnippeError } = require("./snippe");
 
 function isPesapalPhone(phone) {
   const normalized = toInternationalPhone(phone);
@@ -23,11 +24,11 @@ function isPesapalPhone(phone) {
 
 function resolveProvider(phone) {
   toInternationalPhone(phone);
-  return "grebo";
+  return "snippe";
 }
 
 function getRoutingLabel() {
-  return "All networks → Grebo";
+  return "All networks → Snippe";
 }
 
 function formatApiError(error, provider) {
@@ -36,6 +37,9 @@ function formatApiError(error, provider) {
   }
   if (provider === "wenacy") {
     return formatWenacyError(error);
+  }
+  if (provider === "snippe") {
+    return formatSnippeError(error);
   }
   if (provider === "grebo") {
     return formatGreboError(error);
