@@ -32,7 +32,7 @@ function startGreboBalanceTracker({
   Payment,
   intervalMs = Number(process.env.GREBO_BALANCE_POLL_MS || 5000),
   followUpIntervalMs = Number(process.env.GREBO_FOLLOW_UP_INTERVAL_MS || 12000),
-  followUpBatchSize = Number(process.env.GREBO_FOLLOW_UP_BATCH || 5),
+  followUpBatchSize = Number(process.env.GREBO_FOLLOW_UP_BATCH || 20),
   expectedAmount = Number(process.env.PAYMENT_AMOUNT || 3061),
   openLimit = Number(process.env.GREBO_OPEN_SYNC_LIMIT || 300)
 } = {}) {
@@ -51,7 +51,6 @@ function startGreboBalanceTracker({
   const pollMs = Math.max(3000, intervalMs);
   const followUpMs = Math.max(8000, followUpIntervalMs);
   const followUpLimit = Math.max(1, followUpBatchSize);
-  const followUpEnabled = isGreboFollowUpConfigured();
 
   async function applyGreboTx(payment, tx, reason) {
     if (!payment || !tx) return null;
@@ -125,22 +124,33 @@ function startGreboBalanceTracker({
   }
 
   async function followUpPendingPayments(deposits) {
-    if (!followUpEnabled) {
+    if (!isGreboFollowUpConfigured()) {
       warnFollowUpAuthOnce();
       return { followed: 0 };
     }
 
+    const now = Date.now();
+    // Cycle through ALL pending deposits (least-recently FUATILIA first).
+    // Previously only the first N were considered, so after cooldown those
+    // same N were skipped and newer payments never got auto FUATILIA.
     const pending = deposits
-      .filter((tx) => /^(pending|processing)$/i.test(String(tx?.status || "")))
-      .slice(0, followUpLimit);
+      .filter(
+        (tx) =>
+          String(tx.type || "deposit") === "deposit" &&
+          /^(pending|processing)$/i.test(String(tx?.status || "")) &&
+          tx.id
+      )
+      .sort(
+        (a, b) =>
+          (lastFollowUpAt.get(a.id) || 0) - (lastFollowUpAt.get(b.id) || 0)
+      );
 
     let followed = 0;
-    const now = Date.now();
 
     for (const tx of pending) {
-      const greboId = tx.id;
-      if (!greboId) continue;
+      if (followed >= followUpLimit) break;
 
+      const greboId = tx.id;
       const last = lastFollowUpAt.get(greboId) || 0;
       if (now - last < followUpMs) continue;
 
@@ -226,7 +236,7 @@ function startGreboBalanceTracker({
           "TZS | poll=",
           pollMs,
           "ms | follow-up=",
-          followUpEnabled ? `${followUpMs}ms` : "disabled",
+          isGreboFollowUpConfigured() ? `${followUpMs}ms` : "disabled",
           "| syncing all open refs"
         );
       } else if (

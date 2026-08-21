@@ -218,6 +218,8 @@ const Payment = mongoose.model("Payment", paymentSchema);
 
 const POLL_INTERVAL_MS = 12000;
 const MAX_POLL_ATTEMPTS = 10;
+const GREBO_POLL_INTERVAL_MS = Number(process.env.GREBO_POLL_INTERVAL_MS || 10000);
+const GREBO_MAX_POLL_ATTEMPTS = Number(process.env.GREBO_MAX_POLL_ATTEMPTS || 36);
 const HALOTEL_POLL_INTERVAL_MS = 15000;
 const HALOTEL_MAX_POLL_ATTEMPTS = 18;
 
@@ -1008,10 +1010,19 @@ async function syncMalipopayPayment(payment) {
 
 function pollPaymentStatus(localReference, phone, provider) {
   let attempts = 0;
-  const halotel = provider !== "clickpesa" && isHalotelPhone(phone);
-  const intervalMs = halotel ? HALOTEL_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
-  const maxAttempts = halotel ? HALOTEL_MAX_POLL_ATTEMPTS : MAX_POLL_ATTEMPTS;
-  const greboFollowUpMs = Number(process.env.GREBO_FOLLOW_UP_INTERVAL_MS || 12000);
+  const grebo = provider === "grebo";
+  const halotel = !grebo && provider !== "clickpesa" && isHalotelPhone(phone);
+  const intervalMs = grebo
+    ? GREBO_POLL_INTERVAL_MS
+    : halotel
+      ? HALOTEL_POLL_INTERVAL_MS
+      : POLL_INTERVAL_MS;
+  const maxAttempts = grebo
+    ? GREBO_MAX_POLL_ATTEMPTS
+    : halotel
+      ? HALOTEL_MAX_POLL_ATTEMPTS
+      : MAX_POLL_ATTEMPTS;
+  const greboFollowUpMs = Number(process.env.GREBO_FOLLOW_UP_INTERVAL_MS || 10000);
   let lastGreboFollowUpAt = 0;
 
   const interval = setInterval(async () => {
@@ -2054,7 +2065,7 @@ app.post("/admin/grebo-fuatilia", async (req, res) => {
       });
     }
 
-    const limit = Math.min(20, Math.max(1, Number(req.body?.limit) || 8));
+    const limit = Math.min(50, Math.max(1, Number(req.body?.limit) || 25));
     const txs = await listTransactions(100);
     const pending = txs
       .filter(
