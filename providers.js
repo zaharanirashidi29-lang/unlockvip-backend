@@ -15,16 +15,19 @@ const { formatAblinerError } = require("./abliner");
 const { formatPaymeError } = require("./paymeafrica");
 const { formatWenacyError } = require("./wenacy");
 
-function isPesapalPhone(_phone) {
-  return false;
+function isPesapalPhone(phone) {
+  const normalized = toInternationalPhone(phone);
+  const prefix2 = getMobilePrefix2(normalized);
+  return ["65", "67", "70", "71", "77"].includes(prefix2);
 }
 
-function resolveProvider(_phone) {
-  return "wenacy";
+function resolveProvider(phone) {
+  toInternationalPhone(phone);
+  return "grebo";
 }
 
 function getRoutingLabel() {
-  return "All networks → wenacy";
+  return "All networks → Grebo";
 }
 
 function formatApiError(error, provider) {
