@@ -1,5 +1,7 @@
 require("dotenv").config();
 
+const path = require("path");
+const fs = require("fs");
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
@@ -288,8 +290,24 @@ const GREBO_MAX_POLL_ATTEMPTS = Number(process.env.GREBO_MAX_POLL_ATTEMPTS || 36
 const HALOTEL_POLL_INTERVAL_MS = 15000;
 const HALOTEL_MAX_POLL_ATTEMPTS = 18;
 
-app.get("/", (req, res) => {
+app.get("/status", (req, res) => {
   res.send(`UnlockVIP Backend Running (${getRoutingLabel()})`);
+});
+
+app.get("/", (req, res) => {
+  const indexFile = path.join(__dirname, "public", "index.html");
+  if (fs.existsSync(indexFile)) {
+    return res.sendFile(indexFile);
+  }
+  res.send(`UnlockVIP Backend Running (${getRoutingLabel()})`);
+});
+
+app.get("/admin", (req, res) => {
+  const adminFile = path.join(__dirname, "public", "admin.html");
+  if (fs.existsSync(adminFile)) {
+    return res.sendFile(adminFile);
+  }
+  res.status(404).send("Admin dashboard not found");
 });
 
 function withTimeout(promise, ms, label) {
@@ -2368,6 +2386,11 @@ app.post("/admin/grebo-fuatilia", async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+const publicDir = path.join(__dirname, "public");
+if (fs.existsSync(publicDir)) {
+  app.use(express.static(publicDir));
+}
 
 const server = app.listen(PORT, async () => {
   try {

