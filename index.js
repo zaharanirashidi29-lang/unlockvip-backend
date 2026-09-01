@@ -2369,7 +2369,7 @@ app.post("/admin/grebo-fuatilia", async (req, res) => {
   }
 });
 
-app.listen(PORT, async () => {
+const server = app.listen(PORT, async () => {
   try {
     await fixStalePollingRecords();
   } catch (error) {
@@ -2377,10 +2377,24 @@ app.listen(PORT, async () => {
   }
 
   try {
-    startGreboBalanceTracker({ Payment });
+    const wantGreboTracker =
+      process.env.GREBO_TRACKER === "1" ||
+      String(getRoutingLabel() || "").toLowerCase().includes("grebo");
+    if (wantGreboTracker) {
+      startGreboBalanceTracker({ Payment });
+    } else {
+      console.log("Grebo tracker skipped (routing is not Grebo)");
+    }
   } catch (error) {
     console.error("Failed to start Grebo balance tracker:", error.message);
   }
 
   console.log("Server running on port", PORT);
 });
+
+// Render's proxy keeps idle sockets ~60s. Node's default keepAliveTimeout is 5s,
+// so the proxy reuses a socket Node already closed and the dashboard dies with
+// TLS/connection resets after it had been working.
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
+server.timeout = 120000;

@@ -1,0 +1,14 @@
+name: Keep Render awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping health
+        run: curl -fsS --retry 2 --retry-delay 8 --max-time 90 "https://unlockvip-backend-1.onrender.com/health"
