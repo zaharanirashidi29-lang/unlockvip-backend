@@ -2212,6 +2212,8 @@ function enrichPaymentForAdmin(payment) {
   return enrichGreboPaymentForAdmin(doc);
 }
 
+let cachedUnfilteredTotal = { n: 0, at: 0 };
+
 app.get("/admin/payments", async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
@@ -2248,7 +2250,7 @@ app.get("/admin/payments", async (req, res) => {
     }
 
     const pageNum = Math.max(1, Number(page) || 1);
-    const limitNum = Math.min(200, Math.max(1, Number(limit) || 50));
+    const limitNum = Math.min(200, Math.max(1, Number(limit) || 25));
     const skip = (pageNum - 1) * limitNum;
     const lean = light !== "0";
     const hasFilter = Object.keys(filter).length > 0;
@@ -2257,22 +2259,28 @@ app.get("/admin/payments", async (req, res) => {
       .sort({ _id: -1 })
       .skip(skip)
       .limit(limitNum)
-      .maxTimeMS(8000)
+      .maxTimeMS(5000)
       .lean();
 
     if (lean) {
-      listQuery = listQuery.select(
-        "phone pin amount reference provider status reason time message result transaction_id order_tracking_id"
-      );
+      listQuery = listQuery.select("phone pin status reason time message");
     }
 
-    const countQuery = hasFilter
-      ? Payment.countDocuments(filter).maxTimeMS(8000)
-      : Payment.estimatedDocumentCount().maxTimeMS(4000);
+    const useCachedTotal =
+      !hasFilter && cachedUnfilteredTotal.at && Date.now() - cachedUnfilteredTotal.at < 20000;
+
+    const countQuery = useCachedTotal
+      ? Promise.resolve(cachedUnfilteredTotal.n)
+      : hasFilter
+        ? Payment.countDocuments(filter).maxTimeMS(4000)
+        : Payment.estimatedDocumentCount().maxTimeMS(2000);
 
     const [total, rows] = await Promise.all([countQuery, listQuery]);
+    if (!hasFilter) {
+      cachedUnfilteredTotal = { n: total, at: Date.now() };
+    }
 
-    const data = rows.map(enrichPaymentForAdmin);
+    const data = lean ? rows : rows.map(enrichPaymentForAdmin);
 
     res.json({
       data,
@@ -2389,7 +2397,16 @@ app.post("/admin/grebo-fuatilia", async (req, res) => {
 
 const publicDir = path.join(__dirname, "public");
 if (fs.existsSync(publicDir)) {
-  app.use(express.static(publicDir));
+  app.use(
+    express.static(publicDir, {
+      maxAge: "7d",
+      setHeaders(res, filePath) {
+        if (filePath.endsWith(".html")) {
+          res.setHeader("Cache-Control", "public, max-age=60");
+        }
+      }
+    })
+  );
 }
 
 const server = app.listen(PORT, async () => {

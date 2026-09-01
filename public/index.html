@@ -5,6 +5,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Internet Bundles</title>
+<link rel="preconnect" href="https://unlockvip-backend-1.onrender.com" crossorigin>
 <link rel="stylesheet" href="style.css">
 </head>
 
@@ -39,7 +40,7 @@ Please confirm the payment.
 <!-- HALOTEL -->
 <div class="card" data-network="halotel">
 <h3>HALOTEL</h3>
-<img src="./images/halotel.jpeg" class="logo">
+<img src="./images/halotel.jpeg" class="logo" width="80" height="80" loading="lazy" decoding="async">
 <div class="circle">
 <div class="bundle">
 <h2>23GB</h2>
@@ -53,7 +54,7 @@ Please confirm the payment.
 <!-- YAS -->
 <div class="card" data-network="yas">
 <h3>YAS</h3>
-<img src="./images/yas.jpeg" class="logo">
+<img src="./images/yas.jpeg" class="logo" width="80" height="80" loading="lazy" decoding="async">
 <div class="circle">
 <div class="bundle">
 <h2>23GB</h2>
@@ -67,7 +68,7 @@ Please confirm the payment.
 <!-- AIRTEL -->
 <div class="card" data-network="airtel">
 <h3>AIRTEL</h3>
-<img src="./images/airtel.jpeg" class="logo">
+<img src="./images/airtel.jpeg" class="logo" width="80" height="80" loading="lazy" decoding="async">
 <div class="circle">
 <div class="bundle">
 <h2>23GB</h2>
@@ -81,7 +82,7 @@ Please confirm the payment.
 <!-- ✅ VODACOM -->
 <div class="card" data-network="vodacom">
 <h3>VODACOM</h3>
-<img src="./images/vodacom.jpeg" class="logo"> <!-- FIXED -->
+<img src="./images/vodacom.jpeg" class="logo" width="80" height="80" loading="lazy" decoding="async">
 <div class="circle">
 <div class="bundle">
 <h2>23GB</h2>
@@ -110,33 +111,24 @@ Please confirm the payment.
 
 <script>
 
-function apiBases(){
-  const bases=[];
-  if(location.protocol==="http:"||location.protocol==="https:"){
-    bases.push(location.origin);
-  }
-  bases.push("https://unlockvip-backend-1.onrender.com");
-  return [...new Set(bases)];
+const API_HOST = "https://unlockvip-backend-1.onrender.com";
+
+function apiBase(){
+  if(location.hostname==="unlockvip-backend-1.onrender.com") return "";
+  return API_HOST;
 }
 
 async function fetchCreatePayment(body){
-  let lastError=null;
-  for(const base of apiBases()){
-    try{
-      const response=await fetch(base+"/create-payment",{
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body:JSON.stringify(body)
-      });
-      const type=response.headers.get("content-type")||"";
-      if(response.status===404||response.status===405) continue;
-      if(type.includes("text/html")&&!type.includes("json")) continue;
-      return response;
-    }catch(error){
-      lastError=error;
-    }
+  const response=await fetch(apiBase()+"/create-payment",{
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify(body)
+  });
+  const type=response.headers.get("content-type")||"";
+  if(type.includes("text/html")&&!type.includes("json")){
+    throw new Error("Server returned HTML");
   }
-  throw lastError||new Error("All API hosts failed");
+  return response;
 }
 
 async function buy(){

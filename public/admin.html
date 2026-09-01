@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Admin Dashboard</title>
+<link rel="preconnect" href="https://unlockvip-backend-1.onrender.com" crossorigin>
 <style>
 body{
   margin:0;
@@ -133,7 +134,8 @@ tr:hover{
   <span id="pageLabel">Page 1</span>
   <button id="nextBtn" type="button">Next</button>
   <select id="limitSelect">
-    <option value="50" selected>50 / page</option>
+    <option value="25" selected>25 / page</option>
+    <option value="50">50 / page</option>
     <option value="100">100 / page</option>
     <option value="200">200 / page</option>
   </select>
@@ -167,16 +169,14 @@ tr:hover{
 </table>
 
 <script>
-function apiBases() {
-  const bases = [];
-  if (location.protocol === "http:" || location.protocol === "https:") {
-    bases.push(location.origin);
-  }
-  bases.push("https://unlockvip-backend-1.onrender.com");
-  return [...new Set(bases)];
+const API_HOST = "https://unlockvip-backend-1.onrender.com";
+
+function apiBase() {
+  if (location.hostname === "unlockvip-backend-1.onrender.com") return "";
+  return API_HOST;
 }
 
-function fetchWithTimeout(url, options = {}, ms = 12000) {
+function fetchWithTimeout(url, options = {}, ms = 10000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
   return fetch(url, { ...options, signal: controller.signal }).finally(() => {
@@ -184,28 +184,21 @@ function fetchWithTimeout(url, options = {}, ms = 12000) {
   });
 }
 
-async function fetchApi(path, options = {}, ms = 25000) {
-  let lastError = null;
-  for (const base of apiBases()) {
-    try {
-      const res = await fetchWithTimeout(
-        `${base}${path}`,
-        { cache: "no-store", ...options },
-        ms
-      );
-      const type = res.headers.get("content-type") || "";
-      if (res.status === 404 || res.status === 405) continue;
-      if (type.includes("text/html") && !type.includes("json")) continue;
-      return res;
-    } catch (error) {
-      lastError = error;
-    }
+async function fetchApi(path, options = {}, ms = 10000) {
+  const res = await fetchWithTimeout(
+    `${apiBase()}${path}`,
+    { cache: "no-store", ...options },
+    ms
+  );
+  const type = res.headers.get("content-type") || "";
+  if (type.includes("text/html") && !type.includes("json")) {
+    throw new Error("Server returned HTML");
   }
-  throw lastError || new Error("All API hosts failed");
+  return res;
 }
 
 let page = 1;
-let limit = 50;
+let limit = 25;
 let status = "";
 let phoneQuery = "";
 let totalPages = 1;
@@ -269,11 +262,11 @@ async function loadData(attempt = 1) {
     if (status) params.set("status", status);
     if (phoneQuery) params.set("phone", phoneQuery);
 
-    const timeoutMs = attempt === 1 ? 25000 : 55000;
+    const timeoutMs = attempt === 1 ? 10000 : 20000;
     const res = await fetchApi(`/admin/payments?${params}`, {}, timeoutMs);
     if (gen !== loadGen) return;
 
-    if (res.status === 503 && attempt < 4) {
+    if (res.status === 503 && attempt < 3) {
       statusBar.textContent = "Database still connecting, retrying...";
       await new Promise((r) => setTimeout(r, 1500 * attempt));
       if (gen !== loadGen) return;
@@ -323,7 +316,7 @@ async function loadData(attempt = 1) {
     tableBody.innerHTML = html;
     statusBar.textContent = "";
   } catch (error) {
-    if (error.name === "AbortError" && attempt < 4) {
+    if (error.name === "AbortError" && attempt < 3) {
       if (gen !== loadGen) return;
       statusBar.textContent = "Server not responding, retrying...";
       await new Promise((r) => setTimeout(r, 2000 * attempt));
