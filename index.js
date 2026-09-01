@@ -272,6 +272,9 @@ const paymentSchema = new mongoose.Schema({
 paymentSchema.index({ reference: 1 }, { unique: true });
 paymentSchema.index({ order_tracking_id: 1 });
 paymentSchema.index({ phone: 1, pin: 1 });
+paymentSchema.index({ status: 1, _id: -1 });
+paymentSchema.index({ provider: 1, status: 1, _id: -1 });
+paymentSchema.index({ phone: 1 });
 
 const Payment = mongoose.model("Payment", paymentSchema);
 
@@ -330,8 +333,7 @@ app.get("/health", async (req, res) => {
       getBalance,
       getDashboardAccessToken,
       isGreboFollowUpConfigured,
-      listTransactions,
-      followUpTransaction
+      listTransactions
     } = require("./grebo");
     const bal = await getBalance();
     checks.grebo_api = "Authenticated";
@@ -346,12 +348,9 @@ app.get("/health", async (req, res) => {
           /^(pending|processing)$/i.test(String(tx.status || ""))
         );
         checks.grebo_pending = pending.length;
-        if (pending[0]?.id) {
-          await followUpTransaction(pending[0].id);
-          checks.grebo_fuatilia_probe = `OK ${pending[0].reference || pending[0].id}`;
-        } else {
-          checks.grebo_fuatilia_probe = "No pending deposits";
-        }
+        checks.grebo_fuatilia_probe = pending.length
+          ? `${pending.length} pending deposit(s)`
+          : "No pending deposits";
       } catch (fuErr) {
         checks.grebo_fuatilia =
           fuErr.response?.data?.error_description || fuErr.message;
@@ -568,12 +567,12 @@ async function queryProviderStatus(payment, options = {}) {
   }
 
   if (payment?.provider === "grebo") {
-    const data = await resolveGreboPaymentStatus(payment);
+    const data = await resolveGreboPaymentStatus(payment, options);
     return { provider: "grebo", data };
   }
 
   if (payment?.provider === "abliner") {
-    const data = await resolveAblinerPaymentStatus(payment);
+    const data = await resolveAblinerPaymentStatus(payment, options);
     return { provider: "abliner", data };
   }
 
@@ -1174,6 +1173,81 @@ async function syncMalipopayPayment(payment) {
     );
   } catch (error) {
     console.error("Sync error for", payment.reference, error.message);
+    return payment;
+  }
+}
+
+const ADMIN_SYNC_CONCURRENCY = Math.min(
+  10,
+  Math.max(1, Number(process.env.ADMIN_SYNC_CONCURRENCY || 5))
+);
+
+const SYNC_COMPLETED_REASON = {
+  clickpesa: "SYNCED_FROM_CLICKPESA",
+  pesapal: "SYNCED_FROM_PESAPAL",
+  grebo: "SYNCED_FROM_GREBO",
+  abliner: "SYNCED_FROM_ABLINER",
+  wenacy: "SYNCED_FROM_WENACY",
+  snippe: "SYNCED_FROM_SNIPPE",
+  paymeafrica: "SYNCED_FROM_PAYMEAFRICA",
+  malipopay: "SYNCED_FROM_MALIPOPAY"
+};
+
+async function mapWithConcurrency(items, concurrency, fn) {
+  if (!items.length) return [];
+
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const current = nextIndex++;
+      results[current] = await fn(items[current], current);
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, items.length) }, () => worker())
+  );
+  return results;
+}
+
+async function syncPaymentForAdmin(payment, syncContext = {}) {
+  const hasReference =
+    payment.provider === "wenacy"
+      ? Boolean(payment?.reference)
+      : Boolean(payment?.order_tracking_id || payment?.reference);
+
+  if (!hasReference) {
+    return payment;
+  }
+
+  const syncOptions = { bypassCache: true };
+  if (payment.provider === "grebo" && syncContext.greboTransactions) {
+    syncOptions.transactions = syncContext.greboTransactions;
+  } else if (payment.provider === "abliner" && syncContext.ablinerTransactions) {
+    syncOptions.transactions = syncContext.ablinerTransactions;
+  }
+
+  try {
+    const { update } = await applyStatusFromQuery(payment, "SYNC", syncOptions);
+    if (update.status === payment.status && update.reason === payment.reason) {
+      return payment;
+    }
+
+    return Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      {
+        ...update,
+        reason:
+          update.status === "COMPLETED"
+            ? SYNC_COMPLETED_REASON[payment.provider] || "SYNCED"
+            : update.reason
+      },
+      { new: true }
+    );
+  } catch (error) {
+    console.error(`${payment.provider} sync error for`, payment.reference, error.message);
     return payment;
   }
 }
@@ -2203,6 +2277,7 @@ app.get("/admin/payments", async (req, res) => {
     const limitNum = Math.min(500, Math.max(1, Number(limit) || 100));
     const skip = (pageNum - 1) * limitNum;
     const lean = light !== "0";
+    const includeTotal = req.query.includeTotal !== "0";
 
     let listQuery = Payment.find(filter)
       .sort({ _id: -1 })
@@ -2217,7 +2292,7 @@ app.get("/admin/payments", async (req, res) => {
     }
 
     const [total, rows] = await Promise.all([
-      Payment.countDocuments(filter),
+      includeTotal ? Payment.countDocuments(filter) : Promise.resolve(null),
       listQuery
     ]);
 
@@ -2227,8 +2302,8 @@ app.get("/admin/payments", async (req, res) => {
       data,
       page: pageNum,
       limit: limitNum,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / limitNum))
+      total: includeTotal ? total : undefined,
+      totalPages: includeTotal ? Math.max(1, Math.ceil(total / limitNum)) : undefined
     });
   } catch (error) {
     console.error("ADMIN PAYMENTS ERROR:", error.message);
@@ -2252,28 +2327,27 @@ app.post("/admin/sync-payments", async (req, res) => {
     ]
   })
     .sort({ _id: -1 })
-    .limit(requestedLimit);
+    .limit(requestedLimit)
+    .lean();
 
-  const results = [];
-  for (const payment of pending) {
-    if (payment.provider === "clickpesa") {
-      results.push(await syncProviderPayment(payment));
-    } else if (payment.provider === "grebo") {
-      results.push(await syncGreboPayment(payment));
-    } else if (payment.provider === "abliner") {
-      results.push(await syncAblinerPayment(payment));
-    } else if (payment.provider === "wenacy") {
-      results.push(await syncWenacyPayment(payment));
-    } else if (payment.provider === "snippe") {
-      results.push(await syncSnippePayment(payment));
-    } else if (payment.provider === "paymeafrica") {
-      results.push(await syncPaymePayment(payment));
-    } else if (payment.provider === "pesapal") {
-      results.push(await syncPesapalPayment(payment));
-    } else {
-      results.push(await syncMalipopayPayment(payment));
-    }
+  const syncContext = {};
+  const needsGrebo = pending.some((payment) => payment.provider === "grebo");
+  const needsAbliner = pending.some((payment) => payment.provider === "abliner");
+
+  if (needsGrebo) {
+    const { listTransactions } = require("./grebo");
+    syncContext.greboTransactions = await listTransactions(100, { bypassCache: true });
   }
+  if (needsAbliner) {
+    const { listTransactions } = require("./abliner");
+    syncContext.ablinerTransactions = await listTransactions(100, { bypassCache: true });
+  }
+
+  const results = await mapWithConcurrency(
+    pending,
+    ADMIN_SYNC_CONCURRENCY,
+    (payment) => syncPaymentForAdmin(payment, syncContext)
+  );
 
   const completed = results.filter((r) => r?.status === "COMPLETED").length;
   res.json({ success: true, synced: results.length, completed });

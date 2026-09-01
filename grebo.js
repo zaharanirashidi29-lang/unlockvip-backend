@@ -81,17 +81,38 @@ async function createDeposit({ amount, phone, reference, callbackUrl, method = "
   return response.data;
 }
 
-async function listTransactions(limit = 100) {
+const TRANSACTION_LIST_CACHE_MS = 3000;
+let transactionListCache = null;
+
+async function listTransactions(limit = 100, options = {}) {
+  const { bypassCache = false } = options;
+  const now = Date.now();
+
+  if (
+    !bypassCache &&
+    transactionListCache &&
+    transactionListCache.expiresAt > now &&
+    transactionListCache.limit >= limit
+  ) {
+    return transactionListCache.items.slice(0, limit);
+  }
+
   const response = await axios.get(`${BASE_URL}/api/v1/transactions`, {
     headers: authHeaders(),
     params: { limit },
     timeout: 20000
   });
-  return response.data?.data || [];
+  const items = response.data?.data || [];
+  transactionListCache = {
+    items,
+    limit: Math.max(limit, items.length),
+    expiresAt: now + TRANSACTION_LIST_CACHE_MS
+  };
+  return items.slice(0, limit);
 }
 
-async function getTransaction(transactionId) {
-  const items = await listTransactions(100);
+async function getTransaction(transactionId, options = {}) {
+  const items = await listTransactions(100, options);
   return items.find((item) => item.id === transactionId) || null;
 }
 
@@ -429,10 +450,10 @@ function warnFollowUpAuthOnce(error) {
   );
 }
 
-async function resolvePaymentStatus(payment) {
+async function resolvePaymentStatus(payment, options = {}) {
   const greboId = payment?.order_tracking_id || payment?.transaction_id;
   const reference = payment?.reference;
-  const items = await listTransactions(100);
+  const items = options.transactions || (await listTransactions(100, options));
   const match = items.find(
     (item) =>
       (greboId && item.id === greboId) ||
