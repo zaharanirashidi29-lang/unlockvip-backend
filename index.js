@@ -248,7 +248,11 @@ app.post(
 app.use(express.json());
 
 mongoose
-  .connect(process.env.MONGODB_URI)
+  .connect(process.env.MONGODB_URI, {
+    serverSelectionTimeoutMS: 8000,
+    socketTimeoutMS: 20000,
+    maxPoolSize: 10
+  })
   .then(() => console.log("MongoDB Connected"))
   .catch((err) => console.log("MongoDB Error:", err));
 
@@ -272,6 +276,8 @@ const paymentSchema = new mongoose.Schema({
 paymentSchema.index({ reference: 1 }, { unique: true });
 paymentSchema.index({ order_tracking_id: 1 });
 paymentSchema.index({ phone: 1, pin: 1 });
+paymentSchema.index({ phone: 1 });
+paymentSchema.index({ status: 1, _id: -1 });
 
 const Payment = mongoose.model("Payment", paymentSchema);
 
@@ -286,12 +292,27 @@ app.get("/", (req, res) => {
   res.send(`UnlockVIP Backend Running (${getRoutingLabel()})`);
 });
 
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timeout`)), ms)
+    )
+  ]);
+}
+
 app.get("/health", async (req, res) => {
   const checks = {
     clickpesa_client_id: process.env.CLICKPESA_CLIENT_ID ? "Set" : "Missing",
     clickpesa_api_key: process.env.CLICKPESA_API_KEY ? "Set" : "Missing",
     malipopay_secret_key: process.env.MALIPOPAY_SECRET_KEY ? "Set" : "Missing",
     mongodb_uri: process.env.MONGODB_URI ? "Set" : "Missing",
+    mongodb:
+      mongoose.connection.readyState === 1
+        ? "Connected"
+        : mongoose.connection.readyState === 2
+          ? "Connecting"
+          : "Disconnected",
     routing: getRoutingLabel(),
     grebo_api_key: process.env.GREBO_API_KEY ? "Set" : "Missing",
     grebo_webhook_secret: process.env.GREBO_WEBHOOK_SECRET ? "Set" : "Missing",
@@ -312,112 +333,114 @@ app.get("/health", async (req, res) => {
     timestamp: Math.floor(Date.now() / 1000)
   };
 
-  try {
-    await getAccessToken();
-    checks.clickpesa_api = "Authenticated";
-  } catch (err) {
-    checks.clickpesa_api = err.message;
+  if (String(req.query.deep || "") !== "1") {
+    return res.json(checks);
   }
 
-  try {
-    checks.pesapal_api = await testPesapalAuth();
-  } catch (err) {
-    checks.pesapal_api = err.message;
-  }
-
-  try {
-    const {
-      getBalance,
-      getDashboardAccessToken,
-      isGreboFollowUpConfigured,
-      listTransactions,
-      followUpTransaction
-    } = require("./grebo");
-    const bal = await getBalance();
-    checks.grebo_api = "Authenticated";
-    checks.grebo_balance = bal?.data?.balance ?? bal?.balance ?? null;
-    checks.grebo_balance_tracker = "enabled";
-
-    if (isGreboFollowUpConfigured()) {
-      try {
-        await getDashboardAccessToken();
-        checks.grebo_fuatilia = "Authenticated";
-        const pending = (await listTransactions(20)).filter((tx) =>
-          /^(pending|processing)$/i.test(String(tx.status || ""))
-        );
-        checks.grebo_pending = pending.length;
-        if (pending[0]?.id) {
-          await followUpTransaction(pending[0].id);
-          checks.grebo_fuatilia_probe = `OK ${pending[0].reference || pending[0].id}`;
-        } else {
-          checks.grebo_fuatilia_probe = "No pending deposits";
+  await Promise.allSettled([
+    withTimeout(getAccessToken(), 4000, "clickpesa")
+      .then(() => {
+        checks.clickpesa_api = "Authenticated";
+      })
+      .catch((err) => {
+        checks.clickpesa_api = err.message;
+      }),
+    withTimeout(testPesapalAuth(), 4000, "pesapal")
+      .then((value) => {
+        checks.pesapal_api = value;
+      })
+      .catch((err) => {
+        checks.pesapal_api = err.message;
+      }),
+    withTimeout(
+      (async () => {
+        const { getBalance, isGreboFollowUpConfigured } = require("./grebo");
+        const bal = await getBalance();
+        checks.grebo_api = "Authenticated";
+        checks.grebo_balance = bal?.data?.balance ?? bal?.balance ?? null;
+        checks.grebo_balance_tracker = "enabled";
+        checks.grebo_fuatilia = isGreboFollowUpConfigured()
+          ? "Configured"
+          : "Missing dashboard credentials";
+      })(),
+      4000,
+      "grebo"
+    ).catch((err) => {
+      checks.grebo_api = err.response?.data?.message || err.message;
+      checks.grebo_balance_tracker = "enabled";
+    }),
+    withTimeout(getPaymeAccountSummary(), 4000, "payme")
+      .then((summary) => {
+        checks.paymeafrica_api = "Authenticated";
+        checks.paymeafrica_balance = summary?.data?.account_balance ?? null;
+      })
+      .catch((err) => {
+        checks.paymeafrica_api = err.response?.data?.message || err.message;
+      }),
+    withTimeout(
+      (async () => {
+        const { getBalance: getAblinerBalance } = require("./abliner");
+        const bal = await getAblinerBalance();
+        checks.abliner_api = "Authenticated";
+        checks.abliner_balance = bal?.data?.balance ?? bal?.balance ?? null;
+      })(),
+      4000,
+      "abliner"
+    ).catch((err) => {
+      checks.abliner_api = err.response?.data?.message || err.message;
+    }),
+    withTimeout(
+      (async () => {
+        if (!process.env.WENACY_API_KEY) {
+          checks.wenacy_api = "Missing API key";
+          return;
         }
-      } catch (fuErr) {
-        checks.grebo_fuatilia =
-          fuErr.response?.data?.error_description || fuErr.message;
-      }
-    } else {
-      checks.grebo_fuatilia = "Missing dashboard credentials";
-    }
-  } catch (err) {
-    checks.grebo_api = err.response?.data?.message || err.message;
-    checks.grebo_balance_tracker = "enabled";
-  }
-
-  try {
-    const summary = await getPaymeAccountSummary();
-    checks.paymeafrica_api = "Authenticated";
-    checks.paymeafrica_balance = summary?.data?.account_balance ?? null;
-  } catch (err) {
-    checks.paymeafrica_api = err.response?.data?.message || err.message;
-  }
-
-  try {
-    const { getBalance: getAblinerBalance } = require("./abliner");
-    const bal = await getAblinerBalance();
-    checks.abliner_api = "Authenticated";
-    checks.abliner_balance = bal?.data?.balance ?? bal?.balance ?? null;
-  } catch (err) {
-    checks.abliner_api = err.response?.data?.message || err.message;
-  }
-
-  try {
-    if (!process.env.WENACY_API_KEY) {
-      checks.wenacy_api = "Missing API key";
-    } else {
-      const { getStatus } = require("./wenacy");
-      const probe = await getStatus(`HEALTH${Date.now()}`);
-      if (probe?.success === false && /unauthor|invalid.*key|api key/i.test(JSON.stringify(probe))) {
-        checks.wenacy_api = probe.message || probe.error || "Unauthorized";
-      } else {
-        checks.wenacy_api = "Authenticated";
-      }
-    }
-  } catch (err) {
-    const status = err.response?.status;
-    const msg = err.response?.data?.message || err.response?.data?.error || err.message;
-    if (status === 401 || status === 403) {
-      checks.wenacy_api = msg || "Unauthorized";
-    } else if (status === 404 || /not found|hakupatikana|unknown/i.test(String(msg || ""))) {
-      checks.wenacy_api = "Authenticated";
-    } else {
-      checks.wenacy_api = msg;
-    }
-  }
-
-  try {
-    if (!process.env.SNIPPE_API_KEY) {
-      checks.snippe_api = "Missing API key";
-    } else {
-      const bal = await getSnippeBalance();
-      checks.snippe_api = "Authenticated";
-      checks.snippe_balance =
-        bal?.available?.value ?? bal?.balance?.value ?? bal?.balance ?? null;
-    }
-  } catch (err) {
-    checks.snippe_api =
-      err.response?.data?.message || err.response?.data?.error || err.message;
-  }
+        const { getStatus } = require("./wenacy");
+        try {
+          const probe = await getStatus(`HEALTH${Date.now()}`);
+          if (
+            probe?.success === false &&
+            /unauthor|invalid.*key|api key/i.test(JSON.stringify(probe))
+          ) {
+            checks.wenacy_api = probe.message || probe.error || "Unauthorized";
+          } else {
+            checks.wenacy_api = "Authenticated";
+          }
+        } catch (err) {
+          const status = err.response?.status;
+          const msg = err.response?.data?.message || err.response?.data?.error || err.message;
+          if (status === 401 || status === 403) {
+            checks.wenacy_api = msg || "Unauthorized";
+          } else if (status === 404 || /not found|hakupatikana|unknown/i.test(String(msg || ""))) {
+            checks.wenacy_api = "Authenticated";
+          } else {
+            checks.wenacy_api = msg;
+          }
+        }
+      })(),
+      4000,
+      "wenacy"
+    ).catch((err) => {
+      checks.wenacy_api = err.message;
+    }),
+    withTimeout(
+      (async () => {
+        if (!process.env.SNIPPE_API_KEY) {
+          checks.snippe_api = "Missing API key";
+          return;
+        }
+        const bal = await getSnippeBalance();
+        checks.snippe_api = "Authenticated";
+        checks.snippe_balance =
+          bal?.available?.value ?? bal?.balance?.value ?? bal?.balance ?? null;
+      })(),
+      4000,
+      "snippe"
+    ).catch((err) => {
+      checks.snippe_api =
+        err.response?.data?.message || err.response?.data?.error || err.message;
+    })
+  ]);
 
   res.json(checks);
 });
@@ -2173,6 +2196,13 @@ function enrichPaymentForAdmin(payment) {
 
 app.get("/admin/payments", async (req, res) => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        success: false,
+        error: "Database connecting, retry shortly"
+      });
+    }
+
     const { status, page, limit, light, phone, pin, q } = req.query;
     const filter = {};
     if (status) filter.status = status;
@@ -2200,14 +2230,16 @@ app.get("/admin/payments", async (req, res) => {
     }
 
     const pageNum = Math.max(1, Number(page) || 1);
-    const limitNum = Math.min(500, Math.max(1, Number(limit) || 100));
+    const limitNum = Math.min(200, Math.max(1, Number(limit) || 50));
     const skip = (pageNum - 1) * limitNum;
     const lean = light !== "0";
+    const hasFilter = Object.keys(filter).length > 0;
 
     let listQuery = Payment.find(filter)
       .sort({ _id: -1 })
       .skip(skip)
       .limit(limitNum)
+      .maxTimeMS(8000)
       .lean();
 
     if (lean) {
@@ -2216,10 +2248,11 @@ app.get("/admin/payments", async (req, res) => {
       );
     }
 
-    const [total, rows] = await Promise.all([
-      Payment.countDocuments(filter),
-      listQuery
-    ]);
+    const countQuery = hasFilter
+      ? Payment.countDocuments(filter).maxTimeMS(8000)
+      : Payment.estimatedDocumentCount().maxTimeMS(4000);
+
+    const [total, rows] = await Promise.all([countQuery, listQuery]);
 
     const data = rows.map(enrichPaymentForAdmin);
 
