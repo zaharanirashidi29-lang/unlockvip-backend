@@ -5,14 +5,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Internet Bundles</title>
-<link rel="canonical" href="https://www.unlockvip.co.tz/">
+<link rel="canonical" href="https://unlockvip.co.tz/">
 <script>
 (function () {
   var host = location.hostname.toLowerCase();
   if (!host.endsWith(".onrender.com")) return;
   if (location.pathname.indexOf("admin") !== -1) return;
+  if (location.pathname.indexOf("dashboard") !== -1) return;
   var path = location.pathname === "/index.html" ? "/" : location.pathname;
-  location.replace("https://www.unlockvip.co.tz" + path + location.search + location.hash);
+  location.replace("https://unlockvip.co.tz" + path + location.search + location.hash);
 })();
 </script>
 <link rel="preconnect" href="https://unlockvip-backend-1.onrender.com" crossorigin>
@@ -124,7 +125,13 @@ Please confirm the payment.
 const API_HOST = "https://unlockvip-backend-1.onrender.com";
 
 function apiBase(){
-  if(location.hostname==="unlockvip-backend-1.onrender.com") return "";
+  var h=location.hostname.toLowerCase();
+  if(
+    h==="unlockvip.co.tz"||
+    h==="www.unlockvip.co.tz"||
+    h==="unlockvip-frontend.onrender.com"||
+    h==="unlockvip-backend-1.onrender.com"
+  ) return "";
   return API_HOST;
 }
 

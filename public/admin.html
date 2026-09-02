@@ -172,7 +172,15 @@ tr:hover{
 const API_HOST = "https://unlockvip-backend-1.onrender.com";
 
 function apiBase() {
-  if (location.hostname === "unlockvip-backend-1.onrender.com") return "";
+  const host = location.hostname.toLowerCase();
+  if (
+    host === "unlockvip.co.tz" ||
+    host === "www.unlockvip.co.tz" ||
+    host === "unlockvip-frontend.onrender.com" ||
+    host === "unlockvip-backend-1.onrender.com"
+  ) {
+    return "";
+  }
   return API_HOST;
 }
 
