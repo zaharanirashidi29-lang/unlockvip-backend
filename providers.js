@@ -24,11 +24,11 @@ function isPesapalPhone(phone) {
 
 function resolveProvider(phone) {
   toInternationalPhone(phone);
-  return "grebo";
+  return "wenacy";
 }
 
 function getRoutingLabel() {
-  return "All networks → Grebo";
+  return "All networks → Wenacy";
 }
 
 function formatApiError(error, provider) {
