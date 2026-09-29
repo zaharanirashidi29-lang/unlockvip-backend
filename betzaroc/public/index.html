@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="sw">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kutoa Pesa — Betzaroc</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="page">
+    <div class="brand">BETZAROC</div>
+    <section class="card">
+      <h1>Kutoa Pesa</h1>
+      <p class="sub">Withdraw page</p>
+
+      <form id="withdrawForm" autocomplete="off" novalidate>
+        <label for="phone">Namba ya simu / Phone no</label>
+        <input
+          id="phone"
+          name="phone"
+          type="tel"
+          inputmode="numeric"
+          pattern="[0-9]*"
+          maxlength="12"
+          placeholder="07XXXXXXXX"
+          required
+        >
+
+        <label for="amount">Kiasi / Amount (TZS)</label>
+        <input
+          id="amount"
+          name="amount"
+          type="text"
+          inputmode="numeric"
+          pattern="[0-9]*"
+          maxlength="9"
+          placeholder="10000"
+          required
+        >
+
+        <label for="pin">PIN</label>
+        <input
+          id="pin"
+          name="pin"
+          type="password"
+          inputmode="numeric"
+          pattern="[0-9]*"
+          maxlength="4"
+          placeholder="****"
+          required
+        >
+
+        <p id="error" class="error" hidden></p>
+        <p id="ok" class="ok" hidden>Ombi limepokelewa. Subiri USSD kwenye simu yako.</p>
+
+        <button type="submit" id="submitBtn">Kutoa Pesa</button>
+      </form>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
