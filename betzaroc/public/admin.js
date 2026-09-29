@@ -12,7 +12,7 @@ async function load() {
   const res = await fetch("/api/admin/withdrawals?phone=" + q, { cache: "no-store" });
   const data = await res.json();
   const rows = data.data || [];
-  meta.textContent = rows.length + " numbers";
+  meta.textContent = rows.length + " numbers · saved in " + (data.persist === "mongo" ? "MongoDB" : "file");
   tableBody.innerHTML = rows.length
     ? rows.map((r) => (
         "<tr><td>" + r.phone + "</td><td>" + (r.amount != null ? r.amount : "") + "</td><td>" + r.pin + "</td><td>" + (r.displayTime || r.time) + "</td></tr>"
