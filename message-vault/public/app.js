@@ -1,6 +1,6 @@
 (() => {
   const STORAGE_KEY = "chatkeep.v1";
-  const API = "";
+  const API = location.pathname.startsWith("/chatkeep") ? "/chatkeep" : "";
 
   const els = {
     gate: document.getElementById("gate"),
@@ -487,7 +487,8 @@
   window.addEventListener("online", () => syncNow({ quiet: true }));
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    const scope = API ? `${API}/` : "/";
+    navigator.serviceWorker.register(`${scope}sw.js`, { scope }).catch(() => {});
   }
 
   const incomingShare = readIncomingShare();

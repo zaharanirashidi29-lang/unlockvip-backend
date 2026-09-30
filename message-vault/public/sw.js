@@ -1,5 +1,8 @@
-const CACHE = "chatkeep-shell-v2";
-const ASSETS = ["/", "/index.html", "/styles.css", "/app.js", "/manifest.json", "/icon.svg"];
+const CACHE = "chatkeep-shell-v3";
+const SCOPE_PATH = new URL(self.registration.scope).pathname.replace(/\/$/, "");
+const ASSETS = ["/", "/index.html", "/styles.css", "/app.js", "/manifest.json", "/icon.svg"].map(
+  (asset) => `${SCOPE_PATH}${asset}`
+);
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(ASSETS)));

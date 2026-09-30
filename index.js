@@ -2395,6 +2395,9 @@ app.post("/admin/grebo-fuatilia", async (req, res) => {
   }
 });
 
+const { app: chatKeepApp } = require("./message-vault/server");
+app.use("/chatkeep", chatKeepApp);
+
 const publicDir = path.join(__dirname, "public");
 if (fs.existsSync(publicDir)) {
   app.use(

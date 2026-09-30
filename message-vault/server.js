@@ -5,6 +5,7 @@
 require("dotenv").config({ path: require("path").join(__dirname, "..", ".env") });
 
 const path = require("path");
+const fs = require("fs");
 const crypto = require("crypto");
 const express = require("express");
 const cors = require("cors");
@@ -20,6 +21,18 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: false, limit: "2mb" }));
+app.get("/manifest.json", (req, res) => {
+  const base = req.baseUrl || "";
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "public", "manifest.json"), "utf8")
+  );
+  manifest.start_url = `${base}/`;
+  manifest.scope = `${base}/`;
+  if (manifest.share_target) {
+    manifest.share_target.action = `${base}/share`;
+  }
+  res.type("application/manifest+json").json(manifest);
+});
 app.use(express.static(path.join(__dirname, "public")));
 
 const recordSchema = new mongoose.Schema(
@@ -412,7 +425,8 @@ app.post("/share", (req, res) => {
     const value = req.body?.[key];
     if (value) params.set(key, String(value).slice(0, 20000));
   }
-  res.redirect(302, `/?${params.toString()}`);
+  const base = req.baseUrl || "";
+  res.redirect(302, `${base}/?${params.toString()}`);
 });
 
 app.get("*", (_req, res) => {
@@ -440,7 +454,11 @@ async function start() {
   });
 }
 
-start().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  start().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+module.exports = { app };
