@@ -133,8 +133,10 @@ function useMemoryFallback(reason) {
 function requireAccess(req, res, next) {
   const code = String(
     req.headers["x-access-code"] || req.query.accessCode || req.body?.accessCode || ""
-  ).trim();
-  if (code !== ACCESS_CODE) {
+  )
+    .trim()
+    .toLowerCase();
+  if (code !== String(ACCESS_CODE).trim().toLowerCase()) {
     return res.status(401).json({ success: false, error: "Invalid access code" });
   }
   return next();
