@@ -19,6 +19,7 @@ const ACCESS_CODE =
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
+app.use(express.urlencoded({ extended: false, limit: "2mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
 const recordSchema = new mongoose.Schema(
@@ -403,6 +404,15 @@ app.get("/api/stats", requireAccess, async (_req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, error: "Failed to load stats" });
   }
+});
+
+app.post("/share", (req, res) => {
+  const params = new URLSearchParams();
+  for (const key of ["title", "text", "url"]) {
+    const value = req.body?.[key];
+    if (value) params.set(key, String(value).slice(0, 20000));
+  }
+  res.redirect(302, `/?${params.toString()}`);
 });
 
 app.get("*", (_req, res) => {

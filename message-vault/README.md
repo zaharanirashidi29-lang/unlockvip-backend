@@ -2,7 +2,13 @@
 
 Personal chat/message record vault for your phone.
 
-Save messages **you** choose to keep (paste, type, or share into the app). Sync them across phones that use the same access code. ChatKeep does **not** scrape WhatsApp, SMS, or other apps.
+Save messages you choose to keep, then sync them across phones that use the same access code.
+
+ChatKeep talks to your message apps in the ways a phone allows:
+
+- **Share in:** from WhatsApp or Messages, tap Share and choose ChatKeep (install it to the home screen first).
+- **Open out:** tap **Messages** or **WhatsApp** on a saved note, or use **Open in Messages** / **Open in WhatsApp** on the draft.
+- **Import:** in WhatsApp, export a chat as a `.txt` file, then tap **Import chat**.
 
 ## Run
 

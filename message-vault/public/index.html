@@ -59,8 +59,9 @@
             <p id="gate-error" class="error" hidden></p>
           </form>
           <p class="hint">
-            Tip: install ChatKeep to your home screen for fastest access. Paste
-            chats you want to keep — it does not read WhatsApp or SMS for you.
+            Install ChatKeep to your home screen, then use Share in WhatsApp or
+            Messages to send a chat here. You can also open a saved note back in
+            those apps.
           </p>
         </div>
       </section>
@@ -82,6 +83,22 @@
         </header>
 
         <p id="sync-status" class="sync-status" aria-live="polite">Ready</p>
+
+        <section class="bridge" aria-label="Message apps">
+          <p class="bridge-title">Messages &amp; WhatsApp</p>
+          <p class="bridge-copy">
+            Share a chat into ChatKeep from your message app, or open a note in
+            Messages or WhatsApp.
+          </p>
+          <div class="bridge-actions">
+            <button type="button" id="send-sms" class="btn ghost">Open in Messages</button>
+            <button type="button" id="send-wa" class="btn ghost">Open in WhatsApp</button>
+            <label class="btn ghost file-btn">
+              Import chat
+              <input id="import-file" type="file" accept=".txt,text/plain" hidden />
+            </label>
+          </div>
+        </section>
 
         <form id="compose" class="compose">
           <div class="compose-row">

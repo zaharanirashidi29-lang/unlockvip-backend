@@ -1,4 +1,4 @@
-const CACHE = "chatkeep-shell-v1";
+const CACHE = "chatkeep-shell-v2";
 const ASSETS = ["/", "/index.html", "/styles.css", "/app.js", "/manifest.json", "/icon.svg"];
 
 self.addEventListener("install", (event) => {
