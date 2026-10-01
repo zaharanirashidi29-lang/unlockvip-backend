@@ -1008,7 +1008,7 @@ app.post("/api/bet", async (req, res) => {
   if (closed) return res.status(400).json({ ok: false, error: closed });
   const odds = selections.reduce((n, s) => n * Number(s.odd || 0), 1);
   if (!Number.isFinite(odds) || odds <= 1) return res.status(400).json({ ok: false, error: "Invalid odds" });
-  if (!(await debit(user, stake))) return res.status(400).json({ ok: false, error: "Not enough balance" });
+  if (!(await debit(user, stake))) return res.status(400).json({ ok: false, error: "Insufficient balance. Please deposit" });
   const payout = Math.round(stake * odds);
   const code = await makeBetCode();
   const rec = {
@@ -1092,7 +1092,7 @@ app.post("/api/bet/place-code", async (req, res) => {
   if (closed) return res.status(400).json({ ok: false, error: closed });
   const odds = selections.reduce((n, s) => n * Number(s.odd || 0), 1);
   if (!Number.isFinite(odds) || odds <= 1) return res.status(400).json({ ok: false, error: "Invalid odds" });
-  if (!(await debit(user, stake))) return res.status(400).json({ ok: false, error: "Not enough balance" });
+  if (!(await debit(user, stake))) return res.status(400).json({ ok: false, error: "Insufficient balance. Please deposit" });
   const rec = {
     id: nid(),
     userId: user.id,
@@ -1155,7 +1155,7 @@ app.post("/api/game/aviator/bet", async (req, res) => {
   if (liveAviator.players.some((p) => p.userId === user.id && p.slot === slot)) {
     return res.status(400).json({ ok: false, error: "Already in this round" });
   }
-  if (!(await debit(user, stake))) return res.status(400).json({ ok: false, error: "Not enough balance" });
+  if (!(await debit(user, stake))) return res.status(400).json({ ok: false, error: "Insufficient balance. Please deposit" });
   liveAviator.players.push({
     id: nid(),
     name: user.username || "You",
@@ -1191,7 +1191,7 @@ app.post("/api/game/play", async (req, res) => {
   const stake = money(req.body.stake);
   if (!user) return res.status(404).json({ ok: false, error: "Log in first" });
   if (stake < 500) return res.status(400).json({ ok: false, error: "Minimum stake is TZS 500" });
-  if (!(await debit(user, stake))) return res.status(400).json({ ok: false, error: "Not enough balance" });
+  if (!(await debit(user, stake))) return res.status(400).json({ ok: false, error: "Insufficient balance. Please deposit" });
 
   let win = 0;
   let detail = "";

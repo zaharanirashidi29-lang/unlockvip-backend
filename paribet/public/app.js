@@ -459,6 +459,11 @@ function needLogin(action) {
   return true;
 }
 
+function showNeedDeposit(message) {
+  state.notice = message || "Insufficient balance. Please deposit";
+  go("deposit");
+}
+
 function promoHtml() {
   return (state.catalog.promos || []).map((p) => {
     const claimed = (state.user?.claimedPromos || []).includes(p.id);
@@ -595,7 +600,7 @@ function payHtml(tab) {
       </div>
       <label class="field" for="payAmount">Amount (TZS)</label>
       <input class="input" id="payAmount" inputmode="numeric" value="${min}">
-      <p class="error" id="payError"></p>
+      <p class="error" id="payError">${state.notice && /insufficient|deposit/i.test(state.notice) ? state.notice : ""}</p>
       <p class="notice" id="payMsg"></p>
       <button class="wide gold" type="button" id="payBtn">${tab === "withdraw" ? "Withdraw" : "Send FimiPay push"}</button>
     </section>`;
@@ -836,6 +841,10 @@ async function placeBet() {
     await loadBets();
     go("bets");
   } catch (err) {
+    if (/insufficient|not enough/i.test(err.message)) {
+      showNeedDeposit("Insufficient balance. Please deposit");
+      return;
+    }
     state.notice = err.message;
     render();
   }
@@ -924,6 +933,10 @@ async function loadBetCode(placeToo) {
     if (state.view === "bets") go("sports");
     else render();
   } catch (err) {
+    if (/insufficient|not enough/i.test(err.message)) {
+      showNeedDeposit("Insufficient balance. Please deposit");
+      return;
+    }
     state.notice = err.message;
     render();
   }
