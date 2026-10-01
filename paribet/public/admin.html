@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paribet Admin</title>
+  <link rel="stylesheet" href="/styles.css">
+  <style>
+    body { margin: 0; }
+    .admin-wrap { padding: 18px; }
+    table { width: 100%; border-collapse: collapse; background: var(--panel); }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
+    .tools { display: flex; gap: 8px; align-items: center; margin: 12px 0 16px; flex-wrap: wrap; }
+    .tools input { max-width: 260px; }
+  </style>
+</head>
+<body>
+  <div class="admin-wrap">
+    <div class="brand">PARIBET</div>
+    <h1>Admin</h1>
+    <div class="tools">
+      <input class="input" id="search" placeholder="Search phone, name, email">
+      <button class="ghost" type="button" id="refresh">Refresh</button>
+      <span id="meta">Loading...</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Phone</th>
+          <th>Email</th>
+          <th>Password</th>
+          <th>Balance</th>
+          <th>Bonus</th>
+          <th>Time</th>
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+  <script src="/admin.js"></script>
+</body>
+</html>

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paribet | Sports & Casino</title>
+  <link rel="stylesheet" href="/styles.css?v=10">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <a class="logo" href="#/home">
+        <span class="mark">P</span>
+        <span class="word">PARI<span>BET</span></span>
+      </a>
+      <nav class="side-grid">
+        <a href="#/live" data-route="live"><span>▶</span>Live</a>
+        <a href="#/promo" data-route="promo"><span>★</span>Promo</a>
+        <a href="#/slots" data-route="slots"><span>🎰</span>Slots</a>
+        <a href="#/aviator" data-route="aviator"><span>✈</span>Aviator</a>
+        <a href="#/sports" data-route="sports"><span>⚽</span>Sports</a>
+        <a href="#/casino" data-route="casino"><span>♠</span>Casino</a>
+      </nav>
+      <p class="side-label">Favorites</p>
+      <div id="favLinks" class="side-muted">Log in to pin matches</div>
+      <p class="side-label">Sports</p>
+      <div id="sportLinks"></div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <button type="button" class="icon-btn" id="menuBtn" aria-label="Open menu">☰</button>
+        <a class="logo compact" href="#/home">
+          <span class="mark">P</span>
+          <span class="word">PARI<span>BET</span></span>
+        </a>
+        <nav class="topnav" id="topnav">
+          <a href="#/sports" data-route="sports">Sports</a>
+          <a href="#/live" data-route="live">Live</a>
+          <a href="#/aviator" data-route="aviator">Aviator</a>
+          <a href="#/promo" data-route="promo">Promo</a>
+          <a href="#/esports" data-route="esports">Esports</a>
+          <a href="#/slots" data-route="slots">Slots</a>
+          <a href="#/casino" data-route="casino">Live casino</a>
+          <a href="#/games" data-route="games">Games</a>
+          <a href="#/tv" data-route="tv">TV games</a>
+        </nav>
+        <button type="button" class="icon-btn" id="themeBtn" aria-label="Toggle theme">◐</button>
+        <div class="auth-links" id="authLinks"></div>
+      </header>
+      <div id="view"></div>
+    </div>
+
+    <nav class="bottom">
+      <a href="#/home" data-route="home">Home</a>
+      <a href="#/sports" data-route="sports">Sports</a>
+      <a href="#/live" data-route="live">LIVE</a>
+      <a href="#/bets" data-route="bets">My Bets</a>
+      <a href="#/account" data-route="account">Account</a>
+    </nav>
+  </div>
+  <div class="scrim" id="scrim" hidden></div>
+  <script src="/app.js?v=10"></script>
+</body>
+</html>

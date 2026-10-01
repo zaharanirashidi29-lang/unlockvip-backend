@@ -84,6 +84,15 @@ const { startGreboBalanceTracker } = require("./grebo-balance-tracker");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
+const paribet = require("./paribet/server");
+
+app.use((req, res, next) => {
+  const host = String(req.headers.host || "").split(":")[0].toLowerCase();
+  if (host === "paribet.unlockvip.co.tz" || host === "www.paribet.unlockvip.co.tz") {
+    return paribet.app(req, res, next);
+  }
+  next();
+});
 
 app.use(cors());
 
@@ -255,7 +264,14 @@ mongoose
     socketTimeoutMS: 20000,
     maxPoolSize: 10
   })
-  .then(() => console.log("MongoDB Connected"))
+  .then(async () => {
+    console.log("MongoDB Connected");
+    try {
+      await paribet.start({ listen: false });
+    } catch (err) {
+      console.log("Paribet start:", err.message);
+    }
+  })
   .catch((err) => console.log("MongoDB Error:", err));
 
 const paymentSchema = new mongoose.Schema({
