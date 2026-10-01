@@ -5,7 +5,16 @@ const express = require("express");
 const mongoose = require("mongoose");
 const { MATCHES, SPORTS, PROMOS, GAMES } = require("./catalog");
 const fimipay = require("./fimipay");
-const { disbursePayment } = require("../malipopay");
+const wenacy = require("../wenacy");
+const {
+  collectPayment,
+  disbursePayment,
+  verifyPayment,
+  isMalipopayPaymentComplete,
+  mapMalipopayStatus,
+  getPaymentFailureMessage,
+  formatMalipopayError
+} = require("../malipopay");
 
 const app = express();
 const PORT = process.env.PARIBET_PORT || process.env.PORT || 4080;
@@ -63,6 +72,7 @@ const paymentSchema = new mongoose.Schema(
     phone: String,
     network: String,
     orderId: { type: String, index: true },
+    provider: String,
     status: String,
     message: String,
     credited: { type: Boolean, default: false },
@@ -498,6 +508,132 @@ async function credit(user, amount) {
   await saveUser(user);
 }
 
+function publicBase(req) {
+  const host = String(req.get("x-forwarded-host") || req.get("host") || PUBLIC_HOST)
+    .split(",")[0]
+    .trim();
+  const proto = String(req.get("x-forwarded-proto") || "https")
+    .split(",")[0]
+    .trim();
+  return `${proto}://${host}`;
+}
+
+async function settlePaidDeposit(rec, message) {
+  if (rec.credited) return rec;
+  const user = await findUser({ id: rec.userId });
+  if (!user) return rec;
+  await credit(user, rec.amount);
+  rec.credited = true;
+  rec.verified = true;
+  rec.status = "PAID";
+  rec.message = message || "Deposit received";
+  if (rec.amount >= fimipay.MIN_DEPOSIT && !(user.claimedPromos || []).includes("welcome")) {
+    user.bonusBalance = money(user.bonusBalance) + 2000;
+    user.claimedPromos = [...(user.claimedPromos || []), "welcome"];
+    await saveUser(user);
+  }
+  await savePayment(rec);
+  return rec;
+}
+
+async function refreshDeposit(rec) {
+  if (rec.kind !== "deposit" || rec.credited) return rec;
+  const provider = rec.provider || rec.merchant || "";
+  if (provider === "wenacy") {
+    try {
+      const live = await wenacy.getStatus(rec.id);
+      const mapped = wenacy.normalizeWenacyStatus(live?.status);
+      const paidAmt = wenacy.wenacyAmountTzs(live);
+      const amountOk = paidAmt == null || paidAmt === money(rec.amount);
+      if (mapped === "COMPLETED" && amountOk) {
+        return settlePaidDeposit(rec, "Deposit received");
+      }
+      if (mapped === "FAILED") {
+        rec.status = "FAILED";
+        rec.message = wenacy.extractWenacyFailureMessage(live);
+        rec.verified = false;
+        rec.credited = false;
+        await savePayment(rec);
+      }
+    } catch (err) {
+      console.log("wenacy status", err.message);
+    }
+    return rec;
+  }
+  if (provider === "malipopay") {
+    try {
+      const live = await verifyPayment(rec.id, { bypassCache: true });
+      if (isMalipopayPaymentComplete(live)) {
+        const paidAmt = Number(live.paidAmount || live.amount || 0);
+        const amountOk = !paidAmt || paidAmt === money(rec.amount);
+        if (amountOk) return settlePaidDeposit(rec, "Deposit received");
+      }
+      if (mapMalipopayStatus(live?.status) === "FAILED") {
+        rec.status = "FAILED";
+        rec.message = getPaymentFailureMessage(live) || "Payment was not completed";
+        rec.verified = false;
+        rec.credited = false;
+        await savePayment(rec);
+      }
+    } catch (err) {
+      console.log("malipopay status", err.message);
+    }
+    return rec;
+  }
+  if (rec.orderId) {
+    const live = await fimipay.getOrder(rec.orderId);
+    const paidAmt = live ? fimipay.paidAmount(live) : 0;
+    const amountOk = !paidAmt || paidAmt === money(rec.amount);
+    if (live && fimipay.isPaid(live) && amountOk) {
+      return settlePaidDeposit(rec, "Deposit received");
+    }
+    if (live && fimipay.isFailed(live)) {
+      rec.status = "FAILED";
+      rec.message = "Payment was not completed";
+      rec.verified = false;
+      rec.credited = false;
+      await savePayment(rec);
+    }
+  }
+  return rec;
+}
+
+async function sendDepositPush(rec, req) {
+  if (process.env.WENACY_API_KEY) {
+    const charge = await wenacy.createCharge({
+      amount: rec.amount,
+      phone: rec.phone,
+      reference: rec.id,
+      callbackUrl: `${publicBase(req)}/api/pay/webhook/wenacy`,
+      description: "Paribet deposit"
+    });
+    const failed =
+      String(charge?.status || "").toLowerCase() === "failed" ||
+      (!charge?.success && !charge?.transaction_id && !charge?.reference);
+    if (failed) {
+      throw new Error(wenacy.extractWenacyFailureMessage(charge) || charge?.message || "Could not send PIN prompt");
+    }
+    rec.provider = "wenacy";
+    rec.merchant = "wenacy";
+    rec.orderId = String(charge.transaction_id || charge.order_id || rec.id);
+    rec.status = "PROCESSING";
+    rec.message = "Confirm the PIN on your phone. Cash is added only after payment.";
+    return rec;
+  }
+  const mali = await collectPayment({
+    amount: rec.amount,
+    phoneNumber: rec.phone,
+    reference: rec.id,
+    description: "Paribet deposit"
+  });
+  rec.provider = "malipopay";
+  rec.merchant = "malipopay";
+  rec.orderId = String(mali?.transactionId || mali?.id || mali?.reference || rec.id);
+  rec.status = "PROCESSING";
+  rec.message = "Confirm the PIN on your phone. Cash is added only after payment.";
+  return rec;
+}
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(
@@ -640,6 +776,7 @@ app.post("/api/deposit", async (req, res) => {
     phone,
     network: net?.id || network,
     orderId: "",
+    provider: "",
     status: "PROCESSING",
     message: "",
     credited: false,
@@ -647,87 +784,49 @@ app.post("/api/deposit", async (req, res) => {
     merchant: "",
     ...nowStamp()
   };
+  try {
+    await sendDepositPush(rec, req);
+  } catch (err) {
+    rec.status = "FAILED";
+    rec.credited = false;
+    rec.verified = false;
+    rec.message =
+      (process.env.WENACY_API_KEY ? wenacy.formatWenacyError(err).message : formatMalipopayError(err).message) ||
+      err.message ||
+      "Could not send PIN prompt";
+    await savePayment(rec);
+    return res.status(400).json({ ok: false, error: rec.message, payment: rec });
+  }
   await savePayment(rec);
-  const checkout = fimipay.checkoutRequest({
-    phone,
-    amount,
-    name: user.username,
-    email: user.email
-  });
   const latest = await findUser({ id: user.id });
   res.json({
     ok: true,
     pending: true,
     payment: rec,
-    checkout,
     user: publicUser(latest),
-    message: "Confirm the PIN on your phone. Cash is added only after payment."
+    message: rec.message
   });
 });
 
-app.post("/api/deposit/push", async (req, res) => {
-  const user = await findUser({ id: String(req.body.userId || "") });
-  const rec = await findPayment(String(req.body.paymentId || ""));
-  if (!user || !rec || rec.userId !== user.id || rec.kind !== "deposit") {
-    return res.status(404).json({ ok: false, error: "Payment not found" });
+app.post("/api/pay/webhook/wenacy", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const ref = String(body.reference || body.ref || body.payment_reference || "").trim();
+    if (ref) {
+      const rec = await findPayment(ref);
+      if (rec) await refreshDeposit(rec);
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.log("wenacy webhook", err.message);
+    res.status(500).json({ success: false });
   }
-  const data = req.body.result && typeof req.body.result === "object" ? req.body.result : {};
-  rec.orderId = fimipay.orderIdOf(data) || String(req.body.orderId || "").trim();
-  rec.message = fimipay.publicError(data, rec.message);
-  rec.merchant = rec.merchant || "kopo";
-  if (fimipay.isPushOk(Number(req.body.http || 200), data) && rec.orderId) {
-    rec.status = "PROCESSING";
-    rec.credited = false;
-    rec.verified = false;
-    await savePayment(rec);
-    return res.json({
-      ok: true,
-      pending: true,
-      payment: rec,
-      user: publicUser(user),
-      message: "PIN prompt sent to " + rec.phone + ". Approve it — the wallet will update after payment."
-    });
-  }
-  rec.status = "FAILED";
-  rec.credited = false;
-  rec.verified = false;
-  if (/vpn|proxy/i.test(rec.message)) {
-    rec.message = "FimiPay blocked the request. Try again on mobile data, not Wi‑Fi with a VPN.";
-  }
-  await savePayment(rec);
-  res.status(400).json({ ok: false, error: rec.message || "FimiPay push failed", payment: rec });
 });
 
 app.get("/api/pay/status", async (req, res) => {
-  const rec = await findPayment(String(req.query.id || ""));
+  let rec = await findPayment(String(req.query.id || ""));
   if (!rec) return res.status(404).json({ ok: false, error: "Payment not found" });
-  if (rec.kind === "deposit" && !rec.credited && rec.orderId) {
-    const live = await fimipay.getOrder(rec.orderId);
-    const paidAmt = live ? fimipay.paidAmount(live) : 0;
-    const amountOk = !paidAmt || paidAmt === money(rec.amount);
-    if (live && fimipay.isPaid(live) && amountOk && !rec.credited) {
-      const user = await findUser({ id: rec.userId });
-      if (user) {
-        await credit(user, rec.amount);
-        rec.credited = true;
-        rec.verified = true;
-        rec.status = "PAID";
-        rec.message = "Deposit received";
-        if (rec.amount >= fimipay.MIN_DEPOSIT && !(user.claimedPromos || []).includes("welcome")) {
-          user.bonusBalance = money(user.bonusBalance) + 2000;
-          user.claimedPromos = [...(user.claimedPromos || []), "welcome"];
-          await saveUser(user);
-        }
-        await savePayment(rec);
-      }
-    } else if (live && fimipay.isFailed(live)) {
-      rec.status = "FAILED";
-      rec.message = "Payment was not completed";
-      rec.verified = false;
-      rec.credited = false;
-      await savePayment(rec);
-    }
-  }
+  rec = await refreshDeposit(rec);
   const user = rec.userId ? await findUser({ id: rec.userId }) : null;
   res.json({ ok: true, payment: rec, user: user ? publicUser(user) : null });
 });
