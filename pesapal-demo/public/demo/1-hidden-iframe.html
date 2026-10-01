@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Demo 1 — Hidden iframe</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-demo="hidden">
+  <div class="wrap">
+    <span class="badge">Demo 1</span>
+    <h1>Hidden iframe</h1>
+    <p>
+      Pesapal is loaded in a 1×1 invisible iframe via <code>/checkout/sessionId</code>.
+      Your address bar stays on localhost and the API never returns the raw Pesapal URL.
+    </p>
+
+    <div class="card">
+      <div class="row">
+        <div>
+          <label for="phone">Phone</label>
+          <input id="phone" value="255794316132" />
+        </div>
+        <div>
+          <label for="amount">Amount (TZS)</label>
+          <input id="amount" type="number" value="3061" />
+        </div>
+      </div>
+      <button type="button" class="primary" id="payBtn">Start hidden payment</button>
+      <div class="status" id="status">Ready. Tap Pay to start.</div>
+    </div>
+
+    <p class="note"><a href="/">← Back to demo hub</a></p>
+  </div>
+
+  <iframe id="hiddenFrame" class="hidden-frame" title="Hidden payment frame"></iframe>
+
+  <script src="/app.js"></script>
+</body>
+</html>

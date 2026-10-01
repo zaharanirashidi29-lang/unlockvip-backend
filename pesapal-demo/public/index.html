@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pesapal Demo Hub</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <span class="badge">Isolated demo only</span>
+    <h1>Pesapal hidden-checkout tests</h1>
+    <p>
+      This folder is separate from your production frontend and backend routes.
+      The raw Pesapal URL stays on the server — the browser only loads
+      <code>/embed/&lt;sessionId&gt;</code> on localhost.
+    </p>
+
+    <div class="card">
+      <h2 style="margin-top:0">3 local test links</h2>
+      <div class="links">
+        <a class="link-card" href="/demo/1-hidden-iframe.html">
+          <div>
+            <strong>1. Hidden iframe</strong><br />
+            <span>Pesapal loads off-screen; user sees only your waiting screen</span>
+          </div>
+          →
+        </a>
+        <a class="link-card" href="/demo/2-modal-overlay.html">
+          <div>
+            <strong>2. Modal overlay</strong><br />
+            <span>Your branded modal opens; Pesapal URL never in address bar</span>
+          </div>
+          →
+        </a>
+        <a class="link-card" href="/demo/3-branded-shell.html">
+          <div>
+            <strong>3. Branded full-page shell</strong><br />
+            <span>Full UnlockVIP-style page with embedded checkout panel</span>
+          </div>
+          →
+        </a>
+      </div>
+    </div>
+
+    <p class="note">
+      Start server: <code>node pesapal-demo/server.js</code><br />
+      Hard refresh the page (Cmd+Shift+R) if Pay was not working before.<br />
+      Default phone: 255794316132 · Amount: 3061 TZS<br />
+      Note: STK push still needs one tap inside Pesapal (Vodacom M-Pesa). This demo only hides the direct URL.
+    </p>
+  </div>
+</body>
+</html>

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Demo 3 — Branded shell</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-demo="shell">
+  <div class="shell-layout">
+    <header class="shell-top">
+      <span class="badge">Demo 3</span>
+      <h1 style="margin:10px 0 6px;font-size:24px">UnlockVIP payment copy</h1>
+      <p style="margin:0">Branded page on localhost — Pesapal embedded below, no redirect to pay.pesapal.com in the address bar.</p>
+    </header>
+
+    <main class="shell-main">
+      <iframe id="shellFrame" title="Embedded checkout"></iframe>
+    </main>
+
+    <footer class="shell-bottom">
+      <div class="row">
+        <div>
+          <label for="phone">Phone</label>
+          <input id="phone" value="255794316132" />
+        </div>
+        <div>
+          <label for="amount">Amount (TZS)</label>
+          <input id="amount" type="number" value="3061" />
+        </div>
+      </div>
+      <button type="button" class="primary" id="payBtn">Start payment</button>
+      <div class="status" id="status" style="margin-top:14px">Ready. Tap Pay to start.</div>
+      <p class="note" style="margin-bottom:0"><a href="/">← Back to demo hub</a></p>
+    </footer>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

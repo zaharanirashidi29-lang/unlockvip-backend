@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Demo 2 — Modal overlay</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body data-demo="modal">
+  <div class="wrap">
+    <span class="badge">Demo 2</span>
+    <h1>Modal overlay</h1>
+    <p>
+      Your site shows a branded modal. Pesapal loads inside it through the local
+      <code>/checkout/sessionId</code> proxy — not as a direct <code>pay.pesapal.com</code> link.
+    </p>
+
+    <div class="card">
+      <div class="row">
+        <div>
+          <label for="phone">Phone</label>
+          <input id="phone" value="255794316132" />
+        </div>
+        <div>
+          <label for="amount">Amount (TZS)</label>
+          <input id="amount" type="number" value="3061" />
+        </div>
+      </div>
+      <button type="button" class="primary" id="payBtn">Pay with modal checkout</button>
+      <div class="status" id="status">Ready. Tap Pay to start.</div>
+    </div>
+
+    <p class="note"><a href="/">← Back to demo hub</a></p>
+  </div>
+
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <div class="modal">
+      <div class="modal-head">
+        <strong>Complete payment on your phone</strong>
+        <button type="button" id="closeModal">Close</button>
+      </div>
+      <iframe id="modalFrame" class="shell-frame" title="Checkout"></iframe>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
