@@ -1052,10 +1052,11 @@ window.addEventListener("hashchange", route);
   }
   const path = location.pathname.replace(/\/$/, "");
   if (!location.hash) {
-    if (path.endsWith("/register")) location.hash = "#/register";
+    if (path.endsWith("/register") || path.endsWith("/join")) location.hash = "#/register";
     else if (path.endsWith("/login")) location.hash = "#/login";
+    else if (path.endsWith("/deposit")) location.hash = "#/deposit";
+    else if (path.endsWith("/account")) location.hash = "#/account";
     else location.hash = "#/home";
-    return;
   }
   route();
 })();

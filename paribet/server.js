@@ -1050,11 +1050,8 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, app: "paribet", host: PUBLIC_HOST, persist: mongoReady() ? "mongo" : "file", mongo: mongoReady() });
 });
 
-app.get(["/", "/register", "/login", "/home", "/sports", "/live", "/bets", "/account", "/promo", "/esports", "/slots", "/casino", "/games", "/tv", "/aviator", "/deposit", "/withdraw"], (_req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
-});
-
-app.get("/app/:page?", (_req, res) => {
+app.get("*", (req, res, next) => {
+  if (req.path.startsWith("/api")) return next();
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
