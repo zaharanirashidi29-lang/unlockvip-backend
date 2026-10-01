@@ -991,6 +991,26 @@ async function submitPay() {
         network: state.network
       })
     });
+    if (state.payTab === "deposit" && data.checkout) {
+      if (msg) msg.textContent = "Sending FimiPay PIN to your phone…";
+      const pushed = await sendFimiPay(data.checkout);
+      const attached = await api("/api/deposit/push", {
+        method: "POST",
+        body: JSON.stringify({
+          userId: state.user.id,
+          paymentId: data.payment.id,
+          http: pushed.http,
+          orderId: pushed.orderId,
+          result: pushed.result
+        })
+      });
+      if (msg) msg.textContent = attached.message || "Check your phone for the FimiPay PIN.";
+      state.notice = attached.message || "FimiPay PIN sent";
+      await refreshMe();
+      renderAuthLinks();
+      if (attached.pending && attached.payment?.id) pollPay(attached.payment.id);
+      return;
+    }
     if (msg) msg.textContent = data.message || "Check your phone for the PIN prompt.";
     state.notice = data.message || "PIN prompt sent";
     await refreshMe();
@@ -999,13 +1019,55 @@ async function submitPay() {
     else if (data.payment?.status === "PAID" && data.payment?.verified && data.payment?.credited) go("account");
   } catch (ex) {
     if (err) err.textContent = /load failed|failed to fetch/i.test(ex.message)
-      ? "Could not reach deposit. Close this page and try again."
+      ? "Could not reach FimiPay. Close this page and retry on mobile data."
       : /vpn|proxy/i.test(ex.message)
-        ? "The payment service blocked this request. Retry on mobile data."
+        ? "FimiPay blocked this network. Retry on mobile data, with VPN off."
         : ex.message;
   } finally {
     if ($("payBtn")) $("payBtn").disabled = false;
   }
+}
+
+function parseFimiJson(text) {
+  try { return JSON.parse(text || "{}"); } catch (_) { return {}; }
+}
+
+function fimiXhr(url, body, contentType) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Accept", "application/json");
+    xhr.setRequestHeader("Content-Type", contentType);
+    xhr.timeout = 45000;
+    xhr.onload = () => resolve({ http: xhr.status, result: parseFimiJson(xhr.responseText) });
+    xhr.onerror = () => reject(new Error("Load failed"));
+    xhr.ontimeout = () => reject(new Error("FimiPay timed out"));
+    xhr.send(JSON.stringify(body));
+  });
+}
+
+async function sendFimiPay(checkout) {
+  const attempts = [
+    "text/plain;charset=UTF-8",
+    "application/json"
+  ];
+  let lastErr = new Error("Could not send FimiPay push");
+  for (const type of attempts) {
+    try {
+      const pushed = await fimiXhr(checkout.url, checkout.body, type);
+      const orderId = String(pushed.result.order_id || pushed.result.orderId || "").trim();
+      const msg = String(pushed.result.message || pushed.result.error || "");
+      if (/vpn|proxy/i.test(msg)) throw new Error(msg);
+      if (pushed.http >= 400 || pushed.result.ok === false) {
+        throw new Error(msg || "Could not send FimiPay push");
+      }
+      if (orderId) return { http: pushed.http, orderId, result: pushed.result };
+      lastErr = new Error(msg || "Could not send FimiPay push");
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr;
 }
 
 async function pollPay(id) {

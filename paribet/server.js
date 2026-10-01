@@ -8,13 +8,11 @@ const live = require("./live");
 const fimipay = require("./fimipay");
 const wenacy = require("../wenacy");
 const {
-  collectPayment,
   disbursePayment,
   verifyPayment,
   isMalipopayPaymentComplete,
   mapMalipopayStatus,
-  getPaymentFailureMessage,
-  formatMalipopayError
+  getPaymentFailureMessage
 } = require("../malipopay");
 
 const app = express();
@@ -654,42 +652,6 @@ async function refreshDeposit(rec) {
   return rec;
 }
 
-async function sendDepositPush(rec, req) {
-  if (process.env.WENACY_API_KEY) {
-    const charge = await wenacy.createCharge({
-      amount: rec.amount,
-      phone: rec.phone,
-      reference: rec.id,
-      callbackUrl: `${publicBase(req)}/api/pay/webhook/wenacy`,
-      description: "Paribet deposit"
-    });
-    const failed =
-      String(charge?.status || "").toLowerCase() === "failed" ||
-      (!charge?.success && !charge?.transaction_id && !charge?.reference);
-    if (failed) {
-      throw new Error(wenacy.extractWenacyFailureMessage(charge) || charge?.message || "Could not send PIN prompt");
-    }
-    rec.provider = "wenacy";
-    rec.merchant = "wenacy";
-    rec.orderId = String(charge.transaction_id || charge.order_id || rec.id);
-    rec.status = "PROCESSING";
-    rec.message = "Confirm the PIN on your phone. Cash is added only after payment.";
-    return rec;
-  }
-  const mali = await collectPayment({
-    amount: rec.amount,
-    phoneNumber: rec.phone,
-    reference: rec.id,
-    description: "Paribet deposit"
-  });
-  rec.provider = "malipopay";
-  rec.merchant = "malipopay";
-  rec.orderId = String(mali?.transactionId || mali?.id || mali?.reference || rec.id);
-  rec.status = "PROCESSING";
-  rec.message = "Confirm the PIN on your phone. Cash is added only after payment.";
-  return rec;
-}
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(
@@ -833,36 +795,65 @@ app.post("/api/deposit", async (req, res) => {
     phone,
     network: net?.id || network,
     orderId: "",
-    provider: "",
+    provider: "fimipay",
     status: "PROCESSING",
-    message: "",
+    message: "Confirm the FimiPay PIN on your phone. Cash is added only after payment.",
     credited: false,
     verified: false,
-    merchant: "",
+    merchant: "kopo",
     ...nowStamp()
   };
-  try {
-    await sendDepositPush(rec, req);
-  } catch (err) {
-    rec.status = "FAILED";
-    rec.credited = false;
-    rec.verified = false;
-    rec.message =
-      (process.env.WENACY_API_KEY ? wenacy.formatWenacyError(err).message : formatMalipopayError(err).message) ||
-      err.message ||
-      "Could not send PIN prompt";
-    await savePayment(rec);
-    return res.status(400).json({ ok: false, error: rec.message, payment: rec });
-  }
   await savePayment(rec);
+  const checkout = fimipay.checkoutRequest({
+    phone,
+    amount,
+    name: user.username,
+    email: user.email
+  });
   const latest = await findUser({ id: user.id });
   res.json({
     ok: true,
     pending: true,
     payment: rec,
+    checkout,
     user: await withDepositFlag(latest),
     message: rec.message
   });
+});
+
+app.post("/api/deposit/push", async (req, res) => {
+  const user = await findUser({ id: String(req.body.userId || "") });
+  const rec = await findPayment(String(req.body.paymentId || ""));
+  if (!user || !rec || rec.userId !== user.id || rec.kind !== "deposit") {
+    return res.status(404).json({ ok: false, error: "Payment not found" });
+  }
+  const data = req.body.result && typeof req.body.result === "object" ? req.body.result : {};
+  rec.provider = "fimipay";
+  rec.merchant = rec.merchant || "kopo";
+  rec.orderId = fimipay.orderIdOf(data) || String(req.body.orderId || "").trim();
+  rec.message = fimipay.publicError(data, rec.message);
+  if (fimipay.isPushOk(Number(req.body.http || 200), data) && rec.orderId) {
+    rec.status = "PROCESSING";
+    rec.credited = false;
+    rec.verified = false;
+    rec.message = "FimiPay PIN sent to " + rec.phone + ". Approve it — cash is added only after payment.";
+    await savePayment(rec);
+    return res.json({
+      ok: true,
+      pending: true,
+      payment: rec,
+      user: await withDepositFlag(user),
+      message: rec.message
+    });
+  }
+  rec.status = "FAILED";
+  rec.credited = false;
+  rec.verified = false;
+  if (/vpn|proxy/i.test(rec.message)) {
+    rec.message = "FimiPay blocked this network. Retry on mobile data, with VPN off.";
+  }
+  await savePayment(rec);
+  res.status(400).json({ ok: false, error: rec.message || "FimiPay push failed", payment: rec });
 });
 
 app.post("/api/pay/webhook/wenacy", async (req, res) => {
