@@ -647,37 +647,55 @@ app.post("/api/deposit", async (req, res) => {
     merchant: "",
     ...nowStamp()
   };
-  try {
-    const push = await fimipay.collect({
-      phone,
-      amount,
-      name: user.username,
-      email: user.email
-    });
-    rec.orderId = push.orderId;
-    rec.message = push.message;
-    rec.merchant = push.merchant || "";
-    rec.status = push.failed || !push.ok ? "FAILED" : "PROCESSING";
+  await savePayment(rec);
+  const checkout = fimipay.checkoutRequest({
+    phone,
+    amount,
+    name: user.username,
+    email: user.email
+  });
+  const latest = await findUser({ id: user.id });
+  res.json({
+    ok: true,
+    pending: true,
+    payment: rec,
+    checkout,
+    user: publicUser(latest),
+    message: "Confirm the PIN on your phone. Cash is added only after payment."
+  });
+});
+
+app.post("/api/deposit/push", async (req, res) => {
+  const user = await findUser({ id: String(req.body.userId || "") });
+  const rec = await findPayment(String(req.body.paymentId || ""));
+  if (!user || !rec || rec.userId !== user.id || rec.kind !== "deposit") {
+    return res.status(404).json({ ok: false, error: "Payment not found" });
+  }
+  const data = req.body.result && typeof req.body.result === "object" ? req.body.result : {};
+  rec.orderId = fimipay.orderIdOf(data) || String(req.body.orderId || "").trim();
+  rec.message = fimipay.publicError(data, rec.message);
+  rec.merchant = rec.merchant || "kopo";
+  if (fimipay.isPushOk(Number(req.body.http || 200), data) && rec.orderId) {
+    rec.status = "PROCESSING";
     rec.credited = false;
     rec.verified = false;
     await savePayment(rec);
-    const latest = await findUser({ id: user.id });
-    if (rec.status === "FAILED") {
-      return res.status(400).json({ ok: false, error: rec.message || "FimiPay push failed", payment: rec });
-    }
-    res.json({
+    return res.json({
       ok: true,
       pending: true,
       payment: rec,
-      user: publicUser(latest),
-      message: "PIN prompt sent to " + phone + ". Approve it — the wallet will update after payment."
+      user: publicUser(user),
+      message: "PIN prompt sent to " + rec.phone + ". Approve it — the wallet will update after payment."
     });
-  } catch (err) {
-    rec.status = "FAILED";
-    rec.message = err.message;
-    await savePayment(rec);
-    res.status(400).json({ ok: false, error: err.message || "Deposit failed" });
   }
+  rec.status = "FAILED";
+  rec.credited = false;
+  rec.verified = false;
+  if (/vpn|proxy/i.test(rec.message)) {
+    rec.message = "FimiPay blocked the request. Try again on mobile data, not Wi‑Fi with a VPN.";
+  }
+  await savePayment(rec);
+  res.status(400).json({ ok: false, error: rec.message || "FimiPay push failed", payment: rec });
 });
 
 app.get("/api/pay/status", async (req, res) => {

@@ -97,7 +97,7 @@ function isFailed(data) {
   const msg = publicError(data, "");
   if (Array.isArray(data?.data)) return false;
   if (["FAILED", "FAIL", "ERROR", "CANCELLED", "CANCELED", "DECLINED"].includes(token)) return true;
-  if (/valid merchant|wrong credential|9003|9012|insufficient|not found/i.test(msg)) return true;
+  if (/valid merchant|wrong credential|9003|9012|insufficient|not found|vpn|proxy/i.test(msg)) return true;
   return false;
 }
 
@@ -121,6 +121,24 @@ function paidAmount(data) {
   const row = orderRow(data);
   const n = Number(row?.amount);
   return Number.isFinite(n) ? Math.round(n) : 0;
+}
+
+function checkoutRequest({ phone, amount, name, email }) {
+  const merchant = MERCHANTS[0];
+  return {
+    url: `${BASE}/api/payments/checkout/create-order-minimal`,
+    merchant: merchant.slug,
+    body: {
+      buyer_phone: phone,
+      buyer_name: name || "Paribet customer",
+      buyer_email: email || undefined,
+      buyer_whatsapp: phone,
+      amount: Number(amount),
+      currency: "TZS",
+      merchant_user_id: merchant.id,
+      merchant_display_name: merchant.name
+    }
+  };
 }
 
 async function createOrder({ phone, amount, name, email }) {
@@ -229,5 +247,8 @@ module.exports = {
   isFailed,
   isPushOk,
   paidAmount,
-  orderRow
+  orderRow,
+  orderIdOf,
+  checkoutRequest,
+  publicError
 };

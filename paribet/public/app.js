@@ -792,6 +792,26 @@ async function submitPay() {
         network: state.network
       })
     });
+    if (state.payTab === "deposit" && data.checkout) {
+      if (msg) msg.textContent = "Sending PIN prompt to your phone…";
+      const pushed = await sendFimiPay(data.checkout);
+      const attached = await api("/api/deposit/push", {
+        method: "POST",
+        body: JSON.stringify({
+          userId: state.user.id,
+          paymentId: data.payment.id,
+          http: pushed.http,
+          orderId: pushed.orderId,
+          result: pushed.result
+        })
+      });
+      if (msg) msg.textContent = attached.message || "Check your phone for the PIN prompt.";
+      state.notice = attached.message || "PIN prompt sent";
+      await refreshMe();
+      renderAuthLinks();
+      if (attached.pending && attached.payment?.id) pollPay(attached.payment.id);
+      return;
+    }
     if (msg) msg.textContent = data.message || "Check your phone for the PIN prompt.";
     state.notice = data.message || "PIN prompt sent";
     await refreshMe();
@@ -799,10 +819,27 @@ async function submitPay() {
     if (data.pending && data.payment?.id) pollPay(data.payment.id);
     else if (data.payment?.status === "PAID" && data.payment?.verified && data.payment?.credited) go("account");
   } catch (ex) {
-    if (err) err.textContent = ex.message;
+    if (err) err.textContent = /vpn|proxy/i.test(ex.message)
+      ? "FimiPay blocked a server IP. Retry on this phone using mobile data."
+      : ex.message;
   } finally {
     if ($("payBtn")) $("payBtn").disabled = false;
   }
+}
+
+async function sendFimiPay(checkout) {
+  const res = await fetch(checkout.url, {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(checkout.body)
+  });
+  const result = await res.json().catch(() => ({}));
+  const orderId = String(result.order_id || result.orderId || "").trim();
+  if (!res.ok || result.ok === false || /vpn|proxy/i.test(String(result.message || result.error || ""))) {
+    throw new Error(result.message || result.error || "Could not send FimiPay push");
+  }
+  if (!orderId) throw new Error(result.message || "Could not send FimiPay push");
+  return { http: res.status, orderId, result };
 }
 
 async function pollPay(id) {
