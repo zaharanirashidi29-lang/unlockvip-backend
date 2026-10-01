@@ -581,6 +581,68 @@ label.field {
 .av-row.mine { color: var(--gold-2); }
 .av-row b { color: var(--teal); min-width: 64px; text-align: right; }
 
+.load-top {
+  z-index: 2;
+  border: 1px solid var(--gold);
+}
+.load-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 8px;
+}
+.load-head span { color: var(--muted); font-size: 12px; }
+.placed-live { margin: 8px 14px 0; }
+.placed-h { font-weight: 800; margin: 4px 0 8px; }
+.ticket {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px;
+  margin: 8px 0 12px;
+}
+.placed-live .ticket { margin: 8px 0; }
+.ticket.won { border-color: var(--ok); }
+.ticket.lost { border-color: var(--danger); }
+.ticket.live { border-color: #ef4444; }
+.ticket-leg { margin: 8px 0; font-size: 13px; }
+.win-line {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.win-box {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+  background: #24180c;
+  border-radius: 10px;
+  padding: 10px;
+}
+.win-box span { display: block; color: #cbbca6; font-size: 11px; }
+.win-box b { color: var(--gold-2); font-size: 16px; }
+.your-ticket {
+  color: var(--gold);
+  font-size: 12px;
+  font-weight: 700;
+  margin: 4px 0 8px;
+}
+.st-won { color: var(--ok); font-weight: 800; }
+.st-lost { color: var(--danger); font-weight: 800; }
+.st-live, .st-open { color: #ef4444; font-weight: 800; }
+.st-void { color: var(--muted); font-weight: 800; }
+button.gold-lite {
+  border-color: var(--gold) !important;
+  color: var(--gold) !important;
+}
+.error a { color: var(--gold); }
+
 @media (max-width: 700px) {
   .av-bets { grid-template-columns: 1fr; }
   .av-sky { height: 220px; }

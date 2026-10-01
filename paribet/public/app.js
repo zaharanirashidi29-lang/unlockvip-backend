@@ -23,7 +23,10 @@ const state = {
   minDeposit: 60000,
   minWithdraw: 10000,
   loadCode: "",
-  lastBetCode: ""
+  lastBetCode: "",
+  liveBoard: "now",
+  betTab: "live",
+  livePoll: null
 };
 
 function $(id) { return document.getElementById(id); }
@@ -59,6 +62,22 @@ function stopAviatorPoll() {
     clearInterval(state.aviator.poll);
     state.aviator.poll = null;
   }
+}
+
+function stopLivePoll() {
+  if (state.livePoll) {
+    clearInterval(state.livePoll);
+    state.livePoll = null;
+  }
+}
+
+function startLivePoll() {
+  if (state.livePoll) return;
+  state.livePoll = setInterval(() => {
+    if (["live", "bets", "match"].includes(state.view) || openTickets().length) {
+      checkResults(true);
+    }
+  }, 30000);
 }
 
 function route() {
@@ -132,7 +151,9 @@ function setNav() {
 function matchesFor(view) {
   let rows = state.catalog.matches || [];
   if (view === "live") {
-    rows = rows.filter((m) => m.period !== "ft");
+    if (state.liveBoard === "results") rows = rows.filter((m) => m.period === "ft");
+    else if (state.liveBoard === "upcoming") rows = rows.filter((m) => m.period === "pre");
+    else rows = rows.filter((m) => m.live);
     if (state.liveSport !== "all") rows = rows.filter((m) => m.sport === state.liveSport);
     if (state.livePeriod !== "all") rows = rows.filter((m) => m.period === state.livePeriod);
   }
@@ -143,6 +164,37 @@ function matchesFor(view) {
     rows = rows.filter((m) => (m.home + m.away + m.league).toLowerCase().includes(q));
   }
   return rows;
+}
+
+function matchTickets(id) {
+  return (state.bets || []).filter((b) =>
+    b.kind === "sports" && (b.legs || b.selections || []).some((s) => s.id === id)
+  );
+}
+
+function openTickets() {
+  return (state.bets || []).filter((b) => b.kind === "sports" && (b.status === "Open" || b.status === "Live"));
+}
+
+function settledTickets() {
+  return (state.bets || []).filter((b) => b.kind === "sports" && (b.status === "Won" || b.status === "Lost" || b.status === "Void"));
+}
+
+function slipTotals() {
+  const odds = state.slip.reduce((n, x) => n * Number(x.odd || 0), 1) || 0;
+  const returns = Math.round(Number(state.stake || 0) * odds);
+  const profit = Math.max(0, returns - Number(state.stake || 0));
+  return { odds, returns, profit };
+}
+
+function updateWinPreview() {
+  const t = slipTotals();
+  const odds = $("slipOdds");
+  const ret = $("slipReturns");
+  const profit = $("slipProfit");
+  if (odds) odds.textContent = Number(t.odds || 0).toFixed(2);
+  if (ret) ret.textContent = tzs(t.returns);
+  if (profit) profit.textContent = tzs(t.profit);
 }
 
 function findSel(m, key) {
@@ -158,20 +210,24 @@ function oddBtn(m, key, label) {
   const sel = findSel(m, key);
   const odd = Number(sel.odd || m.odds?.[key] || 0);
   if (!odd) return `<button type="button" disabled><span>${label}</span>—</button>`;
+  if (m.period === "ft") return `<button type="button" disabled><span>${label}</span>${odd.toFixed(2)}</button>`;
   const on = state.slip.some((x) => x.id === m.id && x.pick === key);
   return `<button type="button" class="${on ? "on" : ""}" data-add="${m.id}|${key}|${odd}"><span>${label}</span>${odd.toFixed(2)}</button>`;
 }
 
 function matchCard(m) {
   const fav = (state.user?.favorites || []).includes(m.id);
-  const score = state.liveScores || !m.live ? m.score : "";
+  const score = m.score || "";
+  const tickets = matchTickets(m.id);
+  const clock = m.clock || m.time;
   return `
     <article class="match">
       <div class="meta">
-        <span>${m.live ? '<span class="live-dot">LIVE</span> ' : ""}${m.league}${score ? " · " + score : ""}</span>
-        <span>${m.time} <button type="button" class="ghost" data-fav="${m.id}">${fav ? "★" : "☆"}</button></span>
+        <span>${m.live ? '<span class="live-dot">LIVE</span> ' : m.period === "ft" ? "FT · " : ""}${m.league}${score ? " · " + score : ""}</span>
+        <span>${clock} <button type="button" class="ghost" data-fav="${m.id}">${fav ? "★" : "☆"}</button></span>
       </div>
-      <a class="teams" href="#/match/${m.id}">${m.home} vs ${m.away}</a>
+      <a class="teams" href="#/match/${m.id}">${m.home} ${score ? score : "vs"} ${m.away}</a>
+      ${tickets.length ? `<div class="your-ticket">Your placed bet · ${tickets[0].status}${tickets[0].legs ? " · " + (tickets[0].legs.find((l) => l.id === m.id)?.result || "").toUpperCase() : ""}</div>` : ""}
       <div class="odds">
         ${oddBtn(m, "1", "1")}
         ${oddBtn(m, "x", "X")}
@@ -190,20 +246,28 @@ function matchCard(m) {
 
 function matchDetailHtml() {
   const m = (state.catalog.matches || []).find((x) => x.id === state.matchId);
-  if (!m) return `<p class="empty">Event not found.</p>`;
+  if (!m) return `${topToolsHtml()}<p class="empty">Event not found.</p>`;
   const st = m.stats || { possession: [0, 0], shots: [0, 0], corners: [0, 0] };
+  const tickets = matchTickets(m.id);
   return `
+    ${topToolsHtml()}
     ${state.notice ? `<p class="notice">${state.notice}</p>` : ""}
     <section class="card account-box">
       <a href="#/live">← Live</a>
-      <div class="meta">${m.live ? '<span class="live-dot">LIVE</span> ' : ""}${m.league} · ${m.time}</div>
+      <div class="meta">${m.live ? '<span class="live-dot">LIVE</span> ' : m.period === "ft" ? "FT · " : ""}${m.league} · ${m.clock || m.time}</div>
       <h2>${m.home} ${m.score || "vs"} ${m.away}</h2>
-      ${m.live ? `<div class="live-stats">
+      <button class="wide" type="button" id="checkResultsBtn">Check results</button>
+      ${m.live || m.period === "ft" ? `<div class="live-stats">
+        <div><span>Score</span><b>${m.score || "0-0"}</b></div>
+        <div><span>Time</span><b>${m.clock || m.time}</b></div>
+        <div><span>Status</span><b>${m.period === "ft" ? "Finished" : m.live ? "Live" : "Upcoming"}</b></div>
         <div><span>Possession</span><b>${st.possession[0]}% – ${st.possession[1]}%</b></div>
         <div><span>Shots</span><b>${st.shots[0]} – ${st.shots[1]}</b></div>
         <div><span>Corners</span><b>${st.corners[0]} – ${st.corners[1]}</b></div>
       </div>` : ""}
     </section>
+    ${tickets.map((b) => ticketCard(b)).join("")}
+    ${m.period === "ft" ? `<p class="hint" style="margin:8px 14px">This match is finished. Open tickets on it are marked Won or Lost.</p>` : ""}
     ${(m.markets || []).map((g) => `
       <article class="match">
         <div class="teams">${g.name}</div>
@@ -217,40 +281,89 @@ function matchDetailHtml() {
 }
 
 function loadBetBox() {
+  const can = Boolean(state.user?.deposited);
   return `
-    <section class="card account-box code-box">
-      <label class="field" for="loadCode">Load bet code</label>
+    <section class="card account-box code-box load-top">
+      <div class="load-head">
+        <strong>Load bet code</strong>
+        <span>Paste a shared code here</span>
+      </div>
       <div class="stake-row wrap-row">
-        <input class="input" id="loadCode" placeholder="Paste code" value="${state.loadCode}" maxlength="12">
+        <input class="input" id="loadCode" placeholder="e.g. AB12CD34" value="${state.loadCode}" maxlength="12">
         <button class="wide" type="button" id="loadCodeBtn" style="width:auto">Load</button>
         <button class="wide gold" type="button" id="loadPlaceBtn" style="width:auto">Load & place</button>
       </div>
+      ${!state.user ? `<p class="hint">Log in and deposit to load a bet code.</p>` : can ? "" : `<p class="error">Deposit first to load a bet code. <a href="#/deposit">Go to deposit</a></p>`}
       ${state.lastBetCode ? `<p class="hint">Last code <b>${state.lastBetCode}</b> <button type="button" class="ghost" data-copy="${state.lastBetCode}">Copy</button></p>` : ""}
     </section>`;
 }
 
+function ticketCard(b) {
+  const legs = b.legs || b.selections || [];
+  const statusClass = String(b.status || "open").toLowerCase();
+  const toReturn = b.toReturn != null ? b.toReturn : b.payout;
+  const toWin = b.toWin != null ? b.toWin : Math.max(0, Number(b.payout || 0) - Number(b.stake || 0));
+  return `
+    <article class="ticket ${statusClass}">
+      <div class="meta">
+        <span>Placed bet ${b.code ? "· " + b.code : ""}</span>
+        <span class="st-${statusClass}">${b.status}</span>
+      </div>
+      ${legs.map((l) => `
+        <div class="ticket-leg">
+          <a href="#/match/${l.id}">${l.home} vs ${l.away}</a>
+          <span>${l.live ? '<span class="live-dot">LIVE</span> ' : ""}${l.score || l.clock || ""}${l.result ? " · " + String(l.result).toUpperCase() : ""}</span>
+          <div class="hint">${l.market ? l.market + " / " : ""}${l.label || l.pick} @ ${Number(l.odd || 0).toFixed(2)}</div>
+        </div>`).join("")}
+      <div class="win-line">
+        <span>Stake ${tzs(b.stake)}</span>
+        <span>To return ${tzs(toReturn || 0)}</span>
+        <span>To win ${tzs(toWin || 0)}</span>
+      </div>
+      ${b.code ? `<div class="code-line"><span>Bet code <b>${b.code}</b></span><button type="button" class="ghost" data-copy="${b.code}">Copy</button></div>` : ""}
+    </article>`;
+}
+
+function placedLiveHtml() {
+  const rows = openTickets();
+  if (!rows.length) return "";
+  return `
+    <section class="placed-live">
+      <div class="placed-h">Placed bets · live now</div>
+      ${rows.map(ticketCard).join("")}
+    </section>`;
+}
+
+function topToolsHtml() {
+  return loadBetBox() + placedLiveHtml();
+}
+
 function slipHtml() {
-  if (!state.slip.length) return loadBetBox();
-  const total = state.slip.reduce((n, x) => n * x.odd, 1);
-  const ret = Math.round(state.stake * total);
+  if (!state.slip.length) return "";
+  const t = slipTotals();
   return `
     <div class="slip">
-      <div>${state.slip.length} pick${state.slip.length > 1 ? "s" : ""} · odds ${total.toFixed(2)}</div>
-      ${state.slip.map((s) => `<div class="hint">${s.home} vs ${s.away} · ${s.market ? s.market + " / " : ""}${s.label || s.pick} @ ${s.odd}</div>`).join("")}
+      <div>${state.slip.length} pick${state.slip.length > 1 ? "s" : ""} · total odds <b id="slipOdds">${t.odds.toFixed(2)}</b></div>
+      ${state.slip.map((s) => `<div class="hint">${s.home} vs ${s.away} · ${s.market ? s.market + " / " : ""}${s.label || s.pick} @ ${Number(s.odd).toFixed(2)}</div>`).join("")}
       <div class="stake-row">
         <input class="input" id="stakeInput" inputmode="numeric" value="${state.stake}">
-        <span>Returns ${tzs(ret)}</span>
+        <span>Your stake</span>
       </div>
+      <div class="win-box">
+        <div><span>Approx. return</span><b id="slipReturns">${tzs(t.returns)}</b></div>
+        <div><span>Approx. win</span><b id="slipProfit">${tzs(t.profit)}</b></div>
+      </div>
+      <p class="hint">Stake is taken when you place. If it wins, that return is added to your cash. If it loses, the stake stays deducted.</p>
       <button class="wide gold" type="button" id="placeBet">Place bet</button>
       <button class="wide" type="button" id="shareCodeBtn">Copy bet code</button>
-    </div>
-    ${loadBetBox()}`;
+    </div>`;
 }
 
 function listHtml(title, view) {
   const rows = matchesFor(view);
   const liveSports = ["all", ...(state.catalog.sports || []).map((s) => s.id)];
   return `
+    ${topToolsHtml()}
     ${state.notice ? `<p class="notice">${state.notice}</p>` : ""}
     <div class="filters">
       <input class="input" id="searchBox" placeholder="Search team or league" value="${state.search}">
@@ -258,16 +371,19 @@ function listHtml(title, view) {
         `<button type="button" data-filter="${f}" class="${state.sportFilter === f ? "on" : ""}">${f}</button>`
       ).join("") : ""}
       ${view === "live" ? `
+        <button type="button" data-live-board="now" class="${state.liveBoard === "now" ? "on" : ""}">Live now</button>
+        <button type="button" data-live-board="upcoming" class="${state.liveBoard === "upcoming" ? "on" : ""}">Upcoming</button>
+        <button type="button" data-live-board="results" class="${state.liveBoard === "results" ? "on" : ""}">Results</button>
+        <button type="button" id="checkResultsBtn" class="gold-lite">Check results</button>
         ${liveSports.map((f) => `<button type="button" data-live-sport="${f}" class="${state.liveSport === f ? "on" : ""}">${f}</button>`).join("")}
         <button type="button" data-live-period="all" class="${state.livePeriod === "all" ? "on" : ""}">All periods</button>
         <button type="button" data-live-period="1h" class="${state.livePeriod === "1h" ? "on" : ""}">1st period</button>
         <button type="button" data-live-period="2h" class="${state.livePeriod === "2h" ? "on" : ""}">2nd period</button>
-        <button type="button" id="scoreToggle" class="${state.liveScores ? "on" : ""}">${state.liveScores ? "Scores on" : "Scores off"}</button>
       ` : ""}
     </div>
     ${view === "live" ? `<a class="av-bar" href="#/aviator"><span class="live-dot">LIVE</span> Aviator <b id="liveAviatorChip">1.00x</b><span>Open table</span></a>` : ""}
     <p class="hint" style="margin:0 14px 8px">${title} · ${rows.length} events</p>
-    ${rows.map(matchCard).join("") || `<p class="empty">No events right now.</p>`}
+    ${rows.map(matchCard).join("") || `<p class="empty">${view === "live" && state.liveBoard === "now" ? "No live matches right now. Check upcoming or results." : "No events right now."}</p>`}
     ${slipHtml()}
   `;
 }
@@ -486,14 +602,27 @@ function payHtml(tab) {
 }
 
 function betsHtml() {
-  const rows = (state.bets || []).map((b) => `
-    <article class="match">
-      <div class="meta"><span>${b.kind}</span><span>${b.status}</span></div>
-      <div>${b.detail || ""}</div>
-      <div class="hint">Stake ${tzs(b.stake)} · return ${tzs(b.payout || 0)}</div>
-      ${b.code ? `<div class="code-line"><span>Bet code <b>${b.code}</b></span><button type="button" class="ghost" data-copy="${b.code}">Copy</button></div>` : ""}
-    </article>`).join("");
-  return loadBetBox() + (rows || `<p class="empty">No bets yet. Load a shared code above.</p>`);
+  const liveRows = openTickets();
+  const doneRows = settledTickets();
+  const other = (state.bets || []).filter((b) => b.kind !== "sports");
+  const show = state.betTab === "results" ? doneRows : liveRows;
+  return `
+    ${topToolsHtml()}
+    ${state.notice ? `<p class="notice">${state.notice}</p>` : ""}
+    <div class="filters">
+      <button type="button" data-bet-tab="live" class="${state.betTab === "live" ? "on" : ""}">Live tickets</button>
+      <button type="button" data-bet-tab="results" class="${state.betTab === "results" ? "on" : ""}">Won / Lost</button>
+      <button type="button" id="checkResultsBtn" class="gold-lite">Check results</button>
+    </div>
+    ${show.map(ticketCard).join("") || `<p class="empty">${state.betTab === "results" ? "No settled sports bets yet." : "No live placed bets. Pick odds and place a ticket."}</p>`}
+    ${state.betTab === "results" && other.length ? other.map((b) => `
+      <article class="ticket ${String(b.status || "").toLowerCase()}">
+        <div class="meta"><span>${b.kind}</span><span class="st-${String(b.status || "").toLowerCase()}">${b.status}</span></div>
+        <div>${b.detail || ""}</div>
+        <div class="win-line"><span>Stake ${tzs(b.stake)}</span><span>${b.status === "Won" ? "Won " + tzs(b.payout || 0) : "Lost"}</span></div>
+      </article>`).join("") : ""}
+    ${slipHtml()}
+  `;
 }
 
 function render() {
@@ -525,6 +654,8 @@ function render() {
   else view.innerHTML = listHtml("Upcoming & live", "sports");
   bindView();
   if (state.view === "aviator" || state.view === "live") startAviatorPoll();
+  if (["live", "sports", "bets", "match", "home"].includes(state.view)) startLivePoll();
+  else stopLivePoll();
 }
 
 function bindView() {
@@ -569,6 +700,14 @@ function bindView() {
   document.querySelectorAll("[data-live-period]").forEach((b) => {
     b.onclick = () => { state.livePeriod = b.dataset.livePeriod; render(); };
   });
+  document.querySelectorAll("[data-live-board]").forEach((b) => {
+    b.onclick = () => { state.liveBoard = b.dataset.liveBoard; render(); };
+  });
+  document.querySelectorAll("[data-bet-tab]").forEach((b) => {
+    b.onclick = () => { state.betTab = b.dataset.betTab; render(); };
+  });
+  const checkBtn = $("checkResultsBtn");
+  if (checkBtn) checkBtn.onclick = () => checkResults(false);
   const scoreToggle = $("scoreToggle");
   if (scoreToggle) scoreToggle.onclick = () => { state.liveScores = !state.liveScores; render(); };
   document.querySelectorAll("[data-fav]").forEach((b) => {
@@ -593,7 +732,12 @@ function bindView() {
   const search = $("searchBox");
   if (search) search.onchange = () => { state.search = search.value.trim(); render(); };
   const stake = $("stakeInput");
-  if (stake) stake.oninput = () => { state.stake = Number(digitsOnly(stake.value, 9) || 0); };
+  if (stake) stake.oninput = () => {
+    state.stake = Number(digitsOnly(stake.value, 9) || 0);
+    updateWinPreview();
+  };
+  const loadCode = $("loadCode");
+  if (loadCode) loadCode.oninput = () => { state.loadCode = loadCode.value.trim(); };
   const toggle = $("togglePass");
   if (toggle) toggle.onclick = () => {
     state.showPass = !state.showPass;
@@ -684,7 +828,11 @@ async function placeBet() {
     });
     state.slip = [];
     state.lastBetCode = data.code || data.bet?.code || "";
-    state.notice = "Bet placed · code " + state.lastBetCode;
+    state.notice = data.bet?.status === "Won"
+      ? "Won · " + tzs(data.bet.payout || 0) + " added to cash"
+      : data.bet?.status === "Lost"
+        ? "Bet placed · already lost, stake deducted"
+        : "Bet placed · code " + state.lastBetCode;
     await loadBets();
     go("bets");
   } catch (err) {
@@ -747,21 +895,30 @@ async function loadBetCode(placeToo) {
     render();
     return;
   }
+  if (needLogin("load a bet code")) return;
+  if (!state.user.deposited) {
+    state.notice = "Deposit first to load a bet code";
+    go("deposit");
+    return;
+  }
   try {
     if (placeToo) {
-      if (needLogin("place this bet code")) return;
       const data = await api("/api/bet/place-code", {
         method: "POST",
         body: JSON.stringify({ userId: state.user.id, code, stake: state.stake })
       });
       state.slip = [];
       state.lastBetCode = data.code || "";
-      state.notice = "Bet placed · code " + state.lastBetCode;
+      state.notice = data.bet?.status === "Won"
+        ? "Bet won · " + tzs(data.bet.payout || 0) + " added"
+        : data.bet?.status === "Lost"
+          ? "Bet placed and already lost"
+          : "Bet placed · code " + state.lastBetCode;
       await loadBets();
       go("bets");
       return;
     }
-    const data = await api("/api/bet/load", { method: "POST", body: JSON.stringify({ code }) });
+    const data = await api("/api/bet/load", { method: "POST", body: JSON.stringify({ userId: state.user.id, code }) });
     applyLoadedSlip(data);
     state.notice = "Bet code loaded. Place it when you are ready.";
     if (state.view === "bets") go("sports");
@@ -769,6 +926,35 @@ async function loadBetCode(placeToo) {
   } catch (err) {
     state.notice = err.message;
     render();
+  }
+}
+
+async function checkResults(silent) {
+  const typing = document.activeElement && ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName);
+  try {
+    if (state.user) {
+      const data = await api("/api/bets/check", {
+        method: "POST",
+        body: JSON.stringify({ userId: state.user.id })
+      });
+      if (data.matches) state.catalog.matches = data.matches;
+      state.bets = data.data || [];
+      if (data.user) saveUser(data.user);
+    } else {
+      const cat = await api("/api/catalog");
+      state.catalog = cat;
+    }
+    if (!silent) {
+      state.notice = "Results updated. Won tickets add cash; lost tickets keep the stake deducted.";
+      if (state.view === "live") state.liveBoard = "results";
+    }
+    if (!silent || !typing) render();
+    else renderAuthLinks();
+  } catch (err) {
+    if (!silent) {
+      state.notice = err.message;
+      render();
+    }
   }
 }
 
@@ -1027,6 +1213,7 @@ async function loadBets() {
   if (!state.user) { state.bets = []; return; }
   const data = await api("/api/bets?userId=" + encodeURIComponent(state.user.id));
   state.bets = data.data || [];
+  if (data.user) saveUser(data.user);
 }
 
 $("menuBtn").onclick = () => { $("sidebar").classList.add("open"); $("scrim").hidden = false; };

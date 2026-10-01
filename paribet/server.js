@@ -4,6 +4,7 @@ const path = require("path");
 const express = require("express");
 const mongoose = require("mongoose");
 const { MATCHES, SPORTS, PROMOS, GAMES } = require("./catalog");
+const live = require("./live");
 const fimipay = require("./fimipay");
 const wenacy = require("../wenacy");
 const {
@@ -57,6 +58,8 @@ const betSchema = new mongoose.Schema(
     status: String,
     detail: String,
     code: { type: String, index: true },
+    paidOut: { type: Boolean, default: false },
+    legs: { type: Array, default: [] },
     time: String,
     displayTime: String
   },
@@ -319,8 +322,32 @@ function publicUser(doc) {
     balance: money(doc.balance),
     bonusBalance: money(doc.bonusBalance),
     claimedPromos: doc.claimedPromos || [],
-    favorites: doc.favorites || []
+    favorites: doc.favorites || [],
+    deposited: Boolean(doc.deposited)
   };
+}
+
+async function hasDeposited(userId) {
+  if (!userId) return false;
+  if (mongoReady()) {
+    return Boolean(
+      await Payment.findOne({
+        userId,
+        kind: "deposit",
+        credited: true,
+        verified: true,
+        status: "PAID"
+      }).lean()
+    );
+  }
+  return readJson(PAY_FILE).some(
+    (p) => p.userId === userId && p.kind === "deposit" && p.credited && p.verified && p.status === "PAID"
+  );
+}
+
+async function withDepositFlag(doc) {
+  if (!doc) return null;
+  return publicUser({ ...doc, deposited: await hasDeposited(doc.id) });
 }
 
 function toAdmin(doc) {
@@ -393,8 +420,37 @@ async function saveBet(rec) {
     return;
   }
   const rows = readJson(BETS_FILE);
-  rows.unshift(rec);
+  const i = rows.findIndex((b) => b.id === rec.id);
+  if (i >= 0) rows[i] = rec;
+  else rows.unshift(rec);
   writeJson(BETS_FILE, rows);
+}
+
+async function settleUserSports(userId) {
+  const matches = live.liveMatches(MATCHES);
+  const rows = userId ? await listBets(userId) : [];
+  const out = [];
+  for (const rec of rows) {
+    if (rec.kind !== "sports" || rec.paidOut || rec.status === "Won" || rec.status === "Lost" || rec.status === "Void") {
+      out.push(live.decorateBet(rec, matches));
+      continue;
+    }
+    const updated = live.settleBet(rec, matches);
+    if (updated.status === "Won" && !updated.paidOut) {
+      const user = await findUser({ id: rec.userId });
+      if (user) await credit(user, money(updated.payout));
+      updated.paidOut = true;
+    } else if (updated.status === "Void" && !updated.paidOut) {
+      const user = await findUser({ id: rec.userId });
+      if (user) await credit(user, money(updated.stake));
+      updated.paidOut = true;
+    } else if (updated.status === "Lost") {
+      updated.paidOut = true;
+    }
+    await saveBet(updated);
+    out.push(live.decorateBet(updated, matches));
+  }
+  return out;
 }
 
 async function listBets(userId) {
@@ -648,7 +704,8 @@ app.use(
 );
 
 app.get("/api/catalog", (_req, res) => {
-  res.json({ ok: true, matches: MATCHES, sports: SPORTS, promos: PROMOS, games: GAMES });
+  const matches = live.liveMatches(MATCHES);
+  res.json({ ok: true, matches, sports: SPORTS, promos: PROMOS, games: GAMES, checkedAt: new Date().toISOString() });
 });
 
 app.post("/api/register", async (req, res) => {
@@ -696,7 +753,7 @@ app.post("/api/register", async (req, res) => {
       ...nowStamp()
     };
     await saveUser(rec);
-    res.json({ ok: true, user: publicUser(rec) });
+    res.json({ ok: true, user: await withDepositFlag(rec) });
   } catch (err) {
     console.log("register error", err.message);
     res.status(500).json({ ok: false, error: "Could not create account" });
@@ -731,7 +788,7 @@ app.post("/api/login", async (req, res) => {
       user.favorites = user.favorites || [];
       await saveUser(user);
     }
-    res.json({ ok: true, user: publicUser(user) });
+    res.json({ ok: true, user: await withDepositFlag(user) });
   } catch (err) {
     console.log("login error", err.message);
     res.status(500).json({ ok: false, error: "Login failed" });
@@ -741,7 +798,7 @@ app.post("/api/login", async (req, res) => {
 app.get("/api/me", async (req, res) => {
   const user = await findUser({ id: String(req.query.userId || "") });
   if (!user) return res.status(404).json({ ok: false, error: "Not found" });
-  res.json({ ok: true, user: publicUser(user) });
+  res.json({ ok: true, user: await withDepositFlag(user) });
 });
 
 app.get("/api/pay/networks", (_req, res) => {
@@ -803,7 +860,7 @@ app.post("/api/deposit", async (req, res) => {
     ok: true,
     pending: true,
     payment: rec,
-    user: publicUser(latest),
+    user: await withDepositFlag(latest),
     message: rec.message
   });
 });
@@ -828,7 +885,7 @@ app.get("/api/pay/status", async (req, res) => {
   if (!rec) return res.status(404).json({ ok: false, error: "Payment not found" });
   rec = await refreshDeposit(rec);
   const user = rec.userId ? await findUser({ id: rec.userId }) : null;
-  res.json({ ok: true, payment: rec, user: user ? publicUser(user) : null });
+  res.json({ ok: true, payment: rec, user: user ? await withDepositFlag(user) : null });
 });
 
 app.post("/api/withdraw", async (req, res) => {
@@ -936,7 +993,7 @@ app.post("/api/favorites", async (req, res) => {
   else set.add(matchId);
   user.favorites = [...set];
   await saveUser(user);
-  res.json({ ok: true, user: publicUser(user) });
+  res.json({ ok: true, user: await withDepositFlag(user) });
 });
 
 app.post("/api/bet", async (req, res) => {
@@ -946,6 +1003,9 @@ app.post("/api/bet", async (req, res) => {
   if (!user) return res.status(404).json({ ok: false, error: "Log in first" });
   if (!selections.length) return res.status(400).json({ ok: false, error: "Pick at least one outcome" });
   if (stake < 500) return res.status(400).json({ ok: false, error: "Minimum stake is TZS 500" });
+  const matches = live.liveMatches(MATCHES);
+  const closed = live.closedMatchError(selections, matches);
+  if (closed) return res.status(400).json({ ok: false, error: closed });
   const odds = selections.reduce((n, s) => n * Number(s.odd || 0), 1);
   if (!Number.isFinite(odds) || odds <= 1) return res.status(400).json({ ok: false, error: "Invalid odds" });
   if (!(await debit(user, stake))) return res.status(400).json({ ok: false, error: "Not enough balance" });
@@ -960,13 +1020,16 @@ app.post("/api/bet", async (req, res) => {
     odds: Number(odds.toFixed(2)),
     payout,
     status: "Open",
+    paidOut: false,
+    legs: [],
     code,
     detail: selections.map((s) => `${s.home} vs ${s.away} · ${s.pick}`).join(" / "),
     ...nowStamp()
   };
   await saveBet(rec);
+  const settled = (await settleUserSports(user.id)).find((b) => b.id === rec.id) || rec;
   const latest = await findUser({ id: user.id });
-  res.json({ ok: true, bet: rec, code, user: publicUser(latest) });
+  res.json({ ok: true, bet: settled, code, user: await withDepositFlag(latest) });
 });
 
 app.post("/api/bet/share", async (req, res) => {
@@ -999,6 +1062,11 @@ app.get("/api/bet/code/:code", async (req, res) => {
 });
 
 app.post("/api/bet/load", async (req, res) => {
+  const user = await findUser({ id: String(req.body.userId || "") });
+  if (!user) return res.status(401).json({ ok: false, error: "Log in first to load a bet code" });
+  if (!(await hasDeposited(user.id))) {
+    return res.status(403).json({ ok: false, error: "Deposit first, then you can load a bet code" });
+  }
   const found = await findByCode(req.body.code);
   if (!found) return res.status(404).json({ ok: false, error: "Bet code not found" });
   if (found.kind === "book") {
@@ -1011,11 +1079,17 @@ app.post("/api/bet/place-code", async (req, res) => {
   const user = await findUser({ id: String(req.body.userId || "") });
   const found = await findByCode(req.body.code);
   if (!user) return res.status(404).json({ ok: false, error: "Log in first" });
+  if (!(await hasDeposited(user.id))) {
+    return res.status(403).json({ ok: false, error: "Deposit first, then you can load a bet code" });
+  }
   if (!found) return res.status(404).json({ ok: false, error: "Bet code not found" });
   const selections = found.rec.selections || [];
   const stake = money(req.body.stake || found.rec.stake);
   if (!selections.length) return res.status(400).json({ ok: false, error: "This code has no picks" });
   if (stake < 500) return res.status(400).json({ ok: false, error: "Minimum stake is TZS 500" });
+  const matches = live.liveMatches(MATCHES);
+  const closed = live.closedMatchError(selections, matches);
+  if (closed) return res.status(400).json({ ok: false, error: closed });
   const odds = selections.reduce((n, s) => n * Number(s.odd || 0), 1);
   if (!Number.isFinite(odds) || odds <= 1) return res.status(400).json({ ok: false, error: "Invalid odds" });
   if (!(await debit(user, stake))) return res.status(400).json({ ok: false, error: "Not enough balance" });
@@ -1028,6 +1102,8 @@ app.post("/api/bet/place-code", async (req, res) => {
     odds: Number(odds.toFixed(2)),
     payout: Math.round(stake * odds),
     status: "Open",
+    paidOut: false,
+    legs: [],
     code: await makeBetCode(),
     detail: selections.map((s) => `${s.home} vs ${s.away} · ${s.pick}`).join(" / "),
     ...nowStamp()
@@ -1037,15 +1113,31 @@ app.post("/api/bet/place-code", async (req, res) => {
     found.rec.placedBetId = rec.id;
     await saveBooking(found.rec);
   }
+  const settled = (await settleUserSports(user.id)).find((b) => b.id === rec.id) || rec;
   const latest = await findUser({ id: user.id });
-  res.json({ ok: true, bet: rec, code: rec.code, user: publicUser(latest) });
+  res.json({ ok: true, bet: settled, code: rec.code, user: await withDepositFlag(latest) });
 });
 
 app.get("/api/bets", async (req, res) => {
   const userId = String(req.query.userId || "");
   if (!userId) return res.json({ ok: true, data: [] });
-  const rows = await listBets(userId);
-  res.json({ ok: true, data: rows });
+  const rows = await settleUserSports(userId);
+  const latest = await findUser({ id: userId });
+  res.json({ ok: true, data: rows, user: latest ? await withDepositFlag(latest) : null });
+});
+
+app.post("/api/bets/check", async (req, res) => {
+  const userId = String(req.body.userId || req.query.userId || "");
+  const matches = live.liveMatches(MATCHES);
+  const rows = userId ? await settleUserSports(userId) : [];
+  const latest = userId ? await findUser({ id: userId }) : null;
+  res.json({
+    ok: true,
+    matches,
+    data: rows,
+    user: latest ? await withDepositFlag(latest) : null,
+    checkedAt: new Date().toISOString()
+  });
 });
 
 app.get("/api/game/aviator/state", (req, res) => {
