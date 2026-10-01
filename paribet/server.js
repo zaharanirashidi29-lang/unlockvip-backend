@@ -500,7 +500,16 @@ async function credit(user, amount) {
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
-app.use(express.static(path.join(__dirname, "public")));
+app.use(
+  express.static(path.join(__dirname, "public"), {
+    etag: false,
+    lastModified: false,
+    setHeaders(res, filePath) {
+      if (filePath.endsWith(".html")) res.setHeader("Cache-Control", "no-store");
+      else res.setHeader("Cache-Control", "no-cache");
+    }
+  })
+);
 
 app.get("/api/catalog", (_req, res) => {
   res.json({ ok: true, matches: MATCHES, sports: SPORTS, promos: PROMOS, games: GAMES });

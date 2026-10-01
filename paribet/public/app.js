@@ -1036,9 +1036,19 @@ window.addEventListener("hashchange", route);
 
 (async function boot() {
   loadUser();
+  const path = location.pathname.replace(/\/$/, "");
+  if (!location.hash) {
+    if (path.endsWith("/register") || path.endsWith("/join")) location.hash = "#/register";
+    else if (path.endsWith("/login")) location.hash = "#/login";
+    else if (path.endsWith("/deposit")) location.hash = "#/deposit";
+    else if (path.endsWith("/account")) location.hash = "#/account";
+    else location.hash = "#/home";
+  }
+  route();
   try {
     const cat = await api("/api/catalog");
     state.catalog = cat;
+    render();
   } catch (_) {}
   try {
     const pay = await api("/api/pay/networks");
@@ -1049,14 +1059,6 @@ window.addEventListener("hashchange", route);
   if (state.user) {
     await refreshMe();
     await loadBets();
+    render();
   }
-  const path = location.pathname.replace(/\/$/, "");
-  if (!location.hash) {
-    if (path.endsWith("/register") || path.endsWith("/join")) location.hash = "#/register";
-    else if (path.endsWith("/login")) location.hash = "#/login";
-    else if (path.endsWith("/deposit")) location.hash = "#/deposit";
-    else if (path.endsWith("/account")) location.hash = "#/account";
-    else location.hash = "#/home";
-  }
-  route();
 })();
