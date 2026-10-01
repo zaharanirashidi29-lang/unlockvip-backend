@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#0b1c1a" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta
+      name="description"
+      content="ChatKeep — save and sync your personal chat records on your phone."
+    />
+    <link rel="manifest" href="manifest.json" />
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="icon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=Syne:wght@600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <title>ChatKeep</title>
+  </head>
+  <body>
+    <div class="atmosphere" aria-hidden="true"></div>
+
+    <main id="app">
+      <section id="gate" class="gate screen">
+        <div class="gate-inner">
+          <p class="brand">ChatKeep</p>
+          <h1>Your chats, kept on your phone.</h1>
+          <p class="lede">
+            Save messages you want to remember. Sync them with this vault so every
+            phone you use stays in step.
+          </p>
+          <form id="unlock-form" class="unlock-form">
+            <label for="access-code">Access code</label>
+            <input
+              id="access-code"
+              name="accessCode"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Enter your vault code"
+              required
+            />
+            <label for="device-name">This phone’s name</label>
+            <input
+              id="device-name"
+              name="deviceName"
+              type="text"
+              maxlength="64"
+              placeholder="My phone"
+            />
+            <button type="submit" class="btn primary">Open vault</button>
+            <p id="gate-error" class="error" hidden></p>
+          </form>
+          <p class="hint">
+            Install ChatKeep to your home screen, then use Share in WhatsApp or
+            Messages to send a chat here. You can also open a saved note back in
+            those apps.
+          </p>
+        </div>
+      </section>
+
+      <section id="vault" class="vault screen" hidden>
+        <header class="topbar">
+          <div>
+            <p class="brand-sm">ChatKeep</p>
+            <p id="device-label" class="device-label">Phone</p>
+          </div>
+          <div class="top-actions">
+            <button type="button" id="sync-btn" class="btn ghost" title="Sync">
+              Sync
+            </button>
+            <button type="button" id="lock-btn" class="btn ghost" title="Lock">
+              Lock
+            </button>
+          </div>
+        </header>
+
+        <p id="sync-status" class="sync-status" aria-live="polite">Ready</p>
+
+        <section class="bridge" aria-label="Message apps">
+          <p class="bridge-title">Messages &amp; WhatsApp</p>
+          <p class="bridge-copy">
+            Share a chat into ChatKeep from your message app, or open a note in
+            Messages or WhatsApp.
+          </p>
+          <div class="bridge-actions">
+            <button type="button" id="send-sms" class="btn ghost">Open in Messages</button>
+            <button type="button" id="send-wa" class="btn ghost">Open in WhatsApp</button>
+            <label class="btn ghost file-btn">
+              Import chat
+              <input id="import-file" type="file" accept=".txt,text/plain" hidden />
+            </label>
+          </div>
+        </section>
+
+        <form id="compose" class="compose">
+          <div class="compose-row">
+            <input
+              id="contact"
+              type="text"
+              placeholder="Who (name or number)"
+              maxlength="120"
+              autocomplete="off"
+            />
+            <select id="direction" aria-label="Direction">
+              <option value="in">Received</option>
+              <option value="out">Sent</option>
+              <option value="note" selected>Note</option>
+            </select>
+          </div>
+          <textarea
+            id="body"
+            rows="4"
+            placeholder="Paste or type the message you want to keep…"
+            required
+          ></textarea>
+          <div class="compose-row">
+            <input id="tags" type="text" placeholder="tags (optional)" />
+            <button type="submit" class="btn primary">Keep</button>
+          </div>
+        </form>
+
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="Search records" />
+          <button type="button" id="refresh-btn" class="btn ghost">Refresh</button>
+        </div>
+
+        <ul id="record-list" class="record-list"></ul>
+        <p id="empty-state" class="empty" hidden>
+          No records yet. Paste a chat above and tap Keep.
+        </p>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

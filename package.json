@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "pesapal-demo": "node pesapal-demo/server.js"
+    "pesapal-demo": "node pesapal-demo/server.js",
+    "chatkeep": "node message-vault/server.js"
   },
   "dependencies": {
     "axios": "^1.13.6",
