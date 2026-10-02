@@ -1204,7 +1204,7 @@ app.post("/api/promo/claim", async (req, res) => {
     return res.status(400).json({ ok: false, error: "Already claimed" });
   }
   if (promo.minDeposit && money(user.balance) + money(user.bonusBalance) < promo.minDeposit && promoId === "welcome") {
-    return res.status(400).json({ ok: false, error: "Deposit at least TZS 60,000 first" });
+    return res.status(400).json({ ok: false, error: "Deposit at least TZS 10,000 first" });
   }
   user.bonusBalance = money(user.bonusBalance) + promo.bonus;
   user.claimedPromos = [...(user.claimedPromos || []), promoId];
