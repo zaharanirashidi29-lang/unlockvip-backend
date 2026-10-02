@@ -3,8 +3,9 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const mongoose = require("mongoose");
-const { MATCHES, SPORTS, PROMOS, GAMES } = require("./catalog");
+const { MATCHES, SPORTS, PROMOS, GAMES, sportsFrom } = require("./catalog");
 const live = require("./live");
+const fixtures = require("./fixtures");
 const fimipay = require("./fimipay");
 const wenacy = require("../wenacy");
 const {
@@ -23,7 +24,11 @@ const USERS_FILE = path.join(DATA_DIR, "users.json");
 const BETS_FILE = path.join(DATA_DIR, "bets.json");
 const PAY_FILE = path.join(DATA_DIR, "payments.json");
 const BOOK_FILE = path.join(DATA_DIR, "bookings.json");
+const ARCHIVE_FILE = path.join(DATA_DIR, "match-archive.json");
 const MONGODB_URI = process.env.MONGODB_URI || "";
+const FT_GRACE_MS = 15 * 60 * 1000;
+const RESULTS_KEEP_MS = 36 * 60 * 60 * 1000;
+const FIXTURE_REFRESH_MS = 3 * 60 * 1000;
 
 const userSchema = new mongoose.Schema(
   {
@@ -100,10 +105,38 @@ const bookingSchema = new mongoose.Schema(
   { collection: "paribet_bookings" }
 );
 
+const archiveSchema = new mongoose.Schema(
+  {
+    id: { type: String, unique: true, index: true },
+    match: Object,
+    score: String,
+    period: String,
+    home: String,
+    away: String,
+    league: String,
+    sport: String,
+    kickoff: String,
+    completedAt: { type: String, index: true },
+    time: String,
+    displayTime: String
+  },
+  { collection: "paribet_match_archive" }
+);
+
 const User = mongoose.model("ParibetUser", userSchema);
 const Bet = mongoose.model("ParibetBet", betSchema);
 const Payment = mongoose.model("ParibetPayment", paymentSchema);
 const Booking = mongoose.model("ParibetBooking", bookingSchema);
+const Archive = mongoose.models.ParibetMatchArchive || mongoose.model("ParibetMatchArchive", archiveSchema);
+
+const board = {
+  matches: MATCHES.slice(),
+  results: [],
+  title: "Today & upcoming",
+  days: [],
+  fetchedAt: "",
+  source: "catalog"
+};
 
 const AVIATOR_GROWTH = 0.06;
 const AVIATOR_WAIT_MS = 6500;
@@ -424,9 +457,139 @@ async function saveBet(rec) {
   writeJson(BETS_FILE, rows);
 }
 
-async function settleUserSports(userId) {
-  const matches = live.liveMatches(MATCHES);
-  const rows = userId ? await listBets(userId) : [];
+function currentMatches() {
+  return live.liveMatches(board.matches);
+}
+
+function catalogSports() {
+  return sportsFrom(board.matches) || SPORTS;
+}
+
+function catalogPayload(extra = {}) {
+  return {
+    ok: true,
+    matches: currentMatches(),
+    results: live.liveMatches(board.results || []),
+    sports: catalogSports(),
+    promos: PROMOS,
+    games: GAMES,
+    title: board.title,
+    days: board.days,
+    today: fixtures.ymd(),
+    fetchedAt: board.fetchedAt,
+    checkedAt: new Date().toISOString(),
+    ...extra
+  };
+}
+
+async function saveArchive(match) {
+  const liveRow = live.applyLive(match);
+  const rec = {
+    id: liveRow.id,
+    match: liveRow,
+    score: liveRow.score || "",
+    period: "ft",
+    home: liveRow.home,
+    away: liveRow.away,
+    league: liveRow.league,
+    sport: liveRow.sport,
+    kickoff: liveRow.kickoff || "",
+    completedAt: liveRow.completedAt || new Date().toISOString(),
+    ...nowStamp()
+  };
+  if (mongoReady()) {
+    await Archive.updateOne({ id: rec.id }, { $set: rec }, { upsert: true });
+    return rec;
+  }
+  const rows = readJson(ARCHIVE_FILE);
+  const i = rows.findIndex((r) => r.id === rec.id);
+  if (i >= 0) rows[i] = rec;
+  else rows.unshift(rec);
+  writeJson(ARCHIVE_FILE, rows);
+  return rec;
+}
+
+async function findArchives(ids) {
+  const want = (ids || []).filter(Boolean);
+  if (!want.length) return [];
+  if (mongoReady()) {
+    return (await Archive.find({ id: { $in: want } }).lean()).map((r) => r.match || r);
+  }
+  return readJson(ARCHIVE_FILE).filter((r) => want.includes(r.id)).map((r) => r.match || r);
+}
+
+async function loadRecentResults() {
+  const since = new Date(Date.now() - RESULTS_KEEP_MS).toISOString();
+  if (mongoReady()) {
+    return (await Archive.find({ completedAt: { $gte: since } }).sort({ completedAt: -1 }).limit(400).lean())
+      .map((r) => r.match)
+      .filter(Boolean);
+  }
+  return readJson(ARCHIVE_FILE)
+    .filter((r) => String(r.completedAt || "") >= since)
+    .map((r) => r.match)
+    .filter(Boolean);
+}
+
+function dueForPurge(m) {
+  if (m.period !== "ft" && String(m.apiState || "") !== "post" && !/^FT$/i.test(String(m.time || ""))) return false;
+  const done = Date.parse(m.completedAt || 0);
+  if (Number.isFinite(done) && done > 0) return Date.now() - done > FT_GRACE_MS;
+  const kick = Date.parse(m.kickoff || 0);
+  return Number.isFinite(kick) && Date.now() - kick > 3 * 60 * 60 * 1000;
+}
+
+function mergeIncoming(rows) {
+  const prev = new Map((board.matches || []).map((m) => [m.id, m]));
+  return (rows || []).map((row) => {
+    const old = prev.get(row.id);
+    const next = { ...row };
+    if (next.period === "ft" || next.apiState === "post") {
+      const wasOpen = Boolean(old && old.period !== "ft" && old.apiState !== "post");
+      next.completedAt = old?.completedAt || (wasOpen ? new Date().toISOString() : next.completedAt);
+      next.purgeNow = !wasOpen && !old?.completedAt;
+    }
+    return next;
+  });
+}
+
+async function archiveAndPurge() {
+  const kept = [];
+  for (const raw of board.matches || []) {
+    const m = live.applyLive(raw);
+    if (m.period === "ft") {
+      const { purgeNow, ...clean } = m;
+      await saveArchive(clean);
+      if (!purgeNow && !raw.purgeNow && !dueForPurge(clean)) kept.push(clean);
+      continue;
+    }
+    kept.push(m);
+  }
+  board.matches = kept;
+  board.results = await loadRecentResults();
+}
+
+async function matchesForSettlement(rows) {
+  const ids = new Set();
+  for (const rec of rows || []) {
+    for (const s of rec.selections || rec.legs || []) if (s.id) ids.add(s.id);
+  }
+  const map = new Map();
+  for (const m of currentMatches()) map.set(m.id, m);
+  for (const m of live.liveMatches(board.results || [])) {
+    if (!map.has(m.id)) map.set(m.id, m);
+  }
+  const missing = [...ids].filter((id) => !map.has(id));
+  if (missing.length) {
+    for (const m of await findArchives(missing)) {
+      const row = live.applyLive(m);
+      map.set(row.id, row);
+    }
+  }
+  return [...map.values()];
+}
+
+async function applySettlements(rows, matches) {
   const out = [];
   for (const rec of rows) {
     if (rec.kind !== "sports" || rec.paidOut || rec.status === "Won" || rec.status === "Lost" || rec.status === "Void") {
@@ -449,6 +612,67 @@ async function settleUserSports(userId) {
     out.push(live.decorateBet(updated, matches));
   }
   return out;
+}
+
+async function settleUserSports(userId) {
+  const rows = userId ? await listBets(userId) : [];
+  const matches = await matchesForSettlement(rows);
+  return applySettlements(rows, matches);
+}
+
+async function settleOpenSports() {
+  let rows = [];
+  if (mongoReady()) {
+    rows = await Bet.find({
+      kind: "sports",
+      paidOut: { $ne: true },
+      status: { $nin: ["Won", "Lost", "Void"] }
+    }).lean();
+  } else {
+    rows = readJson(BETS_FILE).filter(
+      (b) => b.kind === "sports" && !b.paidOut && !["Won", "Lost", "Void"].includes(b.status)
+    );
+  }
+  if (!rows.length) return [];
+  const matches = await matchesForSettlement(rows);
+  return applySettlements(rows, matches);
+}
+
+async function refreshFixtures() {
+  try {
+    const pack = await fixtures.loadFixtures();
+    if (pack.matches && pack.matches.length) {
+      const incoming = new Set(pack.matches.map((m) => m.id));
+      for (const old of board.matches || []) {
+        if (incoming.has(old.id)) continue;
+        const row = live.applyLive(old);
+        await saveArchive({
+          ...row,
+          period: "ft",
+          apiState: "post",
+          completedAt: row.completedAt || new Date().toISOString()
+        });
+      }
+      board.matches = mergeIncoming(pack.matches);
+      board.title = pack.title || "Today & upcoming";
+      board.days = pack.days || [];
+      board.fetchedAt = pack.fetchedAt || new Date().toISOString();
+      board.source = "espn";
+    } else if (!board.matches.length) {
+      board.matches = MATCHES.slice();
+      board.title = "Today & upcoming";
+      board.source = "catalog";
+    }
+    await archiveAndPurge();
+    await settleOpenSports();
+    console.log("fixtures", board.matches.length, "live", board.matches.filter((m) => m.live).length, "ft-held", board.matches.filter((m) => m.period === "ft").length, "archived", (board.results || []).length);
+  } catch (err) {
+    console.log("fixture refresh", err.message);
+    if (!board.matches.length) {
+      board.matches = MATCHES.slice();
+      board.title = "Today & upcoming";
+    }
+  }
 }
 
 async function listBets(userId) {
@@ -666,8 +890,7 @@ app.use(
 );
 
 app.get("/api/catalog", (_req, res) => {
-  const matches = live.liveMatches(MATCHES);
-  res.json({ ok: true, matches, sports: SPORTS, promos: PROMOS, games: GAMES, checkedAt: new Date().toISOString() });
+  res.json(catalogPayload());
 });
 
 app.post("/api/register", async (req, res) => {
@@ -994,7 +1217,7 @@ app.post("/api/bet", async (req, res) => {
   if (!user) return res.status(404).json({ ok: false, error: "Log in first" });
   if (!selections.length) return res.status(400).json({ ok: false, error: "Pick at least one outcome" });
   if (stake < 500) return res.status(400).json({ ok: false, error: "Minimum stake is TZS 500" });
-  const matches = live.liveMatches(MATCHES);
+  const matches = await matchesForSettlement([{ selections }]);
   const closed = live.closedMatchError(selections, matches);
   if (closed) return res.status(400).json({ ok: false, error: closed });
   const odds = selections.reduce((n, s) => n * Number(s.odd || 0), 1);
@@ -1078,7 +1301,7 @@ app.post("/api/bet/place-code", async (req, res) => {
   const stake = money(req.body.stake || found.rec.stake);
   if (!selections.length) return res.status(400).json({ ok: false, error: "This code has no picks" });
   if (stake < 500) return res.status(400).json({ ok: false, error: "Minimum stake is TZS 500" });
-  const matches = live.liveMatches(MATCHES);
+  const matches = await matchesForSettlement([{ selections }]);
   const closed = live.closedMatchError(selections, matches);
   if (closed) return res.status(400).json({ ok: false, error: closed });
   const odds = selections.reduce((n, s) => n * Number(s.odd || 0), 1);
@@ -1119,16 +1342,12 @@ app.get("/api/bets", async (req, res) => {
 
 app.post("/api/bets/check", async (req, res) => {
   const userId = String(req.body.userId || req.query.userId || "");
-  const matches = live.liveMatches(MATCHES);
   const rows = userId ? await settleUserSports(userId) : [];
   const latest = userId ? await findUser({ id: userId }) : null;
-  res.json({
-    ok: true,
-    matches,
+  res.json(catalogPayload({
     data: rows,
-    user: latest ? await withDepositFlag(latest) : null,
-    checkedAt: new Date().toISOString()
-  });
+    user: latest ? await withDepositFlag(latest) : null
+  }));
 });
 
 app.get("/api/game/aviator/state", (req, res) => {
@@ -1295,6 +1514,10 @@ async function start(opts = {}) {
     console.log("No MONGODB_URI; using local file store");
   }
   await reverseFakeDeposits();
+  refreshFixtures().catch((err) => console.log("first fixture load", err.message));
+  setInterval(() => {
+    refreshFixtures().catch((err) => console.log("fixture refresh", err.message));
+  }, FIXTURE_REFRESH_MS);
   if (!listen) return;
   app.listen(PORT, () => {
     console.log(`Paribet http://localhost:${PORT}`);

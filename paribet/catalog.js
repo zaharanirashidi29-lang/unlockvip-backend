@@ -210,12 +210,21 @@ function kickMins(m) {
 }
 MATCHES.sort((a, b) => kickMins(a) - kickMins(b));
 
-const SPORTS = [
+const SPORT_DEFS = [
   { id: "football", name: "Football" },
   { id: "basketball", name: "Basketball" },
   { id: "hockey", name: "Ice Hockey" },
   { id: "tennis", name: "Tennis" }
-].map((s) => ({ ...s, count: MATCHES.filter((m) => m.sport === s.id).length }));
+];
+
+function sportsFrom(matches) {
+  return SPORT_DEFS.map((s) => ({
+    ...s,
+    count: (matches || []).filter((m) => m.sport === s.id).length
+  }));
+}
+
+const SPORTS = sportsFrom(MATCHES);
 
 const PROMOS = [
   { id: "welcome", title: "First wallet top-up", detail: "Deposit TZS 60,000+ with FimiPay and get TZS 2,000 extra once.", bonus: 2000, minDeposit: 60000 },
@@ -232,4 +241,63 @@ const GAMES = [
   { id: "tv", name: "Studio games", kind: "tv" }
 ];
 
-module.exports = { MATCHES, SPORTS, PROMOS, GAMES };
+function applyRealOdds(markets, real) {
+  if (!real) return markets;
+  return markets.map((g) => {
+    if (g.id === "1x2") {
+      return {
+        ...g,
+        sels: g.sels.map((s) => {
+          if (s.key === "1" && real.home) return { ...s, odd: o(real.home) };
+          if (s.key === "x" && real.draw) return { ...s, odd: o(real.draw) };
+          if (s.key === "2" && real.away) return { ...s, odd: o(real.away) };
+          return s;
+        })
+      };
+    }
+    if (g.id === "tg" && (real.over || real.under)) {
+      return {
+        ...g,
+        sels: g.sels.map((s) => {
+          if ((s.key === "over25" || s.key === "over") && real.over) return { ...s, odd: o(real.over) };
+          if ((s.key === "under25" || s.key === "under") && real.under) return { ...s, odd: o(real.under) };
+          return s;
+        })
+      };
+    }
+    return g;
+  });
+}
+
+function buildMatch(row, realOdds) {
+  const sport = row.sport || "football";
+  const shift = ((row.id || "").length % 9) / 20 - 0.2;
+  const markets = applyRealOdds(
+    sport === "football" ? footballMarkets(shift) : twoWayMarkets(realOdds?.home || 1.9, realOdds?.away || 1.9),
+    realOdds
+  );
+  return pack(
+    {
+      live: false,
+      period: "pre",
+      score: "",
+      stats: blankStats(),
+      ...row
+    },
+    markets
+  );
+}
+
+module.exports = {
+  MATCHES,
+  SPORTS,
+  SPORT_DEFS,
+  PROMOS,
+  GAMES,
+  sportsFrom,
+  buildMatch,
+  footballMarkets,
+  twoWayMarkets,
+  pack,
+  flatten
+};

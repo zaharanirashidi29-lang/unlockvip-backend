@@ -3,8 +3,9 @@ const state = {
   authTab: "join",
   loginMethod: "phone",
   user: null,
-  catalog: { matches: [], sports: [], promos: [], games: [] },
+  catalog: { matches: [], results: [], sports: [], promos: [], games: [], title: "", days: [], today: "" },
   sportFilter: "all",
+  dayFilter: "today",
   search: "",
   slip: [],
   stake: 1000,
@@ -135,7 +136,7 @@ function renderSportsNav() {
   $("sportLinks").innerHTML = (state.catalog.sports || []).map((s) =>
     `<a class="side-sport" href="#/sports" data-sport="${s.id}">${s.name} <b>${s.count}</b></a>`
   ).join("");
-  const favs = (state.user?.favorites || []).map((id) => state.catalog.matches.find((m) => m.id === id)).filter(Boolean);
+  const favs = (state.user?.favorites || []).map((id) => findMatch(id)).filter(Boolean);
   $("favLinks").innerHTML = favs.length
     ? favs.map((m) => `<a class="side-row" href="#/live">${m.home} vs ${m.away}</a>`).join("")
     : `<div class="side-muted">${state.user ? "No pinned matches" : "Log in to pin matches"}</div>`;
@@ -148,14 +149,49 @@ function setNav() {
   });
 }
 
+function dayLabel(iso) {
+  if (!iso) return "";
+  const [, mm, dd] = String(iso).split("-");
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const name = months[Number(mm) - 1] || mm;
+  if (iso === state.catalog.today) return `Today ${Number(dd)}`;
+  const tmr = (() => {
+    const d = new Date(`${state.catalog.today || "2026-10-02"}T12:00:00`);
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().slice(0, 10);
+  })();
+  if (iso === tmr) return `Tomorrow ${Number(dd)}`;
+  return `${Number(dd)} ${name}`;
+}
+
+function findMatch(id) {
+  return (state.catalog.matches || []).find((m) => m.id === id)
+    || (state.catalog.results || []).find((m) => m.id === id)
+    || null;
+}
+
 function matchesFor(view) {
   let rows = state.catalog.matches || [];
   if (view === "live") {
-    if (state.liveBoard === "results") rows = rows.filter((m) => m.period === "ft");
-    else if (state.liveBoard === "upcoming") rows = rows.filter((m) => m.period === "pre");
-    else rows = rows.filter((m) => m.live);
+    if (state.liveBoard === "results") {
+      const seen = new Set();
+      rows = [...(state.catalog.results || []), ...rows.filter((m) => m.period === "ft")].filter((m) => {
+        if (seen.has(m.id)) return false;
+        seen.add(m.id);
+        return true;
+      });
+    } else if (state.liveBoard === "upcoming") {
+      rows = rows.filter((m) => m.period === "pre");
+      const day = state.dayFilter === "today" ? state.catalog.today : state.dayFilter;
+      if (day && day !== "all") rows = rows.filter((m) => m.day === day);
+    } else rows = rows.filter((m) => m.live);
     if (state.liveSport !== "all") rows = rows.filter((m) => m.sport === state.liveSport);
     if (state.livePeriod !== "all") rows = rows.filter((m) => m.period === state.livePeriod);
+  }
+  if (view === "sports") {
+    rows = rows.filter((m) => m.period !== "ft");
+    const day = state.dayFilter === "today" ? state.catalog.today : state.dayFilter;
+    if (day && day !== "all") rows = rows.filter((m) => m.day === day);
   }
   if (view === "esports") rows = rows.filter((m) => m.sport === "esports");
   if (view === "sports" && state.sportFilter !== "all") rows = rows.filter((m) => m.sport === state.sportFilter);
@@ -245,8 +281,8 @@ function matchCard(m) {
 }
 
 function matchDetailHtml() {
-  const m = (state.catalog.matches || []).find((x) => x.id === state.matchId);
-  if (!m) return `${topToolsHtml()}<p class="empty">Event not found.</p>`;
+  const m = findMatch(state.matchId);
+  if (!m) return `${topToolsHtml()}<p class="empty">Event not found or already full time and removed.</p>`;
   const st = m.stats || { possession: [0, 0], shots: [0, 0], corners: [0, 0] };
   const tickets = matchTickets(m.id);
   return `
@@ -367,13 +403,25 @@ function listHtml(title, view) {
     ${state.notice ? `<p class="notice">${state.notice}</p>` : ""}
     <div class="filters">
       <input class="input" id="searchBox" placeholder="Search team or league" value="${state.search}">
-      ${view === "sports" ? ["all", ...state.catalog.sports.map((s) => s.id)].map((f) =>
-        `<button type="button" data-filter="${f}" class="${state.sportFilter === f ? "on" : ""}">${f}</button>`
-      ).join("") : ""}
+      ${view === "sports" ? `
+        <button type="button" data-day="all" class="${state.dayFilter === "all" ? "on" : ""}">All days</button>
+        ${(state.catalog.days || []).map((d) =>
+          `<button type="button" data-day="${d}" class="${state.dayFilter === d || (state.dayFilter === "today" && d === state.catalog.today) ? "on" : ""}">${dayLabel(d)}</button>`
+        ).join("")}
+        ${["all", ...state.catalog.sports.map((s) => s.id)].map((f) =>
+          `<button type="button" data-filter="${f}" class="${state.sportFilter === f ? "on" : ""}">${f}</button>`
+        ).join("")}
+      ` : ""}
       ${view === "live" ? `
         <button type="button" data-live-board="now" class="${state.liveBoard === "now" ? "on" : ""}">Live now</button>
         <button type="button" data-live-board="upcoming" class="${state.liveBoard === "upcoming" ? "on" : ""}">Upcoming</button>
         <button type="button" data-live-board="results" class="${state.liveBoard === "results" ? "on" : ""}">Results</button>
+        ${state.liveBoard === "upcoming" ? `
+          <button type="button" data-day="all" class="${state.dayFilter === "all" ? "on" : ""}">All days</button>
+          ${(state.catalog.days || []).map((d) =>
+            `<button type="button" data-day="${d}" class="${state.dayFilter === d || (state.dayFilter === "today" && d === state.catalog.today) ? "on" : ""}">${dayLabel(d)}</button>`
+          ).join("")}
+        ` : ""}
         <button type="button" id="checkResultsBtn" class="gold-lite">Check results</button>
         ${liveSports.map((f) => `<button type="button" data-live-sport="${f}" class="${state.liveSport === f ? "on" : ""}">${f}</button>`).join("")}
         <button type="button" data-live-period="all" class="${state.livePeriod === "all" ? "on" : ""}">All periods</button>
@@ -639,7 +687,7 @@ function render() {
   const view = $("view");
   if (state.view === "register" || state.view === "login") view.innerHTML = authHtml();
   else if (state.view === "match") view.innerHTML = matchDetailHtml();
-  else if (state.view === "live") view.innerHTML = listHtml("Today 1 Oct", "live");
+  else if (state.view === "live") view.innerHTML = listHtml(state.catalog.title || "Live & upcoming", "live");
   else if (state.view === "esports") view.innerHTML = listHtml("Esports", "esports");
   else if (state.view === "promo") view.innerHTML = promoHtml();
   else if (state.view === "slots") view.innerHTML = gamesHtml("slots") + simpleGameHtml("slots", "Neon Reels", `<div class="reels" id="reels">★ P 7</div>`);
@@ -656,7 +704,11 @@ function render() {
   else if (state.view === "account") view.innerHTML = accountHtml();
   else if (state.view === "deposit") view.innerHTML = payHtml("deposit");
   else if (state.view === "withdraw") view.innerHTML = payHtml("withdraw");
-  else view.innerHTML = listHtml("Upcoming & live", "sports");
+  else {
+    const day = state.dayFilter === "today" ? state.catalog.today : state.dayFilter;
+    const title = day && day !== "all" ? dayLabel(day) : (state.catalog.title || "Today & upcoming");
+    view.innerHTML = listHtml(title, "sports");
+  }
   bindView();
   if (state.view === "aviator" || state.view === "live") startAviatorPoll();
   if (["live", "sports", "bets", "match", "home"].includes(state.view)) startLivePoll();
@@ -673,13 +725,17 @@ function bindView() {
   document.querySelectorAll("[data-filter]").forEach((b) => {
     b.onclick = () => { state.sportFilter = b.dataset.filter; render(); };
   });
+  document.querySelectorAll("[data-day]").forEach((b) => {
+    b.onclick = () => { state.dayFilter = b.dataset.day; render(); };
+  });
   document.querySelectorAll("[data-sport]").forEach((a) => {
     a.onclick = (e) => { e.preventDefault(); state.sportFilter = a.dataset.sport; go("sports"); };
   });
   document.querySelectorAll("[data-add]").forEach((b) => {
     b.onclick = () => {
       const [id, pick, odd] = b.dataset.add.split("|");
-      const match = state.catalog.matches.find((m) => m.id === id);
+      const match = findMatch(id);
+      if (!match || match.period === "ft") return;
       const sel = findSel(match, pick);
       const same = state.slip.find((x) => x.id === id && x.pick === pick);
       if (same) {
@@ -951,6 +1007,11 @@ async function checkResults(silent) {
         body: JSON.stringify({ userId: state.user.id })
       });
       if (data.matches) state.catalog.matches = data.matches;
+      if (data.results) state.catalog.results = data.results;
+      if (data.sports) state.catalog.sports = data.sports;
+      if (data.title) state.catalog.title = data.title;
+      if (data.days) state.catalog.days = data.days;
+      if (data.today) state.catalog.today = data.today;
       state.bets = data.data || [];
       if (data.user) saveUser(data.user);
     } else {

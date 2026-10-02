@@ -189,7 +189,53 @@ function footballClock(elapsed) {
   return { period: "ft", minute: 90, label: "FT" };
 }
 
+function emptyResult() {
+  return { home: 0, away: 0, total: 0, htHome: 0, htAway: 0, cornersHome: 0, cornersAway: 0, cardsHome: 0, cardsAway: 0, sets: [] };
+}
+
+function isOfficial(m) {
+  return m?.source === "espn" || Boolean(m?.apiState) || /^\d{4}-\d{2}-\d{2}T/.test(String(m?.kickoff || ""));
+}
+
+function applyOfficial(m) {
+  const row = {
+    ...m,
+    stats: {
+      possession: [...(m.stats?.possession || [50, 50])],
+      shots: [...(m.stats?.shots || [0, 0])],
+      corners: [...(m.stats?.corners || [0, 0])]
+    }
+  };
+  const state = String(row.apiState || "").toLowerCase();
+  const finished = state === "post" || row.period === "ft" || /^FT$/i.test(String(row.time || ""));
+  const liveNow = !finished && (state === "in" || row.live);
+  if (finished) {
+    row.live = false;
+    row.period = "ft";
+    row.time = "FT";
+    row.clock = "FT";
+    row.completedAt = row.completedAt || new Date().toISOString();
+    row.result = row.score ? parseListedScore(row) : emptyResult();
+    return row;
+  }
+  if (liveNow) {
+    row.live = true;
+    row.period = row.period && row.period !== "pre" && row.period !== "ft" ? row.period : "1h";
+    row.clock = row.displayClock || row.time || "LIVE";
+    row.time = row.clock;
+    row.result = parseListedScore(row.score ? row : { ...row, score: "0-0" });
+    return row;
+  }
+  row.live = false;
+  row.period = "pre";
+  row.score = "";
+  row.result = emptyResult();
+  row.clock = row.time;
+  return row;
+}
+
 function applyLive(m) {
+  if (isOfficial(m)) return applyOfficial(m);
   const row = {
     ...m,
     stats: {
