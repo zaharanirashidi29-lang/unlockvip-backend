@@ -5,7 +5,7 @@ const state = {
   user: null,
   catalog: { matches: [], results: [], sports: [], promos: [], games: [], title: "", days: [], today: "" },
   sportFilter: "all",
-  dayFilter: "today",
+  dayFilter: "all",
   search: "",
   slip: [],
   stake: 1000,
@@ -34,6 +34,7 @@ function $(id) { return document.getElementById(id); }
 function digitsOnly(v, max) { return String(v || "").replace(/\D/g, "").slice(0, max || 20); }
 function tzs(n) { return "TZS " + Number(n || 0).toLocaleString("en-TZ"); }
 function wallet(u) { return Number(u?.balance || 0) + Number(u?.bonusBalance || 0); }
+const BASE = typeof window !== "undefined" && window.PARIBET_BASE ? window.PARIBET_BASE : "";
 
 function loadUser() {
   try { state.user = JSON.parse(localStorage.getItem("paribet_user") || "null"); }
@@ -46,7 +47,7 @@ function saveUser(user) {
 }
 
 async function api(url, opts) {
-  const res = await fetch(url, {
+  const res = await fetch(BASE + url, {
     headers: { "Content-Type": "application/json" },
     ...opts
   });

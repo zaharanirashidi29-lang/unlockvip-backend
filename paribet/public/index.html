@@ -4,7 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Paribet | Sports & Casino</title>
-  <link rel="stylesheet" href="/styles.css?v=14">
+  <script>
+    window.PARIBET_BASE = location.pathname === "/paribet" || location.pathname.startsWith("/paribet/")
+      ? "/paribet"
+      : "";
+  </script>
+  <link rel="stylesheet" href="/styles.css?v=15" id="paribetCss">
+  <script>document.getElementById("paribetCss").href = (window.PARIBET_BASE || "") + "/styles.css?v=15";</script>
 </head>
 <body>
   <div class="app">
@@ -60,6 +66,12 @@
     </nav>
   </div>
   <div class="scrim" id="scrim" hidden></div>
-  <script src="/app.js?v=22"></script>
+  <script>
+    (function () {
+      var s = document.createElement("script");
+      s.src = (window.PARIBET_BASE || "") + "/app.js?v=23";
+      document.body.appendChild(s);
+    })();
+  </script>
 </body>
 </html>

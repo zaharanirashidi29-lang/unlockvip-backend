@@ -2,7 +2,7 @@ const axios = require("axios");
 const { buildMatch } = require("./catalog");
 
 const TZ = "Africa/Dar_es_Salaam";
-const AHEAD_DAYS = 5;
+const AHEAD_DAYS = 7;
 const ESPN = "https://site.api.espn.com/apis/site/v2/sports";
 
 function safeDate(value) {
@@ -82,6 +82,8 @@ function competitorName(c) {
 function leagueName(event, comp, sportLabel) {
   const note = String(comp?.altGameNote || "").split(",")[0].trim();
   if (note) return note;
+  if (comp?.league?.name) return comp.league.name;
+  if (event?.league?.name) return event.league.name;
   if (comp?.group?.name && !/^Group /i.test(comp.group.name)) return comp.group.name;
   return sportLabel;
 }
@@ -113,7 +115,9 @@ function kickoffLabel(iso) {
   const t = `${p.hour}:${p.minute}`;
   if (`${p.year}-${p.month}-${p.day}` === `${today.year}-${today.month}-${today.day}`) return `Today ${t}`;
   const tomorrow = eatParts(new Date(Date.now() + 86400000));
-  if (`${p.year}-${p.month}-${p.day}` === `${tomorrow.year}-${tomorrow.month}-${tomorrow.day}`) return `Tomorrow ${t}`;
+  if (`${p.year}-${p.month}-${p.day}` === `${tomorrow.year}-${tomorrow.month}-${tomorrow.day}`) {
+    return `Tomorrow ${t}`;
+  }
   return `${p.day} ${monthName(p.month)} ${t}`;
 }
 
@@ -150,7 +154,7 @@ function toMatch(event, comp, sport, sportLabel) {
       kickoff,
       day: ymd(safeDate(kickoff)),
       time: apiState === "post" ? "FT" : apiState === "in" ? status.displayClock || "LIVE" : kickoffLabel(kickoff),
-      displayClock: status.displayClock || "",
+      displayClock: status.displayClock || status?.type?.shortDetail || "",
       apiState,
       period: periodFrom(status, sport),
       live: apiState === "in",
@@ -174,8 +178,10 @@ function flattenTennis(event, sportLabel) {
 
 async function espnScoreboard(path, dates) {
   const url = `${ESPN}/${path}/scoreboard`;
+  const params = { limit: 400 };
+  if (dates) params.dates = dates;
   const res = await axios.get(url, {
-    params: { dates, limit: 400 },
+    params,
     timeout: 20000,
     headers: { Accept: "application/json", "User-Agent": "Paribet/1.0" },
     validateStatus: () => true
@@ -186,77 +192,136 @@ async function espnScoreboard(path, dates) {
 
 const FEEDS = [
   { path: "soccer/all", sport: "football", label: "Football" },
+  { path: "soccer/eng.1", sport: "football", label: "Premier League" },
+  { path: "soccer/esp.1", sport: "football", label: "LaLiga" },
+  { path: "soccer/ger.1", sport: "football", label: "Bundesliga" },
+  { path: "soccer/ita.1", sport: "football", label: "Serie A" },
+  { path: "soccer/fra.1", sport: "football", label: "Ligue 1" },
+  { path: "soccer/ned.1", sport: "football", label: "Eredivisie" },
+  { path: "soccer/por.1", sport: "football", label: "Primeira Liga" },
+  { path: "soccer/usa.1", sport: "football", label: "MLS" },
+  { path: "soccer/mex.1", sport: "football", label: "Liga MX" },
+  { path: "soccer/bra.1", sport: "football", label: "Brasileirão" },
+  { path: "soccer/arg.1", sport: "football", label: "Liga Profesional" },
+  { path: "soccer/tur.1", sport: "football", label: "Süper Lig" },
+  { path: "soccer/uefa.champions", sport: "football", label: "UCL" },
+  { path: "soccer/uefa.europa", sport: "football", label: "UEL" },
+  { path: "soccer/uefa.europa.conf", sport: "football", label: "UECL" },
+  { path: "soccer/afc.champions", sport: "football", label: "AFC Champions" },
+  { path: "soccer/caf.champions", sport: "football", label: "CAF Champions" },
   { path: "basketball/nba", sport: "basketball", label: "NBA" },
   { path: "basketball/wnba", sport: "basketball", label: "WNBA" },
   { path: "basketball/mens-college-basketball", sport: "basketball", label: "NCAA" },
+  { path: "basketball/womens-college-basketball", sport: "basketball", label: "NCAAW" },
   { path: "hockey/nhl", sport: "hockey", label: "NHL" },
   { path: "tennis/atp", sport: "tennis", label: "ATP" },
-  { path: "tennis/wta", sport: "tennis", label: "WTA" }
+  { path: "tennis/wta", sport: "tennis", label: "WTA" },
+  { path: "football/nfl", sport: "football", label: "NFL" },
+  { path: "baseball/mlb", sport: "baseball", label: "MLB" },
+  { path: "mma/ufc", sport: "mma", label: "UFC" }
 ];
 
-async function fetchDay(compact) {
-  const packs = await Promise.all(
-    FEEDS.map(async (feed) => {
+function eventsToMatches(events, feed) {
+  const rows = [];
+  for (const event of events || []) {
+    if (feed.sport === "tennis" && event.groupings) {
       try {
-        const events = await espnScoreboard(feed.path, compact);
-        const rows = [];
-        for (const event of events) {
-          if (feed.sport === "tennis" && event.groupings) {
-            try {
-              rows.push(...flattenTennis(event, feed.label));
-            } catch (err) {
-              console.log("fixture skip tennis", err.message);
-            }
-            continue;
-          }
-          for (const comp of event.competitions || []) {
-            try {
-              const row = toMatch(event, comp, feed.sport, feed.label);
-              if (row) rows.push(row);
-            } catch (err) {
-              console.log("fixture skip", feed.path, err.message);
-            }
-          }
-        }
-        return rows;
+        rows.push(...flattenTennis(event, feed.label));
       } catch (err) {
-        console.log("fixture feed", feed.path, compact, err.message);
-        return [];
+        console.log("fixture skip tennis", err.message);
       }
-    })
-  );
+      continue;
+    }
+    for (const comp of event.competitions || []) {
+      try {
+        const row = toMatch(event, comp, feed.sport, feed.label);
+        if (row) rows.push(row);
+      } catch (err) {
+        console.log("fixture skip", feed.path, err.message);
+      }
+    }
+  }
+  return rows;
+}
+
+async function fetchFeed(feed, compact) {
+  try {
+    const events = await espnScoreboard(feed.path, compact);
+    return eventsToMatches(events, feed);
+  } catch (err) {
+    console.log("fixture feed", feed.path, compact || "live", err.message);
+    return [];
+  }
+}
+
+async function fetchDay(compact) {
+  const packs = await Promise.all(FEEDS.map((feed) => fetchFeed(feed, compact)));
+  return packs.flat();
+}
+
+async function fetchLiveBoards() {
+  const packs = await Promise.all(FEEDS.map((feed) => fetchFeed(feed, null)));
   return packs.flat();
 }
 
 function titleFor(matches) {
   const today = ymd();
   const days = [...new Set(matches.map((m) => m.day).filter(Boolean))].sort();
-  if (!days.length) return "Today";
+  if (!days.length) return "Today & upcoming";
   const first = days[0];
   const last = days[days.length - 1];
   if (first === last && first === today) return `Today ${Number(first.slice(8))} ${monthName(first.slice(5, 7))}`;
   return `${Number(first.slice(8))} ${monthName(first.slice(5, 7))} – ${Number(last.slice(8))} ${monthName(last.slice(5, 7))}`;
 }
 
+function preferRow(prev, next) {
+  if (!prev) return next;
+  if (!next) return prev;
+  const rank = (m) => (m.live || m.apiState === "in" ? 3 : m.apiState === "post" || m.period === "ft" ? 1 : 2);
+  if (rank(next) > rank(prev)) return next;
+  if (rank(next) < rank(prev)) return prev;
+  if ((next.score || "").length > (prev.score || "").length) return next;
+  if ((next.displayClock || "").length > (prev.displayClock || "").length) return next;
+  return next;
+}
+
 async function loadFixtures() {
   const days = daysFromToday();
   const byId = new Map();
-  for (const d of days) {
-    const rows = await fetchDay(d.compact);
+
+  const liveRows = await fetchLiveBoards();
+  for (const row of liveRows) {
+    if (row?.id) byId.set(row.id, preferRow(byId.get(row.id), row));
+  }
+
+  const dayPacks = await Promise.all(days.map((d) => fetchDay(d.compact)));
+  for (const rows of dayPacks) {
     for (const row of rows) {
-      if (row?.id) byId.set(row.id, row);
+      if (row?.id) byId.set(row.id, preferRow(byId.get(row.id), row));
     }
   }
+
   const allowed = new Set(days.map((d) => d.iso));
+  const today = ymd();
   const matches = [...byId.values()]
-    .filter((m) => allowed.has(m.day))
-    .sort((a, b) => String(a.kickoff || "").localeCompare(String(b.kickoff || "")));
+    .filter((m) => {
+      if (m.live || m.apiState === "in") return true;
+      if (!m.day) return true;
+      return allowed.has(m.day) || m.day === today;
+    })
+    .sort((a, b) => {
+      if (Boolean(b.live) - Boolean(a.live)) return Boolean(b.live) - Boolean(a.live);
+      return String(a.kickoff || "").localeCompare(String(b.kickoff || ""));
+    });
+
   return {
     matches,
     title: titleFor(matches),
     days: days.map((d) => d.iso),
-    fetchedAt: new Date().toISOString()
+    fetchedAt: new Date().toISOString(),
+    liveCount: matches.filter((m) => m.live || m.apiState === "in").length,
+    upcomingCount: matches.filter((m) => m.apiState === "pre" || m.period === "pre").length
   };
 }
 
-module.exports = { loadFixtures, eatParts, ymd, kickoffLabel, titleFor, AHEAD_DAYS };
+module.exports = { loadFixtures, eatParts, ymd, kickoffLabel, titleFor, AHEAD_DAYS, FEEDS };

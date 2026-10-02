@@ -214,7 +214,9 @@ const SPORT_DEFS = [
   { id: "football", name: "Football" },
   { id: "basketball", name: "Basketball" },
   { id: "hockey", name: "Ice Hockey" },
-  { id: "tennis", name: "Tennis" }
+  { id: "tennis", name: "Tennis" },
+  { id: "baseball", name: "Baseball" },
+  { id: "mma", name: "MMA" }
 ];
 
 function sportsFrom(matches) {
