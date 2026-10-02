@@ -1,7 +1,5 @@
 const { MATCHES } = require("./catalog");
 
-const FIXTURE_DAY = "2026-10-01";
-
 function eatParts(date = new Date()) {
   const fmt = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Africa/Dar_es_Salaam",
@@ -20,10 +18,15 @@ function eatParts(date = new Date()) {
   return out;
 }
 
+function fixtureDayIso() {
+  const p = eatParts();
+  return `${p.year}-${p.month}-${p.day}`;
+}
+
 function eatMinutesNow() {
   const p = eatParts();
   const nowDay = Date.parse(`${p.year}-${p.month}-${p.day}T00:00:00+03:00`);
-  const fixtureDay = Date.parse(`${FIXTURE_DAY}T00:00:00+03:00`);
+  const fixtureDay = Date.parse(`${fixtureDayIso()}T00:00:00+03:00`);
   const days = Math.round((nowDay - fixtureDay) / 86400000);
   return days * 1440 + Number(p.hour) * 60 + Number(p.minute);
 }

@@ -466,9 +466,10 @@ function catalogSports() {
 }
 
 function catalogPayload(extra = {}) {
+  const matches = currentMatches();
   return {
     ok: true,
-    matches: currentMatches(),
+    matches,
     results: live.liveMatches(board.results || []),
     sports: catalogSports(),
     promos: PROMOS,
@@ -478,6 +479,8 @@ function catalogPayload(extra = {}) {
     today: fixtures.ymd(),
     fetchedAt: board.fetchedAt,
     checkedAt: new Date().toISOString(),
+    liveCount: matches.filter((m) => m.live).length,
+    upcomingCount: matches.filter((m) => m.period === "pre").length,
     ...extra
   };
 }
@@ -665,7 +668,18 @@ async function refreshFixtures() {
     }
     await archiveAndPurge();
     await settleOpenSports();
-    console.log("fixtures", board.matches.length, "live", board.matches.filter((m) => m.live).length, "ft-held", board.matches.filter((m) => m.period === "ft").length, "archived", (board.results || []).length);
+    console.log(
+      "fixtures",
+      board.matches.length,
+      "live",
+      board.matches.filter((m) => m.live || m.apiState === "in").length,
+      "upcoming",
+      board.matches.filter((m) => m.period === "pre" || m.apiState === "pre").length,
+      "ft-held",
+      board.matches.filter((m) => m.period === "ft").length,
+      "archived",
+      (board.results || []).length
+    );
   } catch (err) {
     console.log("fixture refresh", err.message);
     if (!board.matches.length) {
@@ -1514,7 +1528,15 @@ async function start(opts = {}) {
     console.log("No MONGODB_URI; using local file store");
   }
   await reverseFakeDeposits();
-  refreshFixtures().catch((err) => console.log("first fixture load", err.message));
+  try {
+    await Promise.race([
+      refreshFixtures(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("fixture warmup timeout")), 25000))
+    ]);
+  } catch (err) {
+    console.log("first fixture load", err.message);
+    refreshFixtures().catch((e) => console.log("fixture retry", e.message));
+  }
   setInterval(() => {
     refreshFixtures().catch((err) => console.log("fixture refresh", err.message));
   }, FIXTURE_REFRESH_MS);

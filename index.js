@@ -88,10 +88,26 @@ const paribet = require("./paribet/server");
 
 app.use((req, res, next) => {
   const host = String(req.headers.host || "").split(":")[0].toLowerCase();
-  if (host === "paribet.unlockvip.co.tz" || host === "www.paribet.unlockvip.co.tz") {
-    return paribet.app(req, res, next);
+  const forwarded = String(req.headers["x-forwarded-host"] || "")
+    .split(",")[0]
+    .split(":")[0]
+    .toLowerCase();
+  const h = forwarded || host;
+  const pathOnly = String(req.path || "");
+  const viaPath = pathOnly === "/paribet" || pathOnly.startsWith("/paribet/");
+  const viaHost =
+    h === "paribet.unlockvip.co.tz" ||
+    h === "www.paribet.unlockvip.co.tz" ||
+    h === "paribet.onrender.com" ||
+    h.startsWith("paribet.");
+
+  if (!viaHost && !viaPath) return next();
+
+  if (viaPath) {
+    const stripped = req.url.replace(/^\/paribet/, "") || "/";
+    req.url = stripped.startsWith("/") ? stripped : `/${stripped}`;
   }
-  next();
+  return paribet.app(req, res, next);
 });
 
 app.use(cors());
