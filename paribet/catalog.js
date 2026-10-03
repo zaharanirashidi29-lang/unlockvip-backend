@@ -229,7 +229,7 @@ function sportsFrom(matches) {
 const SPORTS = sportsFrom(MATCHES);
 
 const PROMOS = [
-  { id: "welcome", title: "First wallet top-up", detail: "Deposit TZS 10,000+ with FimiPay and get TZS 2,000 extra once.", bonus: 2000, minDeposit: 10000 },
+  { id: "welcome", title: "First wallet top-up", detail: "Deposit TZS 60,000+ with FimiPay and get TZS 2,000 extra once.", bonus: 2000, minDeposit: 60000 },
   { id: "live", title: "Live extra", detail: "Place a live bet of TZS 1,000+ and get TZS 500 bonus.", bonus: 500, minDeposit: 0 },
   { id: "casino", title: "Games pack", detail: "Claim TZS 1,000 to try Aviator, Mines, Dice or Slots.", bonus: 1000, minDeposit: 0 }
 ];

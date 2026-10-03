@@ -1,7 +1,7 @@
 const axios = require("axios");
 
 const BASE = "https://fimipay.com";
-const MIN_DEPOSIT = 10000;
+const MIN_DEPOSIT = 60000;
 const MIN_WITHDRAW = 10000;
 
 const NETWORKS = [

@@ -21,7 +21,7 @@ const state = {
   payTab: "deposit",
   network: "auto",
   networks: [],
-  minDeposit: 10000,
+  minDeposit: 60000,
   minWithdraw: 10000,
   loadCode: "",
   lastBetCode: "",
@@ -1381,7 +1381,7 @@ window.addEventListener("hashchange", route);
   try {
     const pay = await api("/api/pay/networks");
     state.networks = pay.networks || [];
-    state.minDeposit = pay.minDeposit || 10000;
+    state.minDeposit = pay.minDeposit || 60000;
     state.minWithdraw = pay.minWithdraw || 10000;
   } catch (_) {}
   if (state.user) {
