@@ -614,6 +614,7 @@ function accountHtml() {
       <div class="row-k"><span>Bonus</span><b>${tzs(state.user.bonusBalance)}</b></div>
       <a class="wide gold" href="#/deposit">Deposit</a>
       <a class="wide" href="#/withdraw">Withdraw</a>
+      <a class="wide" href="${BASE}/download">Get Paribet App</a>
       <button class="wide" type="button" id="logoutBtn">Log out</button>
     </section>`;
 }
@@ -1360,16 +1361,33 @@ $("themeBtn").onclick = () => {
   document.documentElement.setAttribute("data-theme", next);
 };
 
+function setupInstallBar() {
+  const bar = $("installBar");
+  const close = $("installBarClose");
+  if (!bar) return;
+  const standalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone;
+  const dismissed = localStorage.getItem("paribet_hide_install") === "1";
+  bar.hidden = Boolean(standalone || dismissed);
+  if (close) {
+    close.onclick = () => {
+      localStorage.setItem("paribet_hide_install", "1");
+      bar.hidden = true;
+    };
+  }
+}
+
 window.addEventListener("hashchange", route);
 
 (async function boot() {
   loadUser();
+  setupInstallBar();
   const path = location.pathname.replace(/\/$/, "");
   if (!location.hash) {
     if (path.endsWith("/register") || path.endsWith("/join")) location.hash = "#/register";
     else if (path.endsWith("/login")) location.hash = "#/login";
     else if (path.endsWith("/deposit")) location.hash = "#/deposit";
     else if (path.endsWith("/account")) location.hash = "#/account";
+    else if (path.endsWith("/download")) location.hash = "#/home";
     else location.hash = "#/home";
   }
   route();

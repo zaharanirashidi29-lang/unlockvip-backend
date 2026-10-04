@@ -668,3 +668,39 @@ button.gold-lite {
   .bottom { display: grid; }
   .stats { grid-template-columns: 1fr 1fr; }
 }
+
+.install-bar {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: 72px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 12px 12px 14px;
+  border-radius: 16px;
+  background: linear-gradient(120deg, #15222d, #1a140c);
+  border: 1px solid var(--line);
+  box-shadow: 0 16px 40px rgba(0,0,0,.35);
+}
+.install-bar[hidden] { display: none !important; }
+.install-bar > div {
+  flex: 1;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.install-bar b { font-size: .95rem; }
+.install-bar span { color: var(--muted); font-size: .78rem; }
+.install-link {
+  background: linear-gradient(160deg, var(--gold-2), var(--gold));
+  color: #1a1206;
+  font-weight: 800;
+  border-radius: 999px;
+  padding: 10px 14px;
+  white-space: nowrap;
+}
+@media (min-width: 861px) {
+  .install-bar { bottom: 18px; max-width: 520px; left: auto; right: 18px; }
+}

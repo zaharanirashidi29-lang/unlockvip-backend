@@ -1501,6 +1501,23 @@ app.get("/admin", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "admin.html"));
 });
 
+app.get("/app/paribet.apk", (_req, res) => {
+  const apk = path.join(__dirname, "public", "app", "paribet.apk");
+  if (!fs.existsSync(apk)) {
+    return res.status(404).json({
+      ok: false,
+      error: "APK not ready yet. Use Install Paribet App on /download."
+    });
+  }
+  res.setHeader("Content-Type", "application/vnd.android.package-archive");
+  res.setHeader("Content-Disposition", 'attachment; filename="paribet.apk"');
+  return res.sendFile(apk);
+});
+
+app.get(["/download", "/download.html", "/get-app"], (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "download.html"));
+});
+
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
@@ -1508,7 +1525,9 @@ app.get("/health", (_req, res) => {
     host: PUBLIC_HOST,
     origin: PUBLIC_ORIGIN,
     persist: mongoReady() ? "mongo" : "file",
-    mongo: mongoReady()
+    mongo: mongoReady(),
+    download: "/download",
+    apk: fs.existsSync(path.join(__dirname, "public", "app", "paribet.apk"))
   });
 });
 
