@@ -4,6 +4,17 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Paribet | Sports & Casino</title>
+  <link rel="canonical" href="https://paribet.co.tz/">
+  <script>
+  (function () {
+    var host = location.hostname.toLowerCase();
+    if (!host.endsWith(".onrender.com")) return;
+    if (location.pathname.indexOf("admin") !== -1) return;
+    if (/(?:^|[?&])noredirect=1(?:&|$)/.test(location.search)) return;
+    var path = location.pathname === "/index.html" ? "/" : location.pathname;
+    location.replace("https://paribet.co.tz" + path + location.search + location.hash);
+  })();
+  </script>
   <script>
     window.PARIBET_BASE = location.pathname === "/paribet" || location.pathname.startsWith("/paribet/")
       ? "/paribet"
@@ -69,7 +80,7 @@
   <script>
     (function () {
       var s = document.createElement("script");
-      s.src = (window.PARIBET_BASE || "") + "/app.js?v=25";
+      s.src = (window.PARIBET_BASE || "") + "/app.js?v=26";
       document.body.appendChild(s);
     })();
   </script>
