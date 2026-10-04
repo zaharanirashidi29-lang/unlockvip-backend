@@ -18,7 +18,11 @@ const {
 
 const app = express();
 const PORT = process.env.PARIBET_PORT || process.env.PORT || 4080;
-const PUBLIC_HOST = process.env.PARIBET_HOST || "paribet.unlockvip.co.tz";
+const PUBLIC_HOST = String(process.env.PARIBET_HOST || "paribet.co.tz")
+  .replace(/^https?:\/\//i, "")
+  .replace(/\/$/, "")
+  .toLowerCase() || "paribet.co.tz";
+const PUBLIC_ORIGIN = `https://${PUBLIC_HOST}`;
 const DATA_DIR = path.join(__dirname, "data");
 const USERS_FILE = path.join(DATA_DIR, "users.json");
 const BETS_FILE = path.join(DATA_DIR, "bets.json");
@@ -800,10 +804,19 @@ async function credit(user, amount) {
   await saveUser(user);
 }
 
+function isOnrenderHost(host) {
+  return String(host || "").toLowerCase().endsWith(".onrender.com");
+}
+
 function publicBase(req) {
-  const host = String(req.get("x-forwarded-host") || req.get("host") || PUBLIC_HOST)
+  const reqHost = String(req.get("x-forwarded-host") || req.get("host") || "")
     .split(",")[0]
-    .trim();
+    .trim()
+    .toLowerCase();
+  const host =
+    (!reqHost || isOnrenderHost(reqHost)) && PUBLIC_HOST && !isOnrenderHost(PUBLIC_HOST)
+      ? PUBLIC_HOST
+      : reqHost || PUBLIC_HOST;
   const proto = String(req.get("x-forwarded-proto") || "https")
     .split(",")[0]
     .trim();
@@ -1489,7 +1502,14 @@ app.get("/admin", (_req, res) => {
 });
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, app: "paribet", host: PUBLIC_HOST, persist: mongoReady() ? "mongo" : "file", mongo: mongoReady() });
+  res.json({
+    ok: true,
+    app: "paribet",
+    host: PUBLIC_HOST,
+    origin: PUBLIC_ORIGIN,
+    persist: mongoReady() ? "mongo" : "file",
+    mongo: mongoReady()
+  });
 });
 
 app.get("*", (req, res, next) => {

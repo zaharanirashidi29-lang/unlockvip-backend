@@ -109,8 +109,11 @@ app.use((req, res, next) => {
   const pathOnly = String(req.path || "");
   const viaPath = pathOnly === "/paribet" || pathOnly.startsWith("/paribet/");
   const viaHost =
+    h === "paribet.co.tz" ||
+    h === "www.paribet.co.tz" ||
     h === "paribet.unlockvip.co.tz" ||
     h === "www.paribet.unlockvip.co.tz" ||
+    h === "paribet-tz.onrender.com" ||
     h === "paribet.onrender.com" ||
     h.startsWith("paribet.");
 
