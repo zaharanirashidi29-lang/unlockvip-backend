@@ -2821,6 +2821,10 @@ if (fs.existsSync(publicDir)) {
         if (filePath.endsWith(".html")) {
           res.setHeader("Cache-Control", "public, max-age=60");
         }
+        if (filePath.endsWith("fimi-bridge.js")) {
+          res.setHeader("Cache-Control", "no-store");
+          res.setHeader("Access-Control-Allow-Origin", "*");
+        }
       }
     })
   );
