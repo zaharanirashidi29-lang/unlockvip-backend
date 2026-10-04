@@ -545,6 +545,29 @@ function buildCheckoutUrls(reference) {
   };
 }
 
+function buildFimipayClientPushResponse({ reference, operator, checkout, message }) {
+  const checkoutUrl = `${getPublicBaseUrl()}/fimi-checkout/${encodeURIComponent(reference)}`;
+  return {
+    success: true,
+    // Old unlockvip.co.tz shop only redirects when provider is pesapal.
+    provider: "pesapal",
+    operator,
+    requires_client_push: true,
+    requires_checkout: true,
+    reference,
+    checkout,
+    checkout_url: checkoutUrl,
+    checkout_path: `/fimi-checkout/${reference}`,
+    message: message || "Confirm the FimiPay PIN on your phone",
+    data: {
+      reference,
+      merchant: fimipayMerchantLabel(),
+      status: "PENDING",
+      checkout_url: checkoutUrl
+    }
+  };
+}
+
 function buildPesapalPaymentResponse(payment, order) {
   const checkout = buildCheckoutUrls(payment.reference);
   return {
@@ -1528,20 +1551,14 @@ app.post("/create-payment", async (req, res) => {
         existing.provider === "fimipay" &&
         existing.provider_response?.checkout
       ) {
-        return res.json({
-          success: true,
-          provider: "fimipay",
-          operator,
-          requires_client_push: true,
-          reference: existing.reference,
-          checkout: existing.provider_response.checkout,
-          message: "Payment already in progress",
-          data: {
+        return res.json(
+          buildFimipayClientPushResponse({
             reference: existing.reference,
-            merchant: fimipayMerchantLabel(),
-            status: "PENDING"
-          }
-        });
+            operator,
+            checkout: existing.provider_response.checkout,
+            message: "Payment already in progress"
+          })
+        );
       }
     }
 
@@ -1830,19 +1847,13 @@ app.post("/create-payment", async (req, res) => {
         }
       );
 
-      return res.json({
-        success: true,
-        provider,
-        operator,
-        requires_client_push: true,
-        reference,
-        checkout,
-        data: {
+      return res.json(
+        buildFimipayClientPushResponse({
           reference,
-          merchant: fimipayMerchantLabel(),
-          status: "PENDING"
-        }
-      });
+          operator,
+          checkout
+        })
+      );
     }
 
     if (provider === "snippe") {
@@ -2168,6 +2179,104 @@ app.get("/pay/:reference", async (req, res) => {
   } catch (error) {
     console.error("PAY PAGE ERROR:", error.message);
     return res.status(500).send("Payment page failed");
+  }
+});
+
+app.get("/fimi-checkout/:reference", async (req, res) => {
+  try {
+    const payment = await Payment.findOne({
+      reference: req.params.reference,
+      provider: "fimipay"
+    });
+    if (!payment) {
+      return res.status(404).send("Payment not found");
+    }
+    if (payment.status === "COMPLETED") {
+      return res.send("Already paid. You can close this page.");
+    }
+    const checkout = payment.provider_response?.checkout;
+    if (!checkout?.url || !checkout?.body) {
+      return res.status(404).send("FimiPay checkout not available");
+    }
+
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>UnlockVIP FimiPay</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0b1020; color: #eef2ff; font-family: system-ui, sans-serif; }
+    .box { max-width: 22rem; padding: 1.5rem; text-align: center; }
+    .spin { width: 36px; height: 36px; border: 3px solid #334; border-top-color: #8cf; border-radius: 50%; margin: 0 auto 1rem; animation: s 0.8s linear infinite; }
+    @keyframes s { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="spin"></div>
+    <p id="msg">Sending FimiPay PIN to your phone…</p>
+  </div>
+  <script>
+    const checkout = ${JSON.stringify(checkout)};
+    const reference = ${JSON.stringify(payment.reference)};
+    function parseFimiJson(text){ try { return JSON.parse(text || "{}"); } catch (_) { return {}; } }
+    function fimiXhr(url, body, contentType){
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", url);
+        xhr.setRequestHeader("Accept", "application/json");
+        xhr.setRequestHeader("Content-Type", contentType);
+        xhr.timeout = 45000;
+        xhr.onload = () => resolve({ http: xhr.status, result: parseFimiJson(xhr.responseText) });
+        xhr.onerror = () => reject(new Error("Could not reach FimiPay. Retry on mobile data."));
+        xhr.ontimeout = () => reject(new Error("FimiPay timed out"));
+        xhr.send(JSON.stringify(body));
+      });
+    }
+    async function sendFimiPay(checkout){
+      const attempts = ["text/plain;charset=UTF-8", "application/json"];
+      let lastErr = new Error("Could not send FimiPay push");
+      for (const type of attempts) {
+        try {
+          const pushed = await fimiXhr(checkout.url, checkout.body, type);
+          const orderId = String(pushed.result.order_id || pushed.result.orderId || "").trim();
+          const msg = String(pushed.result.message || pushed.result.error || "");
+          if (/vpn|proxy/i.test(msg)) throw new Error("FimiPay blocked this network. Retry on mobile data, with VPN off.");
+          if (pushed.http >= 400 || pushed.result.ok === false) throw new Error(msg || "Could not send FimiPay push");
+          if (orderId) return { http: pushed.http, orderId, result: pushed.result };
+          lastErr = new Error(msg || "Could not send FimiPay push");
+        } catch (err) { lastErr = err; }
+      }
+      throw lastErr;
+    }
+    (async function () {
+      const msg = document.getElementById("msg");
+      try {
+        const pushed = await sendFimiPay(checkout);
+        const attached = await fetch("/fimipay-push", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            reference,
+            http: pushed.http,
+            orderId: pushed.orderId,
+            result: pushed.result
+          })
+        }).then((r) => r.json());
+        if (!attached.success) throw new Error(attached.error || "Payment failed");
+        msg.textContent = "PIN sent. Approve it on your phone, then close this page.";
+      } catch (error) {
+        msg.textContent = error.message || "Payment failed";
+      }
+    })();
+  </script>
+</body>
+</html>`);
+  } catch (error) {
+    console.error("FIMI CHECKOUT PAGE ERROR:", error.message);
+    return res.status(500).send("Checkout failed");
   }
 });
 
