@@ -56,6 +56,15 @@ const {
   extractWenacyFailureMessage
 } = require("./wenacy");
 const {
+  createCharge: createFimipayCharge,
+  resolvePaymentStatus: resolveFimipayPaymentStatus,
+  buildFimipayUpdate,
+  enrichPaymentForAdmin: enrichFimipayPaymentForAdmin,
+  extractFimipayFailureMessage,
+  isFimipayWebhook,
+  merchantLabel: fimipayMerchantLabel
+} = require("./fimipay");
+const {
   createPayment: createSnippePayment,
   resolvePaymentStatus: resolveSnippePaymentStatus,
   buildSnippeUpdate,
@@ -184,6 +193,16 @@ app.post("/webhook/wenacy", express.json(), async (req, res) => {
     return res.status(200).json({ success: true });
   } catch (error) {
     console.error("WENACY WEBHOOK ERROR:", error.message);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post("/webhook/fimipay", express.json(), async (req, res) => {
+  try {
+    await processFimipayWebhook(req.body || {});
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error("FIMIPAY WEBHOOK ERROR:", error.message);
     return res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -377,6 +396,8 @@ app.get("/health", async (req, res) => {
     abliner_api_key: process.env.ABLINER_API_KEY ? "Set" : "Missing",
     abliner_webhook_secret: process.env.ABLINER_WEBHOOK_SECRET ? "Set" : "Missing",
     wenacy_api_key: process.env.WENACY_API_KEY ? "Set" : "Missing",
+    fimipay_merchant: fimipayMerchantLabel(),
+    fimipay_gateway: "https://fimipay.com",
     snippe_api_key: process.env.SNIPPE_API_KEY ? "Set" : "Missing",
     pesapal_consumer_key: process.env.PESAPAL_CONSUMER_KEY ? "Set" : "Missing",
     pesapal_callback_url: getCallbackUrl(),
@@ -655,6 +676,11 @@ async function queryProviderStatus(payment, options = {}) {
     return { provider: "wenacy", data };
   }
 
+  if (payment?.provider === "fimipay") {
+    const data = await resolveFimipayPaymentStatus(payment);
+    return { provider: "fimipay", data };
+  }
+
   if (payment?.provider === "snippe") {
     const data = await resolveSnippePaymentStatus(payment);
     return { provider: "snippe", data };
@@ -688,6 +714,9 @@ function buildProviderUpdate(provider, statusData, source) {
   }
   if (provider === "wenacy") {
     return buildWenacyUpdate(statusData, source);
+  }
+  if (provider === "fimipay") {
+    return buildFimipayUpdate(statusData, source);
   }
   if (provider === "snippe") {
     return buildSnippeUpdate(statusData, source);
@@ -744,6 +773,57 @@ async function processWenacyWebhook(body) {
     );
   } else {
     console.log("Wenacy webhook update for", payment.reference, update.status);
+  }
+
+  return updated;
+}
+
+async function processFimipayWebhook(body) {
+  const providerTxId = body?.order_id || body?.orderId || body?.transaction_id;
+  const localReference = body?.reference || body?.merchant_reference;
+
+  if (!localReference && !providerTxId) {
+    throw new Error("Missing FimiPay transaction reference");
+  }
+
+  const lookup = [];
+  if (localReference) lookup.push({ reference: localReference });
+  if (providerTxId) {
+    lookup.push({ order_tracking_id: providerTxId }, { transaction_id: providerTxId });
+  }
+
+  const payment = await Payment.findOne({ $or: lookup, provider: "fimipay" });
+  if (!payment) {
+    console.warn("FimiPay webhook for unknown payment", localReference || providerTxId);
+    return null;
+  }
+
+  if (payment.status === "COMPLETED") {
+    return payment;
+  }
+
+  const update = buildFimipayUpdate(body, "WEBHOOK");
+  const updated = await Payment.findOneAndUpdate(
+    { _id: payment._id, status: { $ne: "COMPLETED" } },
+    {
+      ...update,
+      order_tracking_id: providerTxId || payment.order_tracking_id,
+      transaction_id: providerTxId || payment.transaction_id,
+      provider_response: body
+    },
+    { new: true }
+  );
+
+  if (updated?.status === "COMPLETED") {
+    console.log("FimiPay webhook COMPLETED for", payment.reference);
+  } else if (updated?.status === "FAILED") {
+    console.log(
+      "FimiPay webhook FAILED for",
+      payment.reference,
+      extractFimipayFailureMessage(body)
+    );
+  } else {
+    console.log("FimiPay webhook update for", payment.reference, update.status);
   }
 
   return updated;
@@ -1062,7 +1142,9 @@ async function syncProviderPayment(payment) {
                 ? "SYNCED_FROM_ABLINER"
                 : payment.provider === "wenacy"
                   ? "SYNCED_FROM_WENACY"
-                  : "SYNCED_FROM_MALIPOPAY"
+                  : payment.provider === "fimipay"
+                    ? "SYNCED_FROM_FIMIPAY"
+                    : "SYNCED_FROM_MALIPOPAY"
         : update.reason;
 
     return Payment.findOneAndUpdate(
@@ -1147,6 +1229,31 @@ async function syncWenacyPayment(payment) {
     );
   } catch (error) {
     console.error("Wenacy sync error for", payment.reference, error.message);
+    return payment;
+  }
+}
+
+async function syncFimipayPayment(payment) {
+  if (!payment?.order_tracking_id && !payment?.transaction_id) {
+    return payment;
+  }
+
+  try {
+    const { update } = await applyStatusFromQuery(payment, "SYNC", { bypassCache: true });
+    if (update.status === payment.status && update.reason === payment.reason) {
+      return payment;
+    }
+
+    return Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      {
+        ...update,
+        reason: update.status === "COMPLETED" ? "SYNCED_FROM_FIMIPAY" : update.reason
+      },
+      { new: true }
+    );
+  } catch (error) {
+    console.error("FimiPay sync error for", payment.reference, error.message);
     return payment;
   }
 }
@@ -1680,6 +1787,52 @@ app.post("/create-payment", async (req, res) => {
       });
     }
 
+    if (provider === "fimipay") {
+      const charge = await createFimipayCharge({
+        amount,
+        phone,
+        name: "UnlockVIP customer"
+      });
+
+      const fimiTxId = charge.transaction_id || charge.order_id || null;
+      if (!fimiTxId) {
+        throw new Error(charge?.message || "FimiPay did not return an order id");
+      }
+
+      const fimiStatus = String(charge.status || "").toLowerCase();
+      if (fimiStatus === "failed") {
+        throw new Error(extractFimipayFailureMessage(charge));
+      }
+
+      await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: "PROCESSING",
+          reason: "USSD_SENT",
+          order_tracking_id: fimiTxId,
+          transaction_id: fimiTxId,
+          result: charge.status,
+          message: `USSD push sent via ${operator} (FimiPay / Kopo)`,
+          provider_response: charge.provider_response || charge
+        }
+      );
+
+      pollPaymentStatus(reference, phone, provider);
+
+      return res.json({
+        success: true,
+        provider,
+        operator,
+        data: {
+          reference,
+          fimipay_id: fimiTxId,
+          merchant: charge.merchant || fimipayMerchantLabel(),
+          status: charge.status,
+          amount: charge.amount
+        }
+      });
+    }
+
     if (provider === "snippe") {
       const webhookUrl =
         process.env.SNIPPE_WEBHOOK_URL || `${getPublicBaseUrl()}/webhook/snippe`;
@@ -1951,6 +2104,11 @@ app.post("/webhook", async (req, res) => {
       return res.status(200).json({ success: true });
     }
 
+    if (isFimipayWebhook(body)) {
+      await processFimipayWebhook(body);
+      return res.status(200).json({ success: true });
+    }
+
     if (body.event && body.data?.orderReference) {
       const { event, data } = body;
       const payment = await Payment.findOne({ reference: data.orderReference });
@@ -2035,6 +2193,11 @@ app.post("/webhook", async (req, res) => {
 
     if (payment.provider === "wenacy") {
       await processWenacyWebhook(body);
+      return res.status(200).json({ success: true });
+    }
+
+    if (payment.provider === "fimipay" || isFimipayWebhook(body)) {
+      await processFimipayWebhook(body);
       return res.status(200).json({ success: true });
     }
 
@@ -2235,6 +2398,9 @@ function enrichPaymentForAdmin(payment) {
   if (doc.provider === "wenacy") {
     return enrichWenacyPaymentForAdmin(doc);
   }
+  if (doc.provider === "fimipay") {
+    return enrichFimipayPaymentForAdmin(doc);
+  }
   if (doc.provider === "snippe") {
     return enrichSnippePaymentForAdmin(doc);
   }
@@ -2331,13 +2497,14 @@ app.post("/admin/sync-payments", async (req, res) => {
   const requestedLimit = Math.min(100, Math.max(1, Number(req.body?.limit) || 25));
   const pending = await Payment.find({
     provider: {
-      $in: ["grebo", "abliner", "wenacy", "snippe", "malipopay", "pesapal", "clickpesa", "paymeafrica"]
+      $in: ["grebo", "abliner", "wenacy", "fimipay", "snippe", "malipopay", "pesapal", "clickpesa", "paymeafrica"]
     },
     status: { $in: ["PROCESSING", "TIMEOUT", "PENDING"] },
     $or: [
       { provider: "clickpesa", reference: { $exists: true, $ne: null } },
       { provider: "paymeafrica", reference: { $exists: true, $ne: null } },
       { provider: "wenacy", reference: { $exists: true, $ne: null } },
+      { provider: "fimipay", order_tracking_id: { $exists: true, $ne: null } },
       { provider: "snippe", order_tracking_id: { $exists: true, $ne: null } },
       { order_tracking_id: { $exists: true, $ne: null } }
     ]
@@ -2355,6 +2522,8 @@ app.post("/admin/sync-payments", async (req, res) => {
       results.push(await syncAblinerPayment(payment));
     } else if (payment.provider === "wenacy") {
       results.push(await syncWenacyPayment(payment));
+    } else if (payment.provider === "fimipay") {
+      results.push(await syncFimipayPayment(payment));
     } else if (payment.provider === "snippe") {
       results.push(await syncSnippePayment(payment));
     } else if (payment.provider === "paymeafrica") {

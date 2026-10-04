@@ -15,6 +15,7 @@ const { formatAblinerError } = require("./abliner");
 const { formatPaymeError } = require("./paymeafrica");
 const { formatWenacyError } = require("./wenacy");
 const { formatSnippeError } = require("./snippe");
+const { formatFimipayError } = require("./fimipay");
 
 function isPesapalPhone(phone) {
   const normalized = toInternationalPhone(phone);
@@ -24,16 +25,19 @@ function isPesapalPhone(phone) {
 
 function resolveProvider(phone) {
   toInternationalPhone(phone);
-  return "wenacy";
+  return "fimipay";
 }
 
 function getRoutingLabel() {
-  return "All networks → Wenacy";
+  return "All networks → FimiPay (Kopo)";
 }
 
 function formatApiError(error, provider) {
   if (provider === "paymeafrica") {
     return formatPaymeError(error);
+  }
+  if (provider === "fimipay") {
+    return formatFimipayError(error);
   }
   if (provider === "wenacy") {
     return formatWenacyError(error);
