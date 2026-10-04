@@ -56,12 +56,15 @@ const {
   extractWenacyFailureMessage
 } = require("./wenacy");
 const {
-  createCharge: createFimipayCharge,
+  checkoutRequest: fimipayCheckoutRequest,
   resolvePaymentStatus: resolveFimipayPaymentStatus,
   buildFimipayUpdate,
   enrichPaymentForAdmin: enrichFimipayPaymentForAdmin,
   extractFimipayFailureMessage,
   isFimipayWebhook,
+  isPushOk: isFimipayPushOk,
+  orderIdOf: fimipayOrderIdOf,
+  publicError: fimipayPublicError,
   merchantLabel: fimipayMerchantLabel
 } = require("./fimipay");
 const {
@@ -1519,6 +1522,27 @@ app.post("/create-payment", async (req, res) => {
           data: existing
         });
       }
+
+      if (
+        existing.status === "PENDING" &&
+        existing.provider === "fimipay" &&
+        existing.provider_response?.checkout
+      ) {
+        return res.json({
+          success: true,
+          provider: "fimipay",
+          operator,
+          requires_client_push: true,
+          reference: existing.reference,
+          checkout: existing.provider_response.checkout,
+          message: "Payment already in progress",
+          data: {
+            reference: existing.reference,
+            merchant: fimipayMerchantLabel(),
+            status: "PENDING"
+          }
+        });
+      }
     }
 
     reference = makeTxRef();
@@ -1788,47 +1812,35 @@ app.post("/create-payment", async (req, res) => {
     }
 
     if (provider === "fimipay") {
-      const charge = await createFimipayCharge({
-        amount,
+      // FimiPay blocks datacenter/VPN IPs. The PIN push must leave the
+      // customer's phone (same pattern as Paribet), not Render.
+      const checkout = fimipayCheckoutRequest({
         phone,
+        amount,
         name: "UnlockVIP customer"
       });
-
-      const fimiTxId = charge.transaction_id || charge.order_id || null;
-      if (!fimiTxId) {
-        throw new Error(charge?.message || "FimiPay did not return an order id");
-      }
-
-      const fimiStatus = String(charge.status || "").toLowerCase();
-      if (fimiStatus === "failed") {
-        throw new Error(extractFimipayFailureMessage(charge));
-      }
 
       await Payment.findOneAndUpdate(
         { reference },
         {
-          status: "PROCESSING",
-          reason: "USSD_SENT",
-          order_tracking_id: fimiTxId,
-          transaction_id: fimiTxId,
-          result: charge.status,
-          message: `USSD push sent via ${operator} (FimiPay / Kopo)`,
-          provider_response: charge.provider_response || charge
+          status: "PENDING",
+          reason: "WAITING_FOR_CLIENT_PUSH",
+          message: `Confirm the FimiPay PIN on your phone (${operator})`,
+          provider_response: { checkout, merchant: fimipayMerchantLabel() }
         }
       );
-
-      pollPaymentStatus(reference, phone, provider);
 
       return res.json({
         success: true,
         provider,
         operator,
+        requires_client_push: true,
+        reference,
+        checkout,
         data: {
           reference,
-          fimipay_id: fimiTxId,
-          merchant: charge.merchant || fimipayMerchantLabel(),
-          status: charge.status,
-          amount: charge.amount
+          merchant: fimipayMerchantLabel(),
+          status: "PENDING"
         }
       });
     }
@@ -1982,6 +1994,76 @@ app.post("/create-payment", async (req, res) => {
       operator,
       reason: "API_ERROR"
     });
+  }
+});
+
+app.post("/fimipay-push", async (req, res) => {
+  try {
+    const reference = String(req.body?.reference || "").trim();
+    const data = req.body?.result && typeof req.body.result === "object" ? req.body.result : {};
+    const http = Number(req.body?.http || 0);
+    const orderId = fimipayOrderIdOf(data) || String(req.body?.orderId || "").trim();
+
+    if (!reference) {
+      return res.status(400).json({ success: false, error: "reference is required" });
+    }
+
+    const payment = await Payment.findOne({ reference, provider: "fimipay" });
+    if (!payment) {
+      return res.status(404).json({ success: false, error: "Payment not found" });
+    }
+
+    if (payment.status === "COMPLETED") {
+      return res.json({ success: true, reference, status: "COMPLETED" });
+    }
+
+    const message = fimipayPublicError(data, payment.message);
+    if (isFimipayPushOk(http, data) && orderId) {
+      await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: "PROCESSING",
+          reason: "USSD_SENT",
+          order_tracking_id: orderId,
+          transaction_id: orderId,
+          result: data.result || data.status || "PENDING",
+          message: `USSD push sent via ${detectOperator(payment.phone)} (FimiPay / Kopo)`,
+          provider_response: data
+        }
+      );
+      pollPaymentStatus(reference, payment.phone, "fimipay");
+      return res.json({
+        success: true,
+        reference,
+        fimipay_id: orderId,
+        status: "PROCESSING"
+      });
+    }
+
+    const vpnBlocked = /vpn|proxy/i.test(message);
+    const failMessage = vpnBlocked
+      ? "FimiPay blocked this network. Retry on mobile data, with VPN off."
+      : message || "Could not send FimiPay push";
+
+    await Payment.findOneAndUpdate(
+      { reference },
+      {
+        status: "FAILED",
+        reason: vpnBlocked ? "VPN_BLOCKED" : "PUSH_FAILED",
+        message: failMessage,
+        result: "ERROR",
+        provider_response: data
+      }
+    );
+
+    return res.status(400).json({
+      success: false,
+      error: failMessage,
+      reason: vpnBlocked ? "VPN_BLOCKED" : "PUSH_FAILED"
+    });
+  } catch (error) {
+    console.error("FIMIPAY PUSH ERROR:", error.message);
+    return res.status(500).json({ success: false, error: error.message });
   }
 });
 

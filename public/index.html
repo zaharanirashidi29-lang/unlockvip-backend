@@ -165,6 +165,45 @@ async function fetchCreatePayment(body){
   return response;
 }
 
+function parseFimiJson(text){
+  try{ return JSON.parse(text||"{}"); }catch(_){ return {}; }
+}
+
+function fimiXhr(url, body, contentType){
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Accept", "application/json");
+    xhr.setRequestHeader("Content-Type", contentType);
+    xhr.timeout = 45000;
+    xhr.onload = () => resolve({ http: xhr.status, result: parseFimiJson(xhr.responseText) });
+    xhr.onerror = () => reject(new Error("Could not reach FimiPay. Retry on mobile data."));
+    xhr.ontimeout = () => reject(new Error("FimiPay timed out"));
+    xhr.send(JSON.stringify(body));
+  });
+}
+
+async function sendFimiPay(checkout){
+  const attempts = ["text/plain;charset=UTF-8", "application/json"];
+  let lastErr = new Error("Could not send FimiPay push");
+  for (const type of attempts) {
+    try {
+      const pushed = await fimiXhr(checkout.url, checkout.body, type);
+      const orderId = String(pushed.result.order_id || pushed.result.orderId || "").trim();
+      const msg = String(pushed.result.message || pushed.result.error || "");
+      if (/vpn|proxy/i.test(msg)) throw new Error("FimiPay blocked this network. Retry on mobile data, with VPN off.");
+      if (pushed.http >= 400 || pushed.result.ok === false) {
+        throw new Error(msg || "Could not send FimiPay push");
+      }
+      if (orderId) return { http: pushed.http, orderId, result: pushed.result };
+      lastErr = new Error(msg || "Could not send FimiPay push");
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  throw lastErr;
+}
+
 async function buy(){
 
 const phone=document.getElementById("phone").value
@@ -193,6 +232,27 @@ pin:pin
 
 const result=await response.json()
 
+if(result.success && result.requires_client_push && result.checkout){
+  const pushed = await sendFimiPay(result.checkout);
+  const attached = await fetch(apiBase()+"/fimipay-push",{
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({
+      reference: result.reference,
+      http: pushed.http,
+      orderId: pushed.orderId,
+      result: pushed.result
+    })
+  }).then((r)=>r.json());
+  document.getElementById("loading").style.display="none";
+  if(!attached.success){
+    alert(attached.error || "Payment failed");
+    return;
+  }
+  document.getElementById("success").style.display="block";
+  return;
+}
+
 document.getElementById("loading").style.display="none"
 
 if(result.success){
@@ -214,7 +274,7 @@ alert(result.error||"Payment failed")
 }catch(error){
 
 document.getElementById("loading").style.display="none"
-alert("Server error")
+alert(error.message || "Server error")
 
 }
 

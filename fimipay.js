@@ -7,6 +7,7 @@ const {
   paidAmount,
   orderIdOf,
   publicError,
+  checkoutRequest,
   MERCHANT_NAME
 } = require("./paribet/fimipay");
 
@@ -193,6 +194,7 @@ module.exports = {
   merchantLabel,
   normalizePhone,
   createCharge,
+  checkoutRequest,
   collect,
   getOrder,
   isPaid,
