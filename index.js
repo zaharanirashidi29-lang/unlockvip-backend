@@ -546,24 +546,18 @@ function buildCheckoutUrls(reference) {
 }
 
 function buildFimipayClientPushResponse({ reference, operator, checkout, message }) {
-  const checkoutUrl = `${getPublicBaseUrl()}/fimi-checkout/${encodeURIComponent(reference)}`;
   return {
     success: true,
-    // Old unlockvip.co.tz shop only redirects when provider is pesapal.
-    provider: "pesapal",
+    provider: "fimipay",
     operator,
     requires_client_push: true,
-    requires_checkout: true,
     reference,
     checkout,
-    checkout_url: checkoutUrl,
-    checkout_path: `/fimi-checkout/${reference}`,
-    message: message || "Confirm the FimiPay PIN on your phone",
+    message: message || "Sending FimiPay PIN to your phone…",
     data: {
       reference,
       merchant: fimipayMerchantLabel(),
-      status: "PENDING",
-      checkout_url: checkoutUrl
+      status: "PENDING"
     }
   };
 }
