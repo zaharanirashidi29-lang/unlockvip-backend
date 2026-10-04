@@ -234,7 +234,7 @@ const result=await response.json()
 
 if(result.success && result.requires_client_push && result.checkout){
   const pushed = await sendFimiPay(result.checkout);
-  const attached = await fetch(apiBase()+"/fimipay-push",{
+  const attached = await fetch(API_HOST+"/fimipay-push",{
     method:"POST",
     headers:{ "Content-Type":"application/json" },
     body:JSON.stringify({

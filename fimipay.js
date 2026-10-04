@@ -200,6 +200,8 @@ module.exports = {
   isPaid,
   isFailed,
   isPushOk,
+  orderIdOf,
+  publicError,
   resolvePaymentStatus,
   normalizeFimipayStatus,
   extractFimipayFailureMessage,
