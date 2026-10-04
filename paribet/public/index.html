@@ -4,14 +4,27 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Paribet | Sports & Casino</title>
+  <meta name="theme-color" content="#081018">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Paribet">
   <link rel="canonical" href="https://paribet.co.tz/">
+  <link rel="manifest" href="/manifest.webmanifest" id="paribetManifest">
+  <link rel="apple-touch-icon" href="/icons/icon-180.png" id="paribetAppleIcon">
   <script>
     window.PARIBET_BASE = location.pathname === "/paribet" || location.pathname.startsWith("/paribet/")
       ? "/paribet"
       : "";
+    (function () {
+      var base = window.PARIBET_BASE || "";
+      var m = document.getElementById("paribetManifest");
+      var a = document.getElementById("paribetAppleIcon");
+      if (m) m.href = base + "/manifest.webmanifest";
+      if (a) a.href = base + "/icons/icon-180.png";
+    })();
   </script>
-  <link rel="stylesheet" href="/styles.css?v=15" id="paribetCss">
-  <script>document.getElementById("paribetCss").href = (window.PARIBET_BASE || "") + "/styles.css?v=15";</script>
+  <link rel="stylesheet" href="/styles.css?v=16" id="paribetCss">
+  <script>document.getElementById("paribetCss").href = (window.PARIBET_BASE || "") + "/styles.css?v=16";</script>
 </head>
 <body>
   <div class="app">
@@ -27,6 +40,7 @@
         <a href="#/aviator" data-route="aviator"><span>✈</span>Aviator</a>
         <a href="#/sports" data-route="sports"><span>⚽</span>Sports</a>
         <a href="#/casino" data-route="casino"><span>♠</span>Casino</a>
+        <a href="/download" id="getAppSide"><span>⬇</span>Get App</a>
       </nav>
       <p class="side-label">Favorites</p>
       <div id="favLinks" class="side-muted">Log in to pin matches</div>
@@ -67,11 +81,27 @@
     </nav>
   </div>
   <div class="scrim" id="scrim" hidden></div>
+  <div class="install-bar" id="installBar" hidden>
+    <div>
+      <b>Get the Paribet app</b>
+      <span>Install on your phone or download the APK</span>
+    </div>
+    <a class="install-link" id="installBarLink" href="/download">Download</a>
+    <button type="button" class="icon-btn" id="installBarClose" aria-label="Close">✕</button>
+  </div>
   <script>
     (function () {
+      var base = window.PARIBET_BASE || "";
+      var side = document.getElementById("getAppSide");
+      var barLink = document.getElementById("installBarLink");
+      if (side) side.setAttribute("href", base + "/download");
+      if (barLink) barLink.setAttribute("href", base + "/download");
       var s = document.createElement("script");
-      s.src = (window.PARIBET_BASE || "") + "/app.js?v=26";
+      s.src = base + "/app.js?v=27";
       document.body.appendChild(s);
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register(base + "/sw.js").catch(function () {});
+      }
     })();
   </script>
 </body>

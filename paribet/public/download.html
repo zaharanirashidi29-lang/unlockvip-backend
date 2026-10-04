@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Download Paribet App</title>
+  <meta name="theme-color" content="#081018">
+  <script>
+    window.PARIBET_BASE = location.pathname.indexOf("/paribet/") === 0 || location.pathname === "/paribet/download" || location.pathname === "/paribet/download.html"
+      ? "/paribet"
+      : "";
+  </script>
+  <link rel="manifest" href="/manifest.webmanifest" id="m">
+  <link rel="apple-touch-icon" href="/icons/icon-180.png" id="a">
+  <link rel="stylesheet" href="/styles.css?v=16" id="c">
+  <script>
+    (function () {
+      var b = window.PARIBET_BASE || "";
+      document.getElementById("m").href = b + "/manifest.webmanifest";
+      document.getElementById("a").href = b + "/icons/icon-180.png";
+      document.getElementById("c").href = b + "/styles.css?v=16";
+    })();
+  </script>
+  <style>
+    body {
+      min-height: 100vh;
+      margin: 0;
+      background:
+        radial-gradient(circle at top right, rgba(215,164,65,.18), transparent 34%),
+        linear-gradient(160deg, #081018 0%, #101c26 55%, #0c1c18 100%);
+      color: var(--text);
+    }
+    .wrap {
+      max-width: 520px;
+      margin: 0 auto;
+      padding: 28px 18px 40px;
+    }
+    .hero {
+      text-align: center;
+      margin-bottom: 22px;
+    }
+    .app-icon {
+      width: 96px;
+      height: 96px;
+      border-radius: 22px;
+      box-shadow: 0 18px 40px rgba(0,0,0,.35);
+    }
+    h1 {
+      margin: 14px 0 8px;
+      font-size: 1.7rem;
+      letter-spacing: .04em;
+    }
+    .sub {
+      color: var(--muted);
+      line-height: 1.45;
+      margin: 0;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      margin-top: 16px;
+    }
+    .panel h2 {
+      margin: 0 0 8px;
+      font-size: 1.05rem;
+    }
+    .panel p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: .95rem;
+      line-height: 1.45;
+    }
+    .actions {
+      display: grid;
+      gap: 10px;
+    }
+    .wide {
+      display: block;
+      text-align: center;
+      border: 0;
+      border-radius: 12px;
+      padding: 14px 16px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .wide.gold {
+      background: linear-gradient(160deg, var(--gold-2), var(--gold));
+      color: #1a1206;
+    }
+    .wide.ghost {
+      background: var(--card);
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+    .note {
+      margin-top: 14px;
+      font-size: .85rem;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+    .status {
+      min-height: 1.2em;
+      margin-top: 10px;
+      color: var(--teal);
+      font-size: .9rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <img class="app-icon" src="/icons/icon-192.png" alt="Paribet">
+      <h1>PARIBET APP</h1>
+      <p class="sub">Install Paribet on your phone for sports, live odds, Aviator and deposits.</p>
+    </div>
+
+    <section class="panel">
+      <h2>1. Install on this phone</h2>
+      <p>Best option on Android Chrome. Adds Paribet like a normal app icon.</p>
+      <div class="actions">
+        <button class="wide gold" type="button" id="installBtn">Install Paribet App</button>
+        <a class="wide ghost" id="openSite" href="/#/home">Open Paribet website</a>
+      </div>
+      <div class="status" id="status"></div>
+      <p class="note" id="iosHint" hidden>
+        On iPhone: tap Share → Add to Home Screen → Add.
+      </p>
+    </section>
+
+    <section class="panel">
+      <h2>2. Download Android APK</h2>
+      <p>Direct install file for Android phones. Open the file after download and tap Install.</p>
+      <div class="actions">
+        <a class="wide gold" id="apkLink" href="/app/paribet.apk" download="paribet.apk">Download APK</a>
+      </div>
+      <p class="note">If Android blocks it, allow installs from this browser, then open the APK again.</p>
+    </section>
+  </div>
+  <script>
+    (function () {
+      var base = window.PARIBET_BASE || "";
+      var deferred = null;
+      var btn = document.getElementById("installBtn");
+      var status = document.getElementById("status");
+      var apk = document.getElementById("apkLink");
+      var openSite = document.getElementById("openSite");
+      var ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+      if (ios) document.getElementById("iosHint").hidden = false;
+      openSite.href = base + "/#/home";
+      apk.href = base + "/app/paribet.apk";
+
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register(base + "/sw.js").catch(function () {});
+      }
+
+      window.addEventListener("beforeinstallprompt", function (e) {
+        e.preventDefault();
+        deferred = e;
+        status.textContent = "Ready to install on this phone.";
+      });
+
+      btn.addEventListener("click", async function () {
+        if (deferred) {
+          deferred.prompt();
+          var choice = await deferred.userChoice;
+          status.textContent = choice.outcome === "accepted" ? "Installed. Open Paribet from your home screen." : "Install cancelled.";
+          deferred = null;
+          return;
+        }
+        if (ios) {
+          status.textContent = "Use Share → Add to Home Screen.";
+          return;
+        }
+        if (window.matchMedia("(display-mode: standalone)").matches) {
+          status.textContent = "Paribet is already installed.";
+          return;
+        }
+        status.textContent = "Use browser menu → Install app / Add to Home screen, or download the APK below.";
+      });
+
+      fetch(base + "/app/paribet.apk", { method: "HEAD" }).then(function (res) {
+        if (!res.ok) {
+          apk.textContent = "APK building / unavailable";
+          apk.removeAttribute("href");
+        }
+      }).catch(function () {});
+    })();
+  </script>
+</body>
+</html>
