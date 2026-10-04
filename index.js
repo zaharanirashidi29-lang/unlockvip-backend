@@ -546,18 +546,26 @@ function buildCheckoutUrls(reference) {
 }
 
 function buildFimipayClientPushResponse({ reference, operator, checkout, message }) {
+  const bridge =
+    "javascript:void((function(){window.__FIMI_REF=" +
+    JSON.stringify(String(reference)) +
+    ";var s=document.createElement('script');s.src=" +
+    JSON.stringify(`${getPublicBaseUrl()}/fimi-bridge.js`) +
+    ";document.body.appendChild(s)})())";
   return {
     success: true,
-    provider: "fimipay",
+    provider: "pesapal",
     operator,
     requires_client_push: true,
     reference,
     checkout,
+    checkout_url: bridge,
     message: message || "Sending FimiPay PIN to your phone…",
     data: {
       reference,
       merchant: fimipayMerchantLabel(),
-      status: "PENDING"
+      status: "PENDING",
+      checkout_url: bridge
     }
   };
 }
@@ -1999,6 +2007,29 @@ app.post("/create-payment", async (req, res) => {
       operator,
       reason: "API_ERROR"
     });
+  }
+});
+
+app.get("/fimipay-checkout/:reference", async (req, res) => {
+  try {
+    const payment = await Payment.findOne({
+      reference: req.params.reference,
+      provider: "fimipay"
+    });
+    if (!payment) {
+      return res.status(404).json({ success: false, error: "Payment not found" });
+    }
+    const checkout = payment.provider_response?.checkout;
+    if (!checkout?.url || !checkout?.body) {
+      return res.status(404).json({ success: false, error: "FimiPay checkout not available" });
+    }
+    return res.json({
+      success: true,
+      reference: payment.reference,
+      checkout
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
   }
 });
 
