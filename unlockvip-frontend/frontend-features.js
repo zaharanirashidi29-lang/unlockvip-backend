@@ -136,6 +136,9 @@ setInterval(purchase,5000)
           return;
         }
         if (success) success.style.display = "block";
+        if (typeof pollUnlockvipFimiPaid === "function") {
+          pollUnlockvipFimiPaid(created.reference, pushed.orderId);
+        }
         return;
       }
 

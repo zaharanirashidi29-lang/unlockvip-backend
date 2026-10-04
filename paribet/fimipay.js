@@ -112,9 +112,19 @@ function isPaid(data) {
   if (!data || typeof data !== "object") return false;
   const row = orderRow(data);
   if (!row) return false;
-  const status = String(row.payment_status || "").toUpperCase();
-  if (!status) return false;
-  return PAID_STATUS.has(status);
+  const status = String(
+    row.payment_status ||
+      row.order_status ||
+      row.paid_status ||
+      row.transaction_status ||
+      data.payment_status ||
+      ""
+  ).toUpperCase();
+  if (PAID_STATUS.has(status) || status === "SUCCESSFUL") return true;
+  if (row.paid === true || row.is_paid === true || data.paid === true) return true;
+  const paidAmt = Number(row.paid_amount || row.amount_paid || 0);
+  if (Number.isFinite(paidAmt) && paidAmt > 0 && !FAILED_STATUS.has(status)) return true;
+  return false;
 }
 
 function paidAmount(data) {

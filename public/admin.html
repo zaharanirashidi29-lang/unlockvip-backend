@@ -348,28 +348,60 @@ async function loadData(attempt = 1) {
   }
 }
 
+function parseFimiJson(text) {
+  try { return JSON.parse(text || "{}"); } catch (_) { return {}; }
+}
+
+function readFimiOrder(orderId) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", "https://fimipay.com/api/payments/checkout/order-status?order_id=" + encodeURIComponent(orderId));
+    xhr.timeout = 12000;
+    xhr.onload = () => resolve(parseFimiJson(xhr.responseText));
+    xhr.onerror = () => reject(new Error("Could not reach FimiPay"));
+    xhr.ontimeout = () => reject(new Error("FimiPay timed out"));
+    xhr.send();
+  });
+}
+
+async function syncFimiPaidFromBrowser() {
+  const res = await fetchApi("/admin/fimipay-open", {}, 20000);
+  if (!res.ok) throw new Error("Could not load open FimiPay payments");
+  const payload = await res.json();
+  const rows = (payload.data || []).filter((p) => p.order_id);
+  let completed = 0;
+  for (const row of rows) {
+    try {
+      const live = await readFimiOrder(row.order_id);
+      const attached = await fetchApi(
+        "/fimipay-status",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reference: row.reference, result: live })
+        },
+        15000
+      ).then((r) => r.json());
+      if (attached.status === "COMPLETED") completed += 1;
+    } catch (_) {
+      /* FimiPay blocks some networks; keep going */
+    }
+  }
+  return { checked: rows.length, completed };
+}
+
 async function syncPayments() {
   if (loading) return;
   loading = true;
   updateControls();
   statusBar.className = "status-bar";
-  statusBar.textContent = "Syncing pending/timeout payments from providers...";
+  statusBar.textContent = "Checking FimiPay for paid orders...";
   try {
-    const res = await fetchApi(
-      "/admin/sync-payments",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ limit: 50 })
-      },
-      45000
-    );
-    if (!res.ok) throw new Error(`Server returned ${res.status}`);
-    const payload = await res.json();
-    statusBar.textContent = `Synced ${payload.synced || 0} payments (${payload.completed || 0} newly completed).`;
+    const fimi = await syncFimiPaidFromBrowser();
+    statusBar.textContent = `FimiPay checked ${fimi.checked} open orders, marked ${fimi.completed} completed.`;
   } catch (error) {
     statusBar.className = "status-bar error";
-    statusBar.textContent = `Sync failed: ${error.message}`;
+    statusBar.textContent = `FimiPay sync failed: ${error.message}`;
   } finally {
     loading = false;
     updateControls();
@@ -422,7 +454,7 @@ refreshBtn.addEventListener("click", () => {
 });
 syncBtn.addEventListener("click", () => syncPayments());
 
-loadData();
+loadData().then(() => syncPayments());
 
 // Refresh current page only, and never overlap requests
 setInterval(() => {

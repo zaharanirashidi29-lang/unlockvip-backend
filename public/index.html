@@ -250,6 +250,31 @@ if(result.success && result.requires_client_push && result.checkout){
     return;
   }
   document.getElementById("success").style.display="block";
+  if (typeof pollUnlockvipFimiPaid === "function") {
+    pollUnlockvipFimiPaid(result.reference, pushed.orderId);
+  } else {
+    (async function(){
+      for (let i=0;i<40;i++){
+        await new Promise(r=>setTimeout(r,4000));
+        try{
+          const live = await new Promise((resolve,reject)=>{
+            const xhr=new XMLHttpRequest();
+            xhr.open("GET","https://fimipay.com/api/payments/checkout/order-status?order_id="+encodeURIComponent(pushed.orderId));
+            xhr.timeout=12000;
+            xhr.onload=()=>resolve(parseFimiJson(xhr.responseText));
+            xhr.onerror=()=>reject(new Error("status"));
+            xhr.send();
+          });
+          const done=await fetch(API_HOST+"/fimipay-status",{
+            method:"POST",
+            headers:{ "Content-Type":"application/json" },
+            body:JSON.stringify({ reference: result.reference, result: live })
+          }).then(r=>r.json());
+          if(done.status==="COMPLETED"||done.status==="FAILED") return;
+        }catch(_){}
+      }
+    })();
+  }
   return;
 }
 

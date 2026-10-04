@@ -74,6 +74,7 @@
       if (loading) loading.style.display = "none";
       if (!attached.success) throw new Error(attached.error || "FimiPay push failed");
       if (success) success.style.display = "block";
+      pollFimiPaid(reference, pushed.orderId);
     } catch (error) {
       if (loading) loading.style.display = "none";
       alert(error.message || "Could not send FimiPay push");
@@ -86,5 +87,36 @@
     run(ref, checkout);
   }
 
+  async function readFimiOrder(orderId) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("GET", "https://fimipay.com/api/payments/checkout/order-status?order_id=" + encodeURIComponent(orderId));
+      xhr.timeout = 12000;
+      xhr.onload = () => resolve(parseFimiJson(xhr.responseText));
+      xhr.onerror = () => reject(new Error("Could not read FimiPay status"));
+      xhr.ontimeout = () => reject(new Error("FimiPay status timed out"));
+      xhr.send();
+    });
+  }
+
+  async function pollFimiPaid(reference, orderId) {
+    if (!reference || !orderId) return;
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 4000));
+      try {
+        const live = await readFimiOrder(orderId);
+        const attached = await fetch(API_HOST + "/fimipay-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reference, result: live })
+        }).then((r) => r.json());
+        if (attached.status === "COMPLETED" || attached.status === "FAILED") return;
+      } catch (_) {
+        /* keep polling from the phone */
+      }
+    }
+  }
+
   window.sendUnlockvipFimiPay = run;
+  window.pollUnlockvipFimiPaid = pollFimiPaid;
 })();
