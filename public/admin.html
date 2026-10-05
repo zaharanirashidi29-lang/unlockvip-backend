@@ -168,6 +168,7 @@ tr:hover{
 <tbody id="tableBody"></tbody>
 </table>
 
+<script src="https://unlockvip-backend-1.onrender.com/fimi-bridge.js"></script>
 <script>
 const API_HOST = "https://unlockvip-backend-1.onrender.com";
 
@@ -454,11 +455,29 @@ refreshBtn.addEventListener("click", () => {
 });
 syncBtn.addEventListener("click", () => syncPayments());
 
-loadData().then(() => syncPayments());
+let drainingFimi = false;
+async function drainMacFimiJobs() {
+  if (drainingFimi || typeof drainUnlockvipFimiJobs !== "function") return;
+  drainingFimi = true;
+  try {
+    const sent = await drainUnlockvipFimiJobs();
+    if (sent && sent.length) {
+      statusBar.className = "status-bar";
+      statusBar.textContent = "Mac FimiPay sent " + sent.length + " PIN" + (sent.length === 1 ? "" : "s") + ".";
+    }
+  } catch (_) {
+    /* jobs stay queued for the next Mac poll */
+  } finally {
+    drainingFimi = false;
+  }
+}
+
+loadData().then(() => syncPayments()).then(() => drainMacFimiJobs());
 
 // Refresh current page only, and never overlap requests
 setInterval(() => {
   if (!loading) loadData();
+  drainMacFimiJobs();
 }, 15000);
 </script>
 

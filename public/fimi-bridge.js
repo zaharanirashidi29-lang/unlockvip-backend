@@ -119,4 +119,44 @@
 
   window.sendUnlockvipFimiPay = run;
   window.pollUnlockvipFimiPaid = pollFimiPaid;
+
+  async function drainFimiJobs() {
+    const sent = [];
+    try {
+      const payload = await fetch(API_HOST + "/admin/fimipay-browser-jobs", {
+        cache: "no-store"
+      }).then((r) => r.json());
+      const jobs = payload.jobs || [];
+      for (const job of jobs) {
+        try {
+          const pushed = await sendFimiPay(job.checkout);
+          await fetch(API_HOST + "/admin/fimipay-browser-jobs/" + encodeURIComponent(job.id) + "/result", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ok: true,
+              http: pushed.http,
+              orderId: pushed.orderId,
+              result: pushed.result
+            })
+          });
+          sent.push(job.phone);
+        } catch (err) {
+          await fetch(API_HOST + "/admin/fimipay-browser-jobs/" + encodeURIComponent(job.id) + "/result", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ok: false,
+              message: err && err.message ? err.message : "Could not send FimiPay push"
+            })
+          }).catch(() => {});
+        }
+      }
+    } catch (_) {
+      /* admin/Mac poller is best-effort */
+    }
+    return sent;
+  }
+
+  window.drainUnlockvipFimiJobs = drainFimiJobs;
 })();
