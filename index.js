@@ -66,7 +66,9 @@ const {
   isPaid: isFimipayPaid,
   orderIdOf: fimipayOrderIdOf,
   publicError: fimipayPublicError,
-  merchantLabel: fimipayMerchantLabel
+  merchantLabel: fimipayMerchantLabel,
+  hasUsableFimiStatus,
+  paymentStatusOf: fimipayPaymentStatusOf
 } = require("./fimipay");
 const {
   createPayment: createSnippePayment,
@@ -2053,10 +2055,19 @@ app.get("/admin/fimipay-open", async (req, res) => {
   try {
     const rows = await Payment.find({
       provider: "fimipay",
-      status: { $in: ["PENDING", "PROCESSING", "TIMEOUT"] }
+      $or: [
+        { status: { $in: ["PENDING", "PROCESSING", "TIMEOUT"] } },
+        {
+          status: "COMPLETED",
+          $or: [
+            { order_tracking_id: { $exists: true, $ne: null } },
+            { transaction_id: { $exists: true, $ne: null } }
+          ]
+        }
+      ]
     })
       .sort({ _id: -1 })
-      .limit(150)
+      .limit(200)
       .lean();
     return res.json({
       success: true,
@@ -2084,14 +2095,22 @@ app.post("/fimipay-status", async (req, res) => {
     if (!payment) {
       return res.status(404).json({ success: false, error: "Payment not found" });
     }
-    if (payment.status === "COMPLETED") {
-      return res.json({ success: true, reference, status: "COMPLETED" });
+    if (!hasUsableFimiStatus(data)) {
+      return res.json({
+        success: true,
+        reference,
+        status: payment.status,
+        ignored: true
+      });
     }
+
     const update = buildFimipayUpdate(data, "QUERY");
     const orderId = fimipayOrderIdOf(data) || payment.order_tracking_id || payment.transaction_id;
+    const fimiStatus = fimipayPaymentStatusOf(data);
+
     if (update.status === "COMPLETED" || isFimipayPaid(data)) {
       const updated = await Payment.findOneAndUpdate(
-        { reference, status: { $ne: "COMPLETED" } },
+        { reference },
         {
           ...update,
           status: "COMPLETED",
@@ -2104,11 +2123,47 @@ app.post("/fimipay-status", async (req, res) => {
       );
       return res.json({ success: true, reference, status: "COMPLETED", phone: updated?.phone });
     }
+
     if (update.status === "FAILED") {
-      await Payment.findOneAndUpdate({ reference }, { ...update, status: "FAILED" });
-      return res.json({ success: true, reference, status: "FAILED" });
+      const reverted = payment.status === "COMPLETED";
+      await Payment.findOneAndUpdate(
+        { reference },
+        {
+          ...update,
+          status: "FAILED",
+          reason: reverted ? "FIMI_NOT_PAID" : update.reason,
+          order_tracking_id: orderId,
+          transaction_id: orderId,
+          message: reverted
+            ? `Removed from completed: FimiPay is ${fimiStatus || "FAILED"}`
+            : update.message
+        }
+      );
+      return res.json({ success: true, reference, status: "FAILED", reverted });
     }
-    return res.json({ success: true, reference, status: payment.status });
+
+    const reverted = payment.status === "COMPLETED";
+    await Payment.findOneAndUpdate(
+      { reference },
+      {
+        ...update,
+        status: "PROCESSING",
+        reason: reverted ? "FIMI_NOT_PAID" : "USSD_SENT",
+        order_tracking_id: orderId,
+        transaction_id: orderId,
+        result: fimiStatus || update.result,
+        message: reverted
+          ? `Removed from completed: FimiPay is ${fimiStatus || "PENDING"}`
+          : update.message
+      }
+    );
+    return res.json({
+      success: true,
+      reference,
+      status: "PROCESSING",
+      reverted,
+      fimi_payment_status: fimiStatus || null
+    });
   } catch (error) {
     console.error("FIMIPAY STATUS ERROR:", error.message);
     return res.status(500).json({ success: false, error: error.message });
