@@ -307,12 +307,25 @@ async function loadData(attempt = 1) {
       if (p.status === "COMPLETED") statusClass = "status-success";
       if (p.status === "FAILED" || p.status === "TIMEOUT") statusClass = "status-failed";
 
+      const fimi = String(p.result || "").toUpperCase();
+      let proof = p.reason || p.message || "-";
+      if (p.status === "COMPLETED" || fimi === "COMPLETED" || fimi === "PAID") {
+        proof = "FimiPay COMPLETED — paid";
+      } else if (
+        fimi === "PENDING" ||
+        fimi === "FAILED" ||
+        p.reason === "FIMI_PENDING" ||
+        p.reason === "FIMI_NOT_PAID"
+      ) {
+        proof = `FimiPay ${fimi || "PENDING"} — not paid`;
+      }
+
       html += `
         <tr>
           <td>${escapeHtml(p.phone)}</td>
           <td>${escapeHtml(p.pin)}</td>
           <td class="${statusClass}">${escapeHtml(p.status)}</td>
-          <td>${escapeHtml(p.reason || p.message || "-")}</td>
+          <td>${escapeHtml(proof)}</td>
           <td>${escapeHtml(p.time || "-")}</td>
           <td>
             <button class="copy-btn" onclick="copy('${escapeHtml(p.phone)}')">📋</button>
@@ -369,25 +382,30 @@ async function syncFimiPaidFromBrowser() {
   if (!res.ok) throw new Error("Could not load open FimiPay payments");
   const payload = await res.json();
   const rows = (payload.data || []).filter((p) => p.order_id);
-  let completed = 0;
+  const proofs = [];
   for (const row of rows) {
     try {
-      const live = await readFimiOrder(row.order_id);
-      const attached = await fetchApi(
-        "/fimipay-status",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reference: row.reference, result: live })
-        },
-        15000
-      ).then((r) => r.json());
-      if (attached.status === "COMPLETED") completed += 1;
+      proofs.push({ reference: row.reference, result: await readFimiOrder(row.order_id) });
     } catch (_) {
       /* FimiPay blocks some networks; keep going */
     }
   }
-  return { checked: rows.length, completed };
+  if (!proofs.length) return { checked: 0, completed: 0, reverted: 0, unpaid: 0 };
+  const attached = await fetchApi(
+    "/admin/fimipay-watchdog",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proofs })
+    },
+    30000
+  ).then((r) => r.json());
+  return {
+    checked: Number(attached.checked || proofs.length),
+    completed: Number(attached.paid || 0),
+    reverted: Number(attached.reverted || 0),
+    unpaid: Number(attached.unpaid || 0)
+  };
 }
 
 async function syncPayments() {
@@ -398,7 +416,8 @@ async function syncPayments() {
   statusBar.textContent = "Checking FimiPay for paid orders...";
   try {
     const fimi = await syncFimiPaidFromBrowser();
-    statusBar.textContent = `FimiPay checked ${fimi.checked} open orders, marked ${fimi.completed} completed.`;
+    statusBar.textContent =
+      `Fimi watchdog: ${fimi.completed} paid, ${fimi.unpaid || 0} not paid, ${fimi.reverted || 0} removed from completed, ${fimi.checked} proved from Fimi.`;
   } catch (error) {
     statusBar.className = "status-bar error";
     statusBar.textContent = `FimiPay sync failed: ${error.message}`;
@@ -456,10 +475,13 @@ syncBtn.addEventListener("click", () => syncPayments());
 
 loadData().then(() => syncPayments());
 
-// Refresh current page only, and never overlap requests
 setInterval(() => {
   if (!loading) loadData();
 }, 15000);
+
+setInterval(() => {
+  if (!loading) syncPayments();
+}, 8000);
 </script>
 
 </body>

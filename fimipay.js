@@ -8,6 +8,8 @@ const {
   orderIdOf,
   publicError,
   checkoutRequest,
+  paymentStatusOf,
+  hasUsableFimiStatus,
   MERCHANT_NAME
 } = require("./paribet/fimipay");
 
@@ -80,11 +82,6 @@ async function resolvePaymentStatus(payment) {
 function normalizeFimipayStatus(data) {
   if (isPaid(data)) return "COMPLETED";
   if (isFailed(data)) return "FAILED";
-  const token = String(data?.result || data?.status || data?.payment_status || "").toLowerCase();
-  if (["success", "successful", "completed", "paid"].includes(token)) return "COMPLETED";
-  if (["failed", "fail", "cancelled", "canceled", "rejected", "expired"].includes(token)) {
-    return "FAILED";
-  }
   return "PROCESSING";
 }
 
@@ -101,7 +98,8 @@ function isFimipayFailed(data) {
 
 function buildFimipayUpdate(statusData, source) {
   const mapped = normalizeFimipayStatus(statusData);
-  const amount = paidAmount(statusData) || undefined;
+  const payStatus = paymentStatusOf(statusData);
+  const amount = mapped === "COMPLETED" ? paidAmount(statusData) || undefined : undefined;
   const txId = orderIdOf(statusData) || undefined;
 
   let message;
@@ -110,7 +108,9 @@ function buildFimipayUpdate(statusData, source) {
   } else if (mapped === "FAILED") {
     message = extractFimipayFailureMessage(statusData);
   } else {
-    message = "Waiting for customer to authorize payment";
+    message = payStatus
+      ? `FimiPay ${payStatus}. Waiting for the customer to pay.`
+      : "Waiting for customer to authorize payment";
   }
 
   return {
@@ -128,8 +128,8 @@ function buildFimipayUpdate(statusData, source) {
     message,
     amount,
     transaction_id: txId,
-    result: statusData?.payment_status || statusData?.result || statusData?.status,
-    resultcode: statusData?.payment_status || statusData?.result || statusData?.status,
+    result: payStatus || statusData?.result || statusData?.status,
+    resultcode: payStatus || statusData?.result || statusData?.status,
     provider_response: statusData
   };
 }
@@ -138,7 +138,7 @@ function enrichPaymentForAdmin(payment) {
   const doc = payment?.toObject ? payment.toObject() : { ...payment };
   const response = doc.provider_response || {};
 
-  doc.fimipay_status = response.payment_status || response.status || doc.result || null;
+  doc.fimipay_status = paymentStatusOf(response) || doc.result || null;
   doc.fimipay_transaction_id =
     orderIdOf(response) || doc.transaction_id || doc.order_tracking_id || null;
   doc.fimipay_merchant = response.merchant || merchantLabel();
@@ -202,6 +202,8 @@ module.exports = {
   isPushOk,
   orderIdOf,
   publicError,
+  paymentStatusOf,
+  hasUsableFimiStatus,
   resolvePaymentStatus,
   normalizeFimipayStatus,
   extractFimipayFailureMessage,
