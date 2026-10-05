@@ -101,7 +101,7 @@
 
   async function pollFimiPaid(reference, orderId) {
     if (!reference || !orderId) return;
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 90; i++) {
       await new Promise((r) => setTimeout(r, 4000));
       try {
         const live = await readFimiOrder(orderId);

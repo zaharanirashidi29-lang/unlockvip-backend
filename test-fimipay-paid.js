@@ -65,3 +65,8 @@ for (const [label, data, expectPaid, expectNorm, expectStatus, expectUsable] of 
 }
 
 if (failed) process.exit(1);
+
+const watchdog = normalizeFimipayStatus(pendingOrder) === "PROCESSING" &&
+  normalizeFimipayStatus(paidOrder) === "COMPLETED";
+console.log(`${watchdog ? "OK" : "FAIL"} | watchdog only completes Fimi payment_status COMPLETED`);
+if (!watchdog) process.exit(1);
