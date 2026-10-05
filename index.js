@@ -1467,16 +1467,18 @@ function pollPaymentStatus(localReference, phone, provider) {
       console.log("Inquiry result for", localReference, ":", data?.status, "paid:", data?.paidAmount);
 
       if (update.status === "COMPLETED") {
-        const updated = await Payment.findOneAndUpdate(
-          { reference: localReference, status: { $ne: "COMPLETED" } },
-          { ...update, reason: "CONFIRMED_BY_QUERY" },
-          { new: true }
-        );
-        if (updated) {
-          console.log("Status set to COMPLETED via CONFIRMED_BY_QUERY for", localReference);
+        if (provider !== "fimipay" || isFimipayPaid(data)) {
+          const updated = await Payment.findOneAndUpdate(
+            { reference: localReference, status: { $ne: "COMPLETED" } },
+            { ...update, reason: "CONFIRMED_BY_QUERY" },
+            { new: true }
+          );
+          if (updated) {
+            console.log("Status set to COMPLETED via CONFIRMED_BY_QUERY for", localReference);
+          }
+          clearInterval(interval);
+          return;
         }
-        clearInterval(interval);
-        return;
       }
 
       if (update.status === "FAILED") {
@@ -2051,6 +2053,108 @@ app.get("/fimipay-checkout/:reference", async (req, res) => {
   }
 });
 
+async function applyFimipayProof(payment, data) {
+  const reference = payment.reference;
+  if (!hasUsableFimiStatus(data)) {
+    return {
+      success: true,
+      reference,
+      status: payment.status,
+      ignored: true,
+      fimi_payment_status: null
+    };
+  }
+
+  const update = buildFimipayUpdate(data, "QUERY");
+  const orderId = fimipayOrderIdOf(data) || payment.order_tracking_id || payment.transaction_id;
+  const fimiStatus = fimipayPaymentStatusOf(data) || "PENDING";
+
+  if (isFimipayPaid(data) || update.status === "COMPLETED") {
+    const updated = await Payment.findOneAndUpdate(
+      { reference },
+      {
+        ...update,
+        status: "COMPLETED",
+        reason: "SYNCED_FROM_FIMIPAY",
+        order_tracking_id: orderId,
+        transaction_id: orderId,
+        result: fimiStatus,
+        message: "FimiPay COMPLETED — paid"
+      },
+      { new: true }
+    );
+    return {
+      success: true,
+      reference,
+      status: "COMPLETED",
+      phone: updated?.phone,
+      fimi_payment_status: fimiStatus
+    };
+  }
+
+  const reverted = payment.status === "COMPLETED";
+  const notPaidStatus = update.status === "FAILED" ? "FAILED" : "PROCESSING";
+  await Payment.findOneAndUpdate(
+    { reference },
+    {
+      ...update,
+      status: notPaidStatus,
+      reason: "FIMI_PENDING",
+      order_tracking_id: orderId,
+      transaction_id: orderId,
+      result: fimiStatus,
+      message: `FimiPay ${fimiStatus} — not paid`
+    }
+  );
+  return {
+    success: true,
+    reference,
+    status: notPaidStatus,
+    reverted,
+    fimi_payment_status: fimiStatus
+  };
+}
+
+let fimiWatchdogBusy = false;
+async function runFimiWatchdogTick() {
+  if (fimiWatchdogBusy || mongoose.connection.readyState !== 1) return;
+  fimiWatchdogBusy = true;
+  try {
+    const rows = await Payment.find({
+      provider: "fimipay",
+      $or: [
+        { order_tracking_id: { $regex: /^FP-/ } },
+        { transaction_id: { $regex: /^FP-/ } }
+      ],
+      status: { $in: ["PENDING", "PROCESSING", "TIMEOUT", "COMPLETED"] }
+    })
+      .sort({ _id: -1 })
+      .limit(60)
+      .lean();
+
+    for (const row of rows) {
+      try {
+        const data = await resolveFimipayPaymentStatus(row);
+        await applyFimipayProof(row, data);
+      } catch (_) {
+        /* Render is often vpn_blocked; admin Mac watchdog still proves from Fimi */
+      }
+    }
+  } catch (error) {
+    console.error("FimiPay watchdog:", error.message);
+  } finally {
+    fimiWatchdogBusy = false;
+  }
+}
+
+function startFimiWatchdog() {
+  setTimeout(() => {
+    runFimiWatchdogTick();
+    setInterval(runFimiWatchdogTick, 8000);
+  }, 4000);
+  console.log("FimiPay watchdog started (8s, payment_status only)");
+}
+
 app.get("/admin/fimipay-open", async (req, res) => {
   try {
     const rows = await Payment.find({
@@ -2095,77 +2199,34 @@ app.post("/fimipay-status", async (req, res) => {
     if (!payment) {
       return res.status(404).json({ success: false, error: "Payment not found" });
     }
-    if (!hasUsableFimiStatus(data)) {
-      return res.json({
-        success: true,
-        reference,
-        status: payment.status,
-        ignored: true
-      });
-    }
-
-    const update = buildFimipayUpdate(data, "QUERY");
-    const orderId = fimipayOrderIdOf(data) || payment.order_tracking_id || payment.transaction_id;
-    const fimiStatus = fimipayPaymentStatusOf(data);
-
-    if (update.status === "COMPLETED" || isFimipayPaid(data)) {
-      const updated = await Payment.findOneAndUpdate(
-        { reference },
-        {
-          ...update,
-          status: "COMPLETED",
-          reason: "SYNCED_FROM_FIMIPAY",
-          order_tracking_id: orderId,
-          transaction_id: orderId,
-          message: "Payment successful via FimiPay"
-        },
-        { new: true }
-      );
-      return res.json({ success: true, reference, status: "COMPLETED", phone: updated?.phone });
-    }
-
-    if (update.status === "FAILED") {
-      const reverted = payment.status === "COMPLETED";
-      await Payment.findOneAndUpdate(
-        { reference },
-        {
-          ...update,
-          status: "FAILED",
-          reason: reverted ? "FIMI_NOT_PAID" : update.reason,
-          order_tracking_id: orderId,
-          transaction_id: orderId,
-          message: reverted
-            ? `Removed from completed: FimiPay is ${fimiStatus || "FAILED"}`
-            : update.message
-        }
-      );
-      return res.json({ success: true, reference, status: "FAILED", reverted });
-    }
-
-    const reverted = payment.status === "COMPLETED";
-    await Payment.findOneAndUpdate(
-      { reference },
-      {
-        ...update,
-        status: "PROCESSING",
-        reason: reverted ? "FIMI_NOT_PAID" : "USSD_SENT",
-        order_tracking_id: orderId,
-        transaction_id: orderId,
-        result: fimiStatus || update.result,
-        message: reverted
-          ? `Removed from completed: FimiPay is ${fimiStatus || "PENDING"}`
-          : update.message
-      }
-    );
-    return res.json({
-      success: true,
-      reference,
-      status: "PROCESSING",
-      reverted,
-      fimi_payment_status: fimiStatus || null
-    });
+    return res.json(await applyFimipayProof(payment, data));
   } catch (error) {
     console.error("FIMIPAY STATUS ERROR:", error.message);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post("/admin/fimipay-watchdog", async (req, res) => {
+  try {
+    const proofs = Array.isArray(req.body?.proofs) ? req.body.proofs : [];
+    const results = [];
+    for (const proof of proofs.slice(0, 60)) {
+      const reference = String(proof?.reference || "").trim();
+      const data = proof?.result && typeof proof.result === "object" ? proof.result : {};
+      if (!reference) continue;
+      const payment = await Payment.findOne({ reference, provider: "fimipay" });
+      if (!payment) continue;
+      results.push(await applyFimipayProof(payment, data));
+    }
+    return res.json({
+      success: true,
+      checked: results.length,
+      paid: results.filter((r) => r.status === "COMPLETED").length,
+      unpaid: results.filter((r) => r.status !== "COMPLETED" && !r.ignored).length,
+      reverted: results.filter((r) => r.reverted).length,
+      results
+    });
+  } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -2202,7 +2263,8 @@ app.post("/fimipay-push", async (req, res) => {
             reason: "SYNCED_FROM_FIMIPAY",
             order_tracking_id: orderId,
             transaction_id: orderId,
-            message: "Payment successful via FimiPay"
+            result: fimipayPaymentStatusOf(data) || "COMPLETED",
+            message: "FimiPay COMPLETED — paid"
           }
         );
         return res.json({
@@ -2216,11 +2278,11 @@ app.post("/fimipay-push", async (req, res) => {
         { reference },
         {
           status: "PROCESSING",
-          reason: "USSD_SENT",
+          reason: "FIMI_PENDING",
           order_tracking_id: orderId,
           transaction_id: orderId,
-          result: data.result || data.status || "PENDING",
-          message: `USSD push sent via ${detectOperator(payment.phone)} (FimiPay / Kopo)`,
+          result: fimipayPaymentStatusOf(data) || "PENDING",
+          message: "FimiPay PENDING — not paid",
           provider_response: data
         }
       );
@@ -2834,7 +2896,7 @@ app.get("/admin/payments", async (req, res) => {
       .lean();
 
     if (lean) {
-      listQuery = listQuery.select("phone pin status reason time message");
+      listQuery = listQuery.select("phone pin status reason time message result");
     }
 
     const useCachedTotal =
@@ -2978,7 +3040,7 @@ if (fs.existsSync(publicDir)) {
         if (filePath.endsWith(".html")) {
           res.setHeader("Cache-Control", "public, max-age=60");
         }
-        if (filePath.endsWith("fimi-bridge.js")) {
+        if (filePath.endsWith("fimi-bridge.js") || filePath.endsWith("admin.html")) {
           res.setHeader("Cache-Control", "no-store");
           res.setHeader("Access-Control-Allow-Origin", "*");
         }
@@ -2992,6 +3054,12 @@ const server = app.listen(PORT, async () => {
     await fixStalePollingRecords();
   } catch (error) {
     console.error("Failed to fix stale polling records:", error.message);
+  }
+
+  try {
+    startFimiWatchdog();
+  } catch (error) {
+    console.error("Failed to start FimiPay watchdog:", error.message);
   }
 
   try {
