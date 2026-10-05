@@ -27,7 +27,9 @@ const state = {
   lastBetCode: "",
   liveBoard: "now",
   betTab: "live",
-  livePoll: null
+  livePoll: null,
+  detailMatch: null,
+  catalogError: ""
 };
 
 function $(id) { return document.getElementById(id); }
@@ -91,6 +93,9 @@ function route() {
     state.view = "match";
     state.matchId = parts[1];
     render();
+    ensureMatchDetail(parts[1]).then(() => {
+      if (state.view === "match" && state.matchId === parts[1]) render();
+    });
     if (state.user) refreshMe();
     return;
   }
@@ -103,6 +108,7 @@ function route() {
   };
   state.view = map[page] || "home";
   state.matchId = "";
+  state.detailMatch = null;
   if (state.view === "register") state.authTab = "join";
   if (state.view === "login") state.authTab = "login";
   render();
@@ -166,9 +172,59 @@ function dayLabel(iso) {
 }
 
 function findMatch(id) {
-  return (state.catalog.matches || []).find((m) => m.id === id)
-    || (state.catalog.results || []).find((m) => m.id === id)
+  return (
+    (state.catalog.matches || []).find((m) => m.id === id) ||
+    (state.catalog.results || []).find((m) => m.id === id) ||
+    (state.detailMatch && state.detailMatch.id === id ? state.detailMatch : null) ||
+    null
+  );
+}
+
+async function ensureMatchDetail(id) {
+  let m = (state.catalog.matches || []).find((x) => x.id === id)
+    || (state.catalog.results || []).find((x) => x.id === id)
     || null;
+  if (m?.markets?.length) {
+    state.detailMatch = m;
+    return m;
+  }
+  try {
+    const data = await api("/api/match/" + encodeURIComponent(id));
+    if (data.match) {
+      state.detailMatch = data.match;
+      const list = state.catalog.matches || [];
+      const i = list.findIndex((x) => x.id === id);
+      if (i >= 0) state.catalog.matches[i] = { ...list[i], ...lightMerge(data.match) };
+      return data.match;
+    }
+  } catch (_) {}
+  state.detailMatch = m;
+  return m;
+}
+
+function lightMerge(m) {
+  return {
+    id: m.id,
+    source: m.source || "",
+    sport: m.sport,
+    league: m.league,
+    home: m.home,
+    away: m.away,
+    kickoff: m.kickoff || "",
+    day: m.day || "",
+    time: m.time || "",
+    displayClock: m.displayClock || "",
+    apiState: m.apiState || "",
+    period: m.period,
+    live: Boolean(m.live),
+    score: m.score || "",
+    completedAt: m.completedAt || "",
+    clock: m.clock || m.time || "",
+    odds: m.odds || {},
+    extra: m.extra || 0,
+    stats: m.stats || { possession: [0, 0], shots: [0, 0], corners: [0, 0] },
+    result: m.result || null
+  };
 }
 
 function matchesFor(view) {
@@ -409,7 +465,7 @@ function listHtml(title, view) {
         ${(state.catalog.days || []).map((d) =>
           `<button type="button" data-day="${d}" class="${state.dayFilter === d || (state.dayFilter === "today" && d === state.catalog.today) ? "on" : ""}">${dayLabel(d)}</button>`
         ).join("")}
-        ${["all", ...state.catalog.sports.map((s) => s.id)].map((f) =>
+        ${["all", ...(state.catalog.sports || []).map((s) => s.id)].map((f) =>
           `<button type="button" data-filter="${f}" class="${state.sportFilter === f ? "on" : ""}">${f}</button>`
         ).join("")}
       ` : ""}
@@ -432,9 +488,43 @@ function listHtml(title, view) {
     </div>
     ${view === "live" ? `<a class="av-bar" href="#/aviator"><span class="live-dot">LIVE</span> Aviator <b id="liveAviatorChip">1.00x</b><span>Open table</span></a>` : ""}
     <p class="hint" style="margin:0 14px 8px">${title} · ${rows.length} events</p>
-    ${rows.map(matchCard).join("") || `<p class="empty">${view === "live" && state.liveBoard === "now" ? "No live matches right now. Check upcoming or results." : "No events right now."}</p>`}
+    ${rows.map(matchCard).join("") || `<p class="empty">${
+      state.catalogError
+        ? state.catalogError
+        : view === "live" && state.liveBoard === "now"
+          ? "No live matches right now. Check upcoming or results."
+          : "Loading events… pull to refresh or tap Check results."
+    }</p>`}
     ${slipHtml()}
   `;
+}
+
+async function loadCatalog(retries = 3) {
+  let lastErr = null;
+  for (let i = 0; i < retries; i++) {
+    try {
+      const cat = await api("/api/catalog");
+      state.catalog = {
+        matches: cat.matches || [],
+        results: cat.results || [],
+        sports: cat.sports || [],
+        promos: cat.promos || [],
+        games: cat.games || [],
+        title: cat.title || "Today & upcoming",
+        days: cat.days || [],
+        today: cat.today || "",
+        liveCount: cat.liveCount || 0,
+        upcomingCount: cat.upcomingCount || 0
+      };
+      state.catalogError = "";
+      return state.catalog;
+    } catch (err) {
+      lastErr = err;
+      await new Promise((r) => setTimeout(r, 600 * (i + 1)));
+    }
+  }
+  state.catalogError = lastErr?.message || "Could not load events. Tap Check results.";
+  throw lastErr || new Error(state.catalogError);
 }
 
 function joinFields() {
@@ -1017,8 +1107,7 @@ async function checkResults(silent) {
       state.bets = data.data || [];
       if (data.user) saveUser(data.user);
     } else {
-      const cat = await api("/api/catalog");
-      state.catalog = cat;
+      await loadCatalog(2);
     }
     if (!silent) {
       state.notice = "Results updated. Won tickets add cash; lost tickets keep the stake deducted.";
@@ -1392,10 +1481,11 @@ window.addEventListener("hashchange", route);
   }
   route();
   try {
-    const cat = await api("/api/catalog");
-    state.catalog = cat;
+    await loadCatalog(3);
     render();
-  } catch (_) {}
+  } catch (_) {
+    render();
+  }
   try {
     const pay = await api("/api/pay/networks");
     state.networks = pay.networks || [];

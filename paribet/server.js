@@ -469,24 +469,67 @@ function catalogSports() {
   return sportsFrom(board.matches) || SPORTS;
 }
 
+function lightMatch(m) {
+  if (!m) return null;
+  return {
+    id: m.id,
+    source: m.source || "",
+    sport: m.sport,
+    league: m.league,
+    home: m.home,
+    away: m.away,
+    kickoff: m.kickoff || "",
+    day: m.day || "",
+    time: m.time || "",
+    displayClock: m.displayClock || "",
+    apiState: m.apiState || "",
+    period: m.period,
+    live: Boolean(m.live),
+    score: m.score || "",
+    completedAt: m.completedAt || "",
+    clock: m.clock || m.time || "",
+    odds: m.odds || {},
+    extra: m.extra || 0,
+    stats: m.stats || { possession: [0, 0], shots: [0, 0], corners: [0, 0] },
+    result: m.result || null
+  };
+}
+
+function catalogMatches() {
+  return currentMatches()
+    .filter((m) => m.live || m.period === "pre" || m.apiState === "pre" || m.apiState === "in")
+    .map(lightMatch)
+    .filter(Boolean);
+}
+
 function catalogPayload(extra = {}) {
-  const matches = currentMatches();
+  const matches = catalogMatches();
+  const results = live
+    .liveMatches(board.results || [])
+    .slice(0, 80)
+    .map(lightMatch)
+    .filter(Boolean);
   return {
     ok: true,
     matches,
-    results: live.liveMatches(board.results || []),
+    results,
     sports: catalogSports(),
     promos: PROMOS,
     games: GAMES,
-    title: board.title,
+    title: board.title || "Today & upcoming",
     days: board.days,
     today: fixtures.ymd(),
     fetchedAt: board.fetchedAt,
     checkedAt: new Date().toISOString(),
     liveCount: matches.filter((m) => m.live).length,
-    upcomingCount: matches.filter((m) => m.period === "pre").length,
+    upcomingCount: matches.filter((m) => m.period === "pre" || m.apiState === "pre").length,
     ...extra
   };
+}
+
+function fullMatchById(id) {
+  const all = [...currentMatches(), ...live.liveMatches(board.results || [])];
+  return all.find((m) => m.id === id) || null;
 }
 
 async function saveArchive(match) {
@@ -918,6 +961,12 @@ app.use(
 
 app.get("/api/catalog", (_req, res) => {
   res.json(catalogPayload());
+});
+
+app.get("/api/match/:id", (req, res) => {
+  const match = fullMatchById(String(req.params.id || ""));
+  if (!match) return res.status(404).json({ ok: false, error: "Match not found" });
+  res.json({ ok: true, match });
 });
 
 app.post("/api/register", async (req, res) => {

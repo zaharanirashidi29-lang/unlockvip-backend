@@ -2,7 +2,7 @@ const axios = require("axios");
 const { buildMatch } = require("./catalog");
 
 const TZ = "Africa/Dar_es_Salaam";
-const AHEAD_DAYS = 7;
+const AHEAD_DAYS = 6;
 const ESPN = "https://site.api.espn.com/apis/site/v2/sports";
 
 function safeDate(value) {
