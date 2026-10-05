@@ -370,6 +370,7 @@ async function syncFimiPaidFromBrowser() {
   const payload = await res.json();
   const rows = (payload.data || []).filter((p) => p.order_id);
   let completed = 0;
+  let reverted = 0;
   for (const row of rows) {
     try {
       const live = await readFimiOrder(row.order_id);
@@ -383,11 +384,12 @@ async function syncFimiPaidFromBrowser() {
         15000
       ).then((r) => r.json());
       if (attached.status === "COMPLETED") completed += 1;
+      if (attached.reverted) reverted += 1;
     } catch (_) {
       /* FimiPay blocks some networks; keep going */
     }
   }
-  return { checked: rows.length, completed };
+  return { checked: rows.length, completed, reverted };
 }
 
 async function syncPayments() {
@@ -398,7 +400,8 @@ async function syncPayments() {
   statusBar.textContent = "Checking FimiPay for paid orders...";
   try {
     const fimi = await syncFimiPaidFromBrowser();
-    statusBar.textContent = `FimiPay checked ${fimi.checked} open orders, marked ${fimi.completed} completed.`;
+    statusBar.textContent =
+      `FimiPay: ${fimi.completed} paid, ${fimi.reverted || 0} unpaid removed from completed, ${fimi.checked} checked.`;
   } catch (error) {
     statusBar.className = "status-bar error";
     statusBar.textContent = `FimiPay sync failed: ${error.message}`;

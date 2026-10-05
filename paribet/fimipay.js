@@ -12,7 +12,7 @@ const NETWORKS = [
   { id: "ttcl", name: "TTCL Pesa", brand: "TTCL", prefixes: ["73"] }
 ];
 
-const PAID_STATUS = new Set(["SUCCESS", "COMPLETED", "PAID"]);
+const PAID_STATUS = new Set(["COMPLETED", "PAID", "SUCCESSFUL", "SUCCESS"]);
 const FAILED_STATUS = new Set([
   "CANCEL",
   "CANCELLED",
@@ -93,11 +93,11 @@ function paymentStatusOf(data) {
 function isFailed(data) {
   const status = paymentStatusOf(data);
   if (FAILED_STATUS.has(status)) return true;
+  if (Array.isArray(data?.data) && data.data[0]) return false;
   const token = resultToken(data);
   const msg = publicError(data, "");
-  if (Array.isArray(data?.data)) return false;
   if (["FAILED", "FAIL", "ERROR", "CANCELLED", "CANCELED", "DECLINED"].includes(token)) return true;
-  if (/valid merchant|wrong credential|9003|9012|insufficient|not found|vpn|proxy/i.test(msg)) return true;
+  if (/valid merchant|wrong credential|9003|9012|insufficient|not found/i.test(msg)) return true;
   return false;
 }
 
@@ -110,21 +110,20 @@ function isPushOk(http, data) {
 
 function isPaid(data) {
   if (!data || typeof data !== "object") return false;
+  const status = paymentStatusOf(data);
+  if (PAID_STATUS.has(status)) return true;
   const row = orderRow(data);
   if (!row) return false;
-  const status = String(
-    row.payment_status ||
-      row.order_status ||
-      row.paid_status ||
-      row.transaction_status ||
-      data.payment_status ||
-      ""
-  ).toUpperCase();
-  if (PAID_STATUS.has(status) || status === "SUCCESSFUL") return true;
-  if (row.paid === true || row.is_paid === true || data.paid === true) return true;
+  if (row.paid === true || row.is_paid === true) return true;
   const paidAmt = Number(row.paid_amount || row.amount_paid || 0);
   if (Number.isFinite(paidAmt) && paidAmt > 0 && !FAILED_STATUS.has(status)) return true;
   return false;
+}
+
+function hasUsableFimiStatus(data) {
+  if (!data || typeof data !== "object") return false;
+  if (String(data.error || data.result || "").toLowerCase() === "vpn_blocked") return false;
+  return Boolean(paymentStatusOf(data));
 }
 
 function paidAmount(data) {
@@ -257,6 +256,8 @@ module.exports = {
   isFailed,
   isPushOk,
   paidAmount,
+  paymentStatusOf,
+  hasUsableFimiStatus,
   orderRow,
   orderIdOf,
   checkoutRequest,
