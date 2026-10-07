@@ -70,3 +70,7 @@ const watchdog = normalizeFimipayStatus(pendingOrder) === "PROCESSING" &&
   normalizeFimipayStatus(paidOrder) === "COMPLETED";
 console.log(`${watchdog ? "OK" : "FAIL"} | watchdog only completes Fimi payment_status COMPLETED`);
 if (!watchdog) process.exit(1);
+
+const falseComplete = hasUsableFimiStatus(pendingOrder) && !isPaid(pendingOrder);
+console.log(`${falseComplete ? "OK" : "FAIL"} | stored SUCCESS+PENDING must un-complete, not stay paid`);
+if (!falseComplete) process.exit(1);

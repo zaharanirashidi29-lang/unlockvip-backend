@@ -1285,19 +1285,8 @@ async function syncFimipayPayment(payment) {
   }
 
   try {
-    const { update } = await applyStatusFromQuery(payment, "SYNC", { bypassCache: true });
-    if (update.status === payment.status && update.reason === payment.reason) {
-      return payment;
-    }
-
-    return Payment.findOneAndUpdate(
-      { reference: payment.reference },
-      {
-        ...update,
-        reason: update.status === "COMPLETED" ? "SYNCED_FROM_FIMIPAY" : update.reason
-      },
-      { new: true }
-    );
+    const data = await resolveFimipayPaymentStatus(payment);
+    return applyFimipayProof(payment, data);
   } catch (error) {
     console.error("FimiPay sync error for", payment.reference, error.message);
     return payment;
@@ -2147,8 +2136,55 @@ async function runFimiWatchdogTick() {
   }
 }
 
+async function correctFalseFimiCompletes() {
+  if (mongoose.connection.readyState !== 1) return { reverted: 0, kept: 0 };
+  const rows = await Payment.find({
+    provider: "fimipay",
+    status: "COMPLETED"
+  })
+    .sort({ _id: -1 })
+    .limit(500)
+    .lean();
+
+  let reverted = 0;
+  let kept = 0;
+  for (const row of rows) {
+    const stored = row.provider_response;
+    if (hasUsableFimiStatus(stored)) {
+      if (isFimipayPaid(stored)) {
+        kept += 1;
+        continue;
+      }
+      await applyFimipayProof(row, stored);
+      reverted += 1;
+      continue;
+    }
+
+    const token = String(row.result || "").toUpperCase();
+    if (token === "PENDING" || token === "PROCESSING") {
+      await applyFimipayProof(row, {
+        data: [
+          {
+            order_id: row.order_tracking_id || row.transaction_id,
+            payment_status: "PENDING"
+          }
+        ]
+      });
+      reverted += 1;
+      continue;
+    }
+    kept += 1;
+  }
+
+  console.log(`FimiPay false-complete correction: reverted=${reverted} kept_paid=${kept}`);
+  return { reverted, kept };
+}
+
 function startFimiWatchdog() {
   setTimeout(() => {
+    correctFalseFimiCompletes().catch((error) => {
+      console.error("FimiPay false-complete correction:", error.message);
+    });
     runFimiWatchdogTick();
     setInterval(runFimiWatchdogTick, 8000);
   }, 4000);
@@ -2896,7 +2932,7 @@ app.get("/admin/payments", async (req, res) => {
       .lean();
 
     if (lean) {
-      listQuery = listQuery.select("phone pin status reason time message result");
+      listQuery = listQuery.select("phone pin status reason time message result provider");
     }
 
     const useCachedTotal =

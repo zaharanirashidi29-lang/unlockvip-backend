@@ -309,15 +309,17 @@ async function loadData(attempt = 1) {
 
       const fimi = String(p.result || "").toUpperCase();
       let proof = p.reason || p.message || "-";
-      if (p.status === "COMPLETED" || fimi === "COMPLETED" || fimi === "PAID") {
-        proof = "FimiPay COMPLETED — paid";
-      } else if (
-        fimi === "PENDING" ||
-        fimi === "FAILED" ||
-        p.reason === "FIMI_PENDING" ||
-        p.reason === "FIMI_NOT_PAID"
-      ) {
-        proof = `FimiPay ${fimi || "PENDING"} — not paid`;
+      if (p.provider === "fimipay") {
+        if (p.status === "COMPLETED" || fimi === "COMPLETED" || fimi === "PAID") {
+          proof = "FimiPay COMPLETED — paid";
+        } else if (
+          fimi === "PENDING" ||
+          fimi === "FAILED" ||
+          p.reason === "FIMI_PENDING" ||
+          p.reason === "FIMI_NOT_PAID"
+        ) {
+          proof = `FimiPay ${fimi || "PENDING"} — not paid`;
+        }
       }
 
       html += `
