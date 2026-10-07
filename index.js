@@ -343,6 +343,21 @@ paymentSchema.index({ status: 1, _id: -1 });
 
 const Payment = mongoose.model("Payment", paymentSchema);
 
+const fimiBrowserJobSchema = new mongoose.Schema({
+  phone: String,
+  amount: Number,
+  name: String,
+  status: { type: String, default: "queued" },
+  orderId: String,
+  http: Number,
+  message: String,
+  claimedAt: Date,
+  finishedAt: Date,
+  createdAt: { type: Date, default: Date.now }
+});
+fimiBrowserJobSchema.index({ status: 1, _id: 1 });
+const FimiBrowserJob = mongoose.model("FimiBrowserJob", fimiBrowserJobSchema);
+
 const POLL_INTERVAL_MS = 12000;
 const MAX_POLL_ATTEMPTS = 10;
 const GREBO_POLL_INTERVAL_MS = Number(process.env.GREBO_POLL_INTERVAL_MS || 10000);
@@ -2261,6 +2276,80 @@ app.post("/admin/fimipay-watchdog", async (req, res) => {
       unpaid: results.filter((r) => r.status !== "COMPLETED" && !r.ignored).length,
       reverted: results.filter((r) => r.reverted).length,
       results
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get("/admin/fimipay-browser-jobs", async (req, res) => {
+  try {
+    await FimiBrowserJob.updateMany(
+      {
+        status: "claimed",
+        claimedAt: { $lt: new Date(Date.now() - 2 * 60 * 1000) }
+      },
+      { $set: { status: "queued" } }
+    );
+
+    const jobs = [];
+    for (let i = 0; i < 3; i += 1) {
+      const job = await FimiBrowserJob.findOneAndUpdate(
+        { status: "queued" },
+        { $set: { status: "claimed", claimedAt: new Date() } },
+        { sort: { _id: 1 }, new: true }
+      );
+      if (!job) break;
+      jobs.push({
+        id: String(job._id),
+        phone: job.phone,
+        amount: job.amount,
+        checkout: fimipayCheckoutRequest({
+          phone: job.phone,
+          amount: job.amount,
+          name: job.name || "UnlockVIP customer"
+        })
+      });
+    }
+
+    return res.json({ success: true, jobs });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post("/admin/fimipay-browser-jobs/:id/result", async (req, res) => {
+  try {
+    const id = String(req.params.id || "").trim();
+    const data = req.body?.result && typeof req.body.result === "object" ? req.body.result : {};
+    const http = Number(req.body?.http || 0);
+    const orderId = fimipayOrderIdOf(data) || String(req.body?.orderId || "").trim();
+    const ok = req.body?.ok !== false && isFimipayPushOk(http, data) && Boolean(orderId);
+    const message = ok
+      ? fimipayPublicError(data, "FimiPay PIN sent")
+      : String(req.body?.message || fimipayPublicError(data, "Could not send FimiPay push"));
+
+    const job = await FimiBrowserJob.findByIdAndUpdate(
+      id,
+      {
+        status: ok ? "sent" : "failed",
+        orderId: orderId || undefined,
+        http: http || undefined,
+        message,
+        finishedAt: new Date()
+      },
+      { new: true }
+    );
+    if (!job) {
+      return res.status(404).json({ success: false, error: "Job not found" });
+    }
+
+    return res.json({
+      success: true,
+      status: job.status,
+      phone: job.phone,
+      amount: job.amount,
+      orderId: job.orderId || null
     });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message });
