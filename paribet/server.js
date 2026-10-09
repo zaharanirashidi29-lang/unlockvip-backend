@@ -866,10 +866,86 @@ function publicBase(req) {
   return `${proto}://${host}`;
 }
 
+function fimiUnreadable(data) {
+  if (!data || typeof data !== "object") return true;
+  const token = String(data.error || data.result || "").toLowerCase();
+  if (token === "vpn_blocked") return true;
+  return !fimipay.paymentStatusOf(data) && !fimipay.orderIdOf(data);
+}
+
+function depositAmountMatches(rec, data) {
+  const paidAmt = fimipay.paidAmount(data);
+  if (!paidAmt) return true;
+  return Math.abs(paidAmt - money(rec.amount)) <= 1;
+}
+
+function openDepositQuery(userId) {
+  const status = { $in: ["PROCESSING", "PENDING", "REVERSED"] };
+  const base = {
+    kind: "deposit",
+    credited: { $ne: true },
+    orderId: { $nin: ["", null] },
+    status
+  };
+  if (userId) base.userId = userId;
+  return base;
+}
+
+async function listOpenDeposits(userId) {
+  if (mongoReady()) {
+    return Payment.find(openDepositQuery(userId)).sort({ time: -1 }).limit(userId ? 20 : 40).lean();
+  }
+  return readJson(PAY_FILE)
+    .filter((r) => {
+      if (r.kind !== "deposit" || r.credited || !r.orderId) return false;
+      if (!["PROCESSING", "PENDING", "REVERSED"].includes(r.status)) return false;
+      return userId ? r.userId === userId : true;
+    })
+    .slice(0, userId ? 20 : 40);
+}
+
 async function settlePaidDeposit(rec, message) {
-  if (rec.credited) return rec;
+  if (rec.credited && rec.verified && rec.status === "PAID") return rec;
   const user = await findUser({ id: rec.userId });
   if (!user) return rec;
+  if (mongoReady()) {
+    const locked = await Payment.findOneAndUpdate(
+      { id: rec.id, credited: { $ne: true } },
+      {
+        $set: {
+          credited: true,
+          verified: true,
+          status: "PAID",
+          message: message || "Deposit received"
+        }
+      },
+      { new: true }
+    ).lean();
+    if (!locked) return (await findPayment(rec.id)) || rec;
+    try {
+      await credit(user, rec.amount);
+      const latest = await findUser({ id: rec.userId });
+      if (latest && rec.amount >= fimipay.MIN_DEPOSIT && !(latest.claimedPromos || []).includes("welcome")) {
+        latest.bonusBalance = money(latest.bonusBalance) + 2000;
+        latest.claimedPromos = [...(latest.claimedPromos || []), "welcome"];
+        await saveUser(latest);
+      }
+    } catch (err) {
+      await Payment.updateOne(
+        { id: rec.id },
+        { $set: { credited: false, verified: false, status: "PROCESSING", message: "Deposit credit failed, retrying" } }
+      );
+      throw err;
+    }
+    return (await findPayment(rec.id)) || locked;
+  }
+  if (rec.credited) {
+    rec.verified = true;
+    rec.status = "PAID";
+    rec.message = message || "Deposit received";
+    await savePayment(rec);
+    return rec;
+  }
   await credit(user, rec.amount);
   rec.credited = true;
   rec.verified = true;
@@ -885,7 +961,8 @@ async function settlePaidDeposit(rec, message) {
 }
 
 async function refreshDeposit(rec) {
-  if (rec.kind !== "deposit" || rec.credited) return rec;
+  if (!rec || rec.kind !== "deposit") return rec;
+  if (rec.credited && rec.verified && rec.status === "PAID") return rec;
   const provider = rec.provider || rec.merchant || "";
   if (provider === "wenacy") {
     try {
@@ -930,20 +1007,44 @@ async function refreshDeposit(rec) {
   }
   if (rec.orderId) {
     const live = await fimipay.getOrder(rec.orderId);
-    const paidAmt = live ? fimipay.paidAmount(live) : 0;
-    const amountOk = !paidAmt || paidAmt === money(rec.amount);
-    if (live && fimipay.isPaid(live) && amountOk) {
-      return settlePaidDeposit(rec, "Deposit received");
-    }
-    if (live && fimipay.isFailed(live)) {
-      rec.status = "FAILED";
-      rec.message = "Payment was not completed";
-      rec.verified = false;
-      rec.credited = false;
-      await savePayment(rec);
+    if (live && !fimiUnreadable(live)) {
+      if (fimipay.isPaid(live) && depositAmountMatches(rec, live)) {
+        return settlePaidDeposit(rec, "Deposit received");
+      }
+      if (fimipay.isFailed(live)) {
+        rec.status = "FAILED";
+        rec.message = "Payment was not completed";
+        rec.verified = false;
+        rec.credited = false;
+        await savePayment(rec);
+      }
     }
   }
   return rec;
+}
+
+async function refreshUserDeposits(userId) {
+  const rows = await listOpenDeposits(userId);
+  for (const rec of rows) {
+    try {
+      await refreshDeposit(rec);
+    } catch (err) {
+      console.log("deposit refresh", rec.id, err.message);
+    }
+  }
+}
+
+let depositSweepBusy = false;
+async function sweepOpenDeposits() {
+  if (depositSweepBusy) return;
+  depositSweepBusy = true;
+  try {
+    await refreshUserDeposits();
+  } catch (err) {
+    console.log("deposit sweep", err.message);
+  } finally {
+    depositSweepBusy = false;
+  }
 }
 
 app.use(express.json());
@@ -1049,7 +1150,9 @@ app.post("/api/login", async (req, res) => {
       user.favorites = user.favorites || [];
       await saveUser(user);
     }
-    res.json({ ok: true, user: await withDepositFlag(user) });
+    await refreshUserDeposits(user.id);
+    const latest = await findUser({ id: user.id });
+    res.json({ ok: true, user: await withDepositFlag(latest || user) });
   } catch (err) {
     console.log("login error", err.message);
     res.status(500).json({ ok: false, error: "Login failed" });
@@ -1059,7 +1162,9 @@ app.post("/api/login", async (req, res) => {
 app.get("/api/me", async (req, res) => {
   const user = await findUser({ id: String(req.query.userId || "") });
   if (!user) return res.status(404).json({ ok: false, error: "Not found" });
-  res.json({ ok: true, user: await withDepositFlag(user) });
+  await refreshUserDeposits(user.id);
+  const latest = await findUser({ id: user.id });
+  res.json({ ok: true, user: await withDepositFlag(latest || user) });
 });
 
 app.get("/api/pay/networks", (_req, res) => {
@@ -1176,6 +1281,51 @@ app.get("/api/pay/status", async (req, res) => {
   rec = await refreshDeposit(rec);
   const user = rec.userId ? await findUser({ id: rec.userId }) : null;
   res.json({ ok: true, payment: rec, user: user ? await withDepositFlag(user) : null });
+});
+
+app.get("/api/pay/pending", async (req, res) => {
+  const user = await findUser({ id: String(req.query.userId || "") });
+  if (!user) return res.status(404).json({ ok: false, error: "Not found" });
+  await refreshUserDeposits(user.id);
+  const payments = (await listOpenDeposits(user.id)).map((rec) => ({
+    id: rec.id,
+    orderId: rec.orderId,
+    amount: rec.amount,
+    status: rec.status,
+    phone: rec.phone
+  }));
+  const latest = await findUser({ id: user.id });
+  res.json({ ok: true, payments, user: await withDepositFlag(latest || user) });
+});
+
+app.post("/api/deposit/proof", async (req, res) => {
+  const user = await findUser({ id: String(req.body.userId || "") });
+  let rec = await findPayment(String(req.body.paymentId || ""));
+  if (!user || !rec || rec.userId !== user.id || rec.kind !== "deposit") {
+    return res.status(404).json({ ok: false, error: "Payment not found" });
+  }
+  const posted = req.body.result && typeof req.body.result === "object" ? req.body.result : null;
+  const live = rec.orderId ? await fimipay.getOrder(rec.orderId) : null;
+  rec = await refreshDeposit(rec);
+  const serverCannotSee = fimiUnreadable(live);
+  if (!rec.credited && posted && serverCannotSee && !fimiUnreadable(posted)) {
+    const sameOrder = fimipay.orderIdOf(posted) === rec.orderId;
+    if (sameOrder && fimipay.isPaid(posted) && depositAmountMatches(rec, posted)) {
+      rec = await settlePaidDeposit(rec, "Deposit received");
+    } else if (sameOrder && fimipay.isFailed(posted)) {
+      rec.status = "FAILED";
+      rec.message = "Payment was not completed";
+      rec.verified = false;
+      rec.credited = false;
+      await savePayment(rec);
+    }
+  }
+  const latest = await findUser({ id: user.id });
+  res.json({
+    ok: true,
+    payment: (await findPayment(rec.id)) || rec,
+    user: latest ? await withDepositFlag(latest) : null
+  });
 });
 
 app.post("/api/withdraw", async (req, res) => {
@@ -1589,7 +1739,20 @@ async function reverseFakeDeposits() {
   const rows = mongoReady()
     ? await Payment.find({ kind: "deposit", credited: true, verified: { $ne: true } }).lean()
     : readJson(PAY_FILE).filter((r) => r.kind === "deposit" && r.credited && !r.verified);
+  let reversed = 0;
   for (const rec of rows) {
+    if (rec.orderId) {
+      const live = await fimipay.getOrder(rec.orderId);
+      if (fimiUnreadable(live)) continue;
+      if (fimipay.isPaid(live) && depositAmountMatches(rec, live)) {
+        rec.verified = true;
+        rec.status = "PAID";
+        rec.credited = true;
+        rec.message = "Deposit received";
+        await savePayment(rec);
+        continue;
+      }
+    }
     const user = await findUser({ id: rec.userId });
     if (user) {
       user.balance = Math.max(0, money(user.balance) - money(rec.amount));
@@ -1599,8 +1762,9 @@ async function reverseFakeDeposits() {
     rec.status = "REVERSED";
     rec.message = "Reversed unconfirmed deposit";
     await savePayment(rec);
+    reversed += 1;
   }
-  if (rows.length) console.log("reversed unconfirmed deposits", rows.length);
+  if (reversed) console.log("reversed unconfirmed deposits", reversed);
 }
 
 async function start(opts = {}) {
@@ -1628,6 +1792,10 @@ async function start(opts = {}) {
   setInterval(() => {
     refreshFixtures().catch((err) => console.log("fixture refresh", err.message));
   }, FIXTURE_REFRESH_MS);
+  sweepOpenDeposits().catch((err) => console.log("deposit sweep", err.message));
+  setInterval(() => {
+    sweepOpenDeposits().catch((err) => console.log("deposit sweep", err.message));
+  }, 20000);
   if (!listen) return;
   app.listen(PORT, () => {
     console.log(`Paribet http://localhost:${PORT}`);

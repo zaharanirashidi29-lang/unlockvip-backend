@@ -115,6 +115,8 @@ function route() {
   if (state.user) refreshMe();
 }
 
+let depositSyncAt = 0;
+
 async function refreshMe() {
   if (!state.user?.id) return;
   try {
@@ -122,6 +124,10 @@ async function refreshMe() {
     saveUser(data.user);
     const chip = document.querySelector(".wallet-chip");
     if (chip) chip.textContent = tzs(wallet(state.user));
+    if (Date.now() - depositSyncAt > 15000) {
+      depositSyncAt = Date.now();
+      syncOpenDeposits();
+    }
   } catch (_) {}
 }
 
@@ -1222,11 +1228,56 @@ async function sendFimiPay(checkout) {
   throw lastErr;
 }
 
+async function readFimiOrder(orderId) {
+  const res = await fetch(
+    "https://fimipay.com/api/payments/checkout/order-status?order_id=" + encodeURIComponent(orderId),
+    { headers: { Accept: "application/json" } }
+  );
+  return res.json();
+}
+
+async function syncDeposit(payment) {
+  if (!payment?.id || !state.user?.id) return null;
+  let result = null;
+  if (payment.orderId) {
+    try { result = await readFimiOrder(payment.orderId); } catch (_) {}
+  }
+  return api("/api/deposit/proof", {
+    method: "POST",
+    body: JSON.stringify({
+      userId: state.user.id,
+      paymentId: payment.id,
+      result
+    })
+  });
+}
+
+async function syncOpenDeposits() {
+  if (!state.user?.id) return;
+  try {
+    const open = await api("/api/pay/pending?userId=" + encodeURIComponent(state.user.id));
+    let credited = false;
+    for (const payment of open.payments || []) {
+      const synced = await syncDeposit(payment);
+      if (synced?.payment?.status === "PAID" && synced.payment.credited) credited = true;
+    }
+    renderAuthLinks();
+    if (credited) {
+      state.notice = "Deposit received";
+      if (state.view === "deposit" || state.view === "account") render();
+    }
+  } catch (_) {}
+}
+
 async function pollPay(id) {
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 3000));
     try {
-      const data = await api("/api/pay/status?id=" + encodeURIComponent(id));
+      const open = await api("/api/pay/pending?userId=" + encodeURIComponent(state.user.id));
+      const payment = (open.payments || []).find((p) => p.id === id);
+      const data = payment
+        ? await syncDeposit(payment)
+        : await api("/api/pay/status?id=" + encodeURIComponent(id));
       if (data.user) saveUser(data.user);
       renderAuthLinks();
       const msg = $("payMsg");
@@ -1244,7 +1295,7 @@ async function pollPay(id) {
     } catch (_) {}
   }
   const msg = $("payMsg");
-  if (msg) msg.textContent = "Still waiting. Keep this page open and approve the prompt.";
+  if (msg) msg.textContent = "Still waiting. Approve the prompt, then reopen the site. The balance updates after payment.";
 }
 
 function bindGames() {
