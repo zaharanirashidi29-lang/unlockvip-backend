@@ -306,6 +306,11 @@ label.field {
   border: 1px solid var(--line);
 }
 .banner strong { display: block; font-size: 18px; }
+.league-head {
+  margin: 16px 14px 8px;
+  font-size: 15px;
+  font-weight: 800;
+}
 .filters { display: flex; gap: 8px; overflow: auto; padding: 0 14px 10px; }
 .filters button {
   white-space: nowrap;

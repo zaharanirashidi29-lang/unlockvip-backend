@@ -242,7 +242,7 @@ function lightMerge(m) {
   };
 }
 
-function matchesFor(view) {
+function matchesFor(view, opts) {
   let rows = state.catalog.matches || [];
   if (view === "live") {
     if (state.liveBoard === "results") {
@@ -269,7 +269,7 @@ function matchesFor(view) {
   if (view === "sports" && state.sportFilter !== "all") rows = rows.filter((m) => m.sport === state.sportFilter);
   if (view === "sports" && state.listChip === "live") rows = rows.filter((m) => m.live);
   if (view === "sports" && state.listChip === "upcoming") rows = rows.filter((m) => m.period === "pre");
-  if (state.leagueFilter) rows = rows.filter((m) => m.league === state.leagueFilter);
+  if (!opts?.skipLeague && state.leagueFilter) rows = rows.filter((m) => m.league === state.leagueFilter);
   if (state.search) {
     const q = state.search.toLowerCase();
     rows = rows.filter((m) => (m.home + m.away + m.league).toLowerCase().includes(q));
@@ -397,13 +397,72 @@ function skeletonList() {
   return Array.from({ length: 6 }, () => `<article class="event skeleton"><div class="sk-line"></div><div class="sk-line short"></div><div class="sk-odds"></div></article>`).join("");
 }
 
-function leagueChips() {
+const TOP_FIVE = [
+  ["English Premier League", "Premier League"],
+  ["LALIGA", "La Liga", "LaLiga"],
+  ["Serie A"],
+  ["Bundesliga"],
+  ["Ligue 1"]
+];
+
+function topFiveIndex(league) {
+  const name = String(league || "");
+  return TOP_FIVE.findIndex((names) => names.includes(name));
+}
+
+function showingToday(view) {
+  if (view !== "sports") return false;
+  if (state.listChip === "live" || state.listChip === "upcoming") return false;
+  const day = state.dayFilter === "today" ? state.catalog.today : state.dayFilter;
+  return Boolean(day && day === state.catalog.today);
+}
+
+function pinTopFive(rows) {
+  const ranked = [];
+  const rest = [];
+  for (const m of rows) {
+    const rank = topFiveIndex(m.league);
+    if (rank >= 0) ranked.push([rank, m]);
+    else rest.push(m);
+  }
+  ranked.sort((a, b) => a[0] - b[0] || String(a[1].kickoff || "").localeCompare(String(b[1].kickoff || "")));
+  return ranked.map((pair) => pair[1]).concat(rest);
+}
+
+function leagueChips(rows, pin) {
   const counts = {};
-  for (const m of state.catalog.matches || []) {
+  for (const m of rows || []) {
     if (!m.league || m.period === "ft") continue;
     counts[m.league] = (counts[m.league] || 0) + 1;
   }
-  return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const entries = Object.entries(counts);
+  if (!pin) return entries.sort((a, b) => b[1] - a[1]).slice(0, 8);
+  const top = [];
+  for (const names of TOP_FIVE) {
+    const hit = entries.find(([name]) => names.includes(name));
+    if (hit) top.push(hit);
+  }
+  const rest = entries.filter(([name]) => topFiveIndex(name) < 0).sort((a, b) => b[1] - a[1]);
+  return top.concat(rest).slice(0, Math.max(8, top.length));
+}
+
+function eventList(rows, pin) {
+  if (!pin) return rows.map(matchCard).join("");
+  let html = "";
+  let last = "";
+  let openedRest = false;
+  for (const m of rows) {
+    const rank = topFiveIndex(m.league);
+    if (rank >= 0 && m.league !== last) {
+      html += `<h3 class="league-head">${esc(m.league)}</h3>`;
+      last = m.league;
+    } else if (rank < 0 && last && !openedRest) {
+      html += `<h3 class="league-head">More leagues</h3>`;
+      openedRest = true;
+    }
+    html += matchCard(m);
+  }
+  return html;
 }
 
 function matchDetailHtml() {
@@ -562,10 +621,13 @@ function paintSlip() {
 }
 
 function listHtml(title, view) {
-  const rows = matchesFor(view);
+  const todayPin = showingToday(view);
+  const base = matchesFor(view, { skipLeague: true });
+  const picked = state.leagueFilter ? base.filter((m) => m.league === state.leagueFilter) : base;
+  const rows = todayPin ? pinTopFive(picked) : picked;
   const liveSports = ["all", ...(state.catalog.sports || []).map((s) => s.id)];
   const chips = [["all", "All"], ["today", "Today"], ["upcoming", "Upcoming"], ["live", "Live"]];
-  const leagues = view === "sports" ? leagueChips() : [];
+  const leagues = view === "sports" ? leagueChips(todayPin ? base : (state.catalog.matches || []), todayPin) : [];
   const loading = !state.catalogError && !(state.catalog.matches || []).length;
   return `
     ${topToolsHtml()}
@@ -607,7 +669,7 @@ function listHtml(title, view) {
     }</div>` : ""}
     ${view === "live" ? `<a class="av-bar" href="#/aviator"><span class="live-dot">LIVE</span> Aviator <b id="liveAviatorChip">1.00x</b><span>Open table</span></a>` : ""}
     <p class="hint" style="margin:0 14px 8px">${title} · ${rows.length} events</p>
-    ${rows.length ? rows.map(matchCard).join("") : loading ? skeletonList() : `<p class="empty">${
+    ${rows.length ? eventList(rows, todayPin) : loading ? skeletonList() : `<p class="empty">${
       state.catalogError
         ? state.catalogError
         : view === "live" && state.liveBoard === "now"
