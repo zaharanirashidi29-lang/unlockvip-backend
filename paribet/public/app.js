@@ -8,6 +8,12 @@ const state = {
   dayFilter: "all",
   search: "",
   slip: [],
+  slipOpen: false,
+  openCards: {},
+  listChip: "all",
+  leagueFilter: "",
+  prevOdds: {},
+  placing: false,
   stake: 1000,
   bets: [],
   showPass: false,
@@ -33,6 +39,9 @@ const state = {
 };
 
 function $(id) { return document.getElementById(id); }
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
 function digitsOnly(v, max) { return String(v || "").replace(/\D/g, "").slice(0, max || 20); }
 function tzs(n) { return "TZS " + Number(n || 0).toLocaleString("en-TZ"); }
 function wallet(u) { return Number(u?.balance || 0) + Number(u?.bonusBalance || 0); }
@@ -135,14 +144,13 @@ function renderAuthLinks() {
   const box = $("authLinks");
   if (state.user) {
     box.innerHTML = `
-      <span class="wallet-chip">${tzs(wallet(state.user))}</span>
-      <a href="#/deposit">Deposit</a>
-      <a href="#/withdraw">Withdraw</a>
-      <a class="join" href="#/account">${state.user.username}</a>
+      <span class="bal">${tzs(wallet(state.user))}</span>
+      <a class="btn-green" href="#/deposit">Deposit</a>
+      <a class="btn-ghost" href="#/account">${esc(state.user.username)}</a>
     `;
     return;
   }
-  box.innerHTML = `<a href="#/login">Log in</a><a class="join" href="#/register">Join</a>`;
+  box.innerHTML = `<a class="btn-ghost" href="#/login">Login</a><a class="btn-green" href="#/register">Join Now</a>`;
 }
 
 function renderSportsNav() {
@@ -156,7 +164,7 @@ function renderSportsNav() {
 }
 
 function setNav() {
-  document.querySelectorAll(".bottom a, .side-grid a, .topnav a").forEach((a) => {
+  document.querySelectorAll(".bottom a, .side-grid a, .topnav a, .subnav a").forEach((a) => {
     const on = a.dataset.route === state.view || (state.view === "match" && a.dataset.route === "live");
     a.classList.toggle("on", on);
   });
@@ -258,6 +266,9 @@ function matchesFor(view) {
   }
   if (view === "esports") rows = rows.filter((m) => m.sport === "esports");
   if (view === "sports" && state.sportFilter !== "all") rows = rows.filter((m) => m.sport === state.sportFilter);
+  if (view === "sports" && state.listChip === "live") rows = rows.filter((m) => m.live);
+  if (view === "sports" && state.listChip === "upcoming") rows = rows.filter((m) => m.period === "pre");
+  if (state.leagueFilter) rows = rows.filter((m) => m.league === state.leagueFilter);
   if (state.search) {
     const q = state.search.toLowerCase();
     rows = rows.filter((m) => (m.home + m.away + m.league).toLowerCase().includes(q));
@@ -308,39 +319,90 @@ function findSel(m, key) {
 function oddBtn(m, key, label) {
   const sel = findSel(m, key);
   const odd = Number(sel.odd || m.odds?.[key] || 0);
-  if (!odd) return `<button type="button" disabled><span>${label}</span>—</button>`;
-  if (m.period === "ft") return `<button type="button" disabled><span>${label}</span>${odd.toFixed(2)}</button>`;
+  const name = esc(label);
+  const prev = state.prevOdds[m.id + "|" + key];
+  const flash = prev && odd && prev !== odd ? (odd > prev ? " odd-up" : " odd-down") : "";
+  if (!odd) return `<button type="button" class="odd-btn" disabled><span>${name}</span><b>—</b></button>`;
+  if (m.period === "ft") return `<button type="button" class="odd-btn" disabled><span>${name}</span><b>${odd.toFixed(2)}</b></button>`;
   const on = state.slip.some((x) => x.id === m.id && x.pick === key);
-  return `<button type="button" class="${on ? "on" : ""}" data-add="${m.id}|${key}|${odd}"><span>${label}</span>${odd.toFixed(2)}</button>`;
+  return `<button type="button" class="odd-btn${on ? " on" : ""}${flash}" data-add="${m.id}|${key}|${odd}" aria-pressed="${on ? "true" : "false"}"><span>${name}</span><b>${odd.toFixed(2)}</b></button>`;
+}
+
+function marketBlock(m, g) {
+  const picked = state.slip.find((x) => x.id === m.id && x.market === g.name);
+  return `
+    <article class="match market-card">
+      <div class="market-head">
+        <div class="teams">${esc(g.name)}</div>
+        ${picked ? `<button type="button" class="market-cancel" data-remove="${picked.id}|${picked.pick}">Cancel</button>` : ""}
+      </div>
+      <div class="markets wrap">
+        ${g.sels.map((s) => oddBtn(m, s.key, s.label)).join("")}
+      </div>
+    </article>`;
+}
+
+function quickMarketBtns(m) {
+  const wanted = [
+    ["over25", "Over 2.5"],
+    ["under25", "Under 2.5"],
+    ["btts_y", "GG"],
+    ["btts_n", "NG"],
+    ["1x", "1X"],
+    ["x2", "X2"]
+  ];
+  const buttons = [];
+  for (const [key, label] of wanted) {
+    const sel = findSel(m, key);
+    const odd = Number(sel.odd || m.odds?.[key] || 0);
+    if (!odd) continue;
+    buttons.push(oddBtn(m, key, label));
+    if (buttons.length >= 4) break;
+  }
+  return buttons.join("");
 }
 
 function matchCard(m) {
-  const fav = (state.user?.favorites || []).includes(m.id);
   const score = m.score || "";
-  const tickets = matchTickets(m.id);
   const clock = m.clock || m.time;
+  const open = Boolean(state.openCards[m.id]);
+  const extra = m.extra || Math.max(0, (m.markets || []).reduce((n, g) => n + (g.sels || []).length, 0) - 3);
   return `
-    <article class="match">
-      <div class="meta">
-        <span>${m.live ? '<span class="live-dot">LIVE</span> ' : m.period === "ft" ? "FT · " : ""}${m.league}${score ? " · " + score : ""}</span>
-        <span>${clock} <button type="button" class="ghost" data-fav="${m.id}">${fav ? "★" : "☆"}</button></span>
+    <article class="event">
+      <div class="event-body">
+        <div class="event-meta">
+          <span>${m.live ? '<span class="live-dot">LIVE</span> ' : ""}${esc(m.league)}</span>
+          <span>${m.live && score ? esc(score) + " · " : ""}${esc(clock)}</span>
+        </div>
+        <a class="event-teams" href="#/match/${m.id}">
+          <span>${esc(m.home)}</span>
+          <span>${esc(m.away)}</span>
+        </a>
       </div>
-      <a class="teams" href="#/match/${m.id}">${m.home} ${score ? score : "vs"} ${m.away}</a>
-      ${tickets.length ? `<div class="your-ticket">Your placed bet · ${tickets[0].status}${tickets[0].legs ? " · " + (tickets[0].legs.find((l) => l.id === m.id)?.result || "").toUpperCase() : ""}</div>` : ""}
-      <div class="odds">
-        ${oddBtn(m, "1", "1")}
-        ${oddBtn(m, "x", "X")}
-        ${oddBtn(m, "2", "2")}
+      <div class="event-side">
+        <div class="odds">
+          ${oddBtn(m, "1", "1")}
+          ${oddBtn(m, "x", "X")}
+          ${oddBtn(m, "2", "2")}
+        </div>
+        <button type="button" class="more-link" data-more="${m.id}">${open ? "Hide markets" : "More markets +" + extra}</button>
       </div>
-      <div class="markets">
-        ${oddBtn(m, "over", "Over")}
-        ${oddBtn(m, "under", "Under")}
-        ${oddBtn(m, "ah1", "AH1")}
-        ${oddBtn(m, "ah2", "AH2")}
-        <a class="more-m" href="#/match/${m.id}">+${m.extra || 0}</a>
-      </div>
+      ${open ? `<div class="more-markets">${(m.markets || []).map((g) => marketBlock(m, g)).join("")}</div>` : ""}
     </article>
   `;
+}
+
+function skeletonList() {
+  return Array.from({ length: 6 }, () => `<article class="event skeleton"><div class="sk-line"></div><div class="sk-line short"></div><div class="sk-odds"></div></article>`).join("");
+}
+
+function leagueChips() {
+  const counts = {};
+  for (const m of state.catalog.matches || []) {
+    if (!m.league || m.period === "ft") continue;
+    counts[m.league] = (counts[m.league] || 0) + 1;
+  }
+  return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
 }
 
 function matchDetailHtml() {
@@ -367,15 +429,8 @@ function matchDetailHtml() {
     </section>
     ${tickets.map((b) => ticketCard(b)).join("")}
     ${m.period === "ft" ? `<p class="hint" style="margin:8px 14px">This match is finished. Open tickets on it are marked Won or Lost.</p>` : ""}
-    ${(m.markets || []).map((g) => `
-      <article class="match">
-        <div class="teams">${g.name}</div>
-        <div class="markets wrap">
-          ${g.sels.map((s) => oddBtn(m, s.key, s.label)).join("")}
-        </div>
-      </article>
-    `).join("")}
-    ${slipHtml()}
+    <p class="hint" style="margin:8px 14px">Tap a price to add it. Tap it again, or the ✕ in the betslip, to remove it.</p>
+    ${(m.markets || []).map((g) => marketBlock(m, g)).join("")}
   `;
 }
 
@@ -437,35 +492,88 @@ function topToolsHtml() {
   return loadBetBox() + placedLiveHtml();
 }
 
-function slipHtml() {
-  if (!state.slip.length) return "";
-  const t = slipTotals();
+function slipSheet(t, n) {
+  const chips = [500, 1000, 2000, 5000];
   return `
-    <div class="slip">
-      <div>${state.slip.length} pick${state.slip.length > 1 ? "s" : ""} · total odds <b id="slipOdds">${t.odds.toFixed(2)}</b></div>
-      ${state.slip.map((s) => `<div class="hint">${s.home} vs ${s.away} · ${s.market ? s.market + " / " : ""}${s.label || s.pick} @ ${Number(s.odd).toFixed(2)}</div>`).join("")}
+    <section class="slip-sheet" role="dialog" aria-label="Betslip">
+      <div class="slip-head">
+        <button type="button" class="slip-head-btn" id="slipToggle">
+          <span>Betslip · ${n}</span>
+          <b id="slipOdds">${t.odds.toFixed(2)}</b>
+        </button>
+        <button type="button" class="market-cancel" id="slipClear">Clear</button>
+      </div>
+      <div class="slip-picks">
+        ${state.slip.map((s) => `
+          <div class="slip-pick">
+            <button type="button" class="slip-x" data-remove="${s.id}|${s.pick}" aria-label="Remove ${esc(s.label || s.pick)}">✕</button>
+            <div class="slip-pick-main">
+              <strong>${esc(s.home)} vs ${esc(s.away)}</strong>
+              <span>${esc(s.market || "1X2")} · ${esc(s.label || s.pick)}</span>
+            </div>
+            <b class="slip-odd">${Number(s.odd).toFixed(2)}</b>
+          </div>`).join("")}
+      </div>
+      <div class="stake-chips">
+        ${chips.map((amt) => `<button type="button" data-stake="${amt}" class="${Number(state.stake) === amt ? "on" : ""}">${amt.toLocaleString("en-TZ")}</button>`).join("")}
+      </div>
       <div class="stake-row">
-        <input class="input" id="stakeInput" inputmode="numeric" value="${state.stake}">
-        <span>Your stake</span>
+        <input class="input" id="stakeInput" inputmode="numeric" value="${state.stake}" aria-label="Stake">
+        <span>Stake TZS</span>
       </div>
       <div class="win-box">
-        <div><span>Approx. return</span><b id="slipReturns">${tzs(t.returns)}</b></div>
-        <div><span>Approx. win</span><b id="slipProfit">${tzs(t.profit)}</b></div>
+        <div><span>Total odds</span><b>${t.odds.toFixed(2)}</b></div>
+        <div><span>Potential payout</span><b id="slipReturns">${tzs(t.returns)}</b></div>
+        <div><span>Potential win</span><b id="slipProfit">${tzs(t.profit)}</b></div>
       </div>
-      <p class="hint">Stake is taken when you place. If it wins, that return is added to your cash. If it loses, the stake stays deducted.</p>
-      <button class="wide gold" type="button" id="placeBet">Place bet</button>
+      <button class="wide gold" type="button" id="placeBet" ${state.placing ? "disabled" : ""}>${state.placing ? "Placing…" : "Place bet"}</button>
       <button class="wide" type="button" id="shareCodeBtn">Copy bet code</button>
-    </div>`;
+    </section>`;
+}
+
+function slipDockHtml() {
+  const wide = window.matchMedia("(min-width: 1100px)").matches;
+  if (!state.slip.length) {
+    return `<aside class="slip-panel slip-empty"><h3>Betslip</h3><p>Tap a price to add a selection.</p></aside>`;
+  }
+  const t = slipTotals();
+  const n = state.slip.length;
+  if (!wide && !state.slipOpen) {
+    return `
+      <button type="button" class="slip-bar" id="slipToggle">
+        <span class="slip-count">${n}</span>
+        <span class="slip-bar-title">Betslip</span>
+        <b>${t.odds.toFixed(2)}</b>
+      </button>`;
+  }
+  return `${wide ? "" : `<button type="button" class="slip-scrim" id="slipScrim" aria-label="Close betslip"></button>`}${slipSheet(t, n)}`;
+}
+
+function paintSlip() {
+  const dock = $("betslipDock");
+  if (!dock) return;
+  const on = state.slip.length > 0;
+  dock.innerHTML = slipDockHtml();
+  dock.classList.toggle("empty", !on);
+  dock.hidden = false;
+  document.body.classList.toggle("has-slip", on);
+  document.body.classList.toggle("slip-open", on && state.slipOpen);
 }
 
 function listHtml(title, view) {
   const rows = matchesFor(view);
   const liveSports = ["all", ...(state.catalog.sports || []).map((s) => s.id)];
+  const chips = [["all", "All"], ["today", "Today"], ["upcoming", "Upcoming"], ["live", "Live"]];
+  const leagues = view === "sports" ? leagueChips() : [];
+  const loading = !state.catalogError && !(state.catalog.matches || []).length;
   return `
     ${topToolsHtml()}
     ${state.notice ? `<p class="notice">${state.notice}</p>` : ""}
     <div class="filters">
       <input class="input" id="searchBox" placeholder="Search team or league" value="${state.search}">
+      ${view === "sports" ? chips.map(([id, label]) =>
+        `<button type="button" data-chip="${id}" class="${state.listChip === id ? "on" : ""}">${label}</button>`
+      ).join("") : ""}
       ${view === "sports" ? `
         <button type="button" data-day="all" class="${state.dayFilter === "all" ? "on" : ""}">All days</button>
         ${(state.catalog.days || []).map((d) =>
@@ -492,16 +600,19 @@ function listHtml(title, view) {
         <button type="button" data-live-period="2h" class="${state.livePeriod === "2h" ? "on" : ""}">2nd period</button>
       ` : ""}
     </div>
+    ${leagues.length ? `<div class="filters leagues">${
+      `<button type="button" data-league="" class="${state.leagueFilter ? "" : "on"}">Popular</button>` +
+      leagues.map(([name]) => `<button type="button" data-league="${esc(name)}" class="${state.leagueFilter === name ? "on" : ""}">${esc(name)}</button>`).join("")
+    }</div>` : ""}
     ${view === "live" ? `<a class="av-bar" href="#/aviator"><span class="live-dot">LIVE</span> Aviator <b id="liveAviatorChip">1.00x</b><span>Open table</span></a>` : ""}
     <p class="hint" style="margin:0 14px 8px">${title} · ${rows.length} events</p>
-    ${rows.map(matchCard).join("") || `<p class="empty">${
+    ${rows.length ? rows.map(matchCard).join("") : loading ? skeletonList() : `<p class="empty">${
       state.catalogError
         ? state.catalogError
         : view === "live" && state.liveBoard === "now"
           ? "No live matches right now. Check upcoming or results."
-          : "Loading events… pull to refresh or tap Check results."
+          : "No events for this filter."
     }</p>`}
-    ${slipHtml()}
   `;
 }
 
@@ -581,18 +692,16 @@ function loginFields() {
 function authHtml() {
   const join = state.authTab === "join";
   return `
-    <section class="hero">
-      <h1>${join ? "Create your <em>Paribet</em> account." : "Good to see you <em>again.</em>"}</h1>
-      <p>${join ? "Tanzania number. Sports, live, games." : "Phone, email or username."}</p>
-    </section>
-    <form class="card" id="authForm">
+    <form class="card auth-sheet" id="authForm">
+      <h2>${join ? "Join Now" : "Login"}</h2>
+      <p class="hint">${join ? "Tanzania number, then a password." : "Use your phone and password."}</p>
       <div class="tabs">
         <button type="button" class="${!join ? "on" : ""}" data-auth="login">Login</button>
-        <button type="button" class="${join ? "on" : ""}" data-auth="join">Join</button>
+        <button type="button" class="${join ? "on" : ""}" data-auth="join">Join Now</button>
       </div>
       ${join ? joinFields() : loginFields()}
       <p class="error" id="authError"></p>
-      <button class="wide" type="submit">${join ? "Create account" : "Login"}</button>
+      <button class="wide gold" type="submit">${join ? "Join Now" : "Login"}</button>
     </form>
   `;
 }
@@ -710,6 +819,7 @@ function accountHtml() {
       <div class="row-k"><span>Bonus</span><b>${tzs(state.user.bonusBalance)}</b></div>
       <a class="wide gold" href="#/deposit">Deposit</a>
       <a class="wide" href="#/withdraw">Withdraw</a>
+      <a class="wide" href="#/bets">My Bets</a>
       <a class="wide" href="${BASE}/download">Get Paribet App</a>
       <button class="wide" type="button" id="logoutBtn">Log out</button>
     </section>`;
@@ -772,11 +882,11 @@ function betsHtml() {
         <div>${b.detail || ""}</div>
         <div class="win-line"><span>Stake ${tzs(b.stake)}</span><span>${b.status === "Won" ? "Won " + tzs(b.payout || 0) : "Lost"}</span></div>
       </article>`).join("") : ""}
-    ${slipHtml()}
   `;
 }
 
-function render() {
+function render(keepScroll) {
+  const scrollY = keepScroll ? window.scrollY : 0;
   renderAuthLinks();
   renderSportsNav();
   setNav();
@@ -807,7 +917,14 @@ function render() {
     const title = day && day !== "all" ? dayLabel(day) : (state.catalog.title || "Today & upcoming");
     view.innerHTML = listHtml(title, "sports");
   }
+  paintSlip();
   bindView();
+  const nextOdds = {};
+  for (const m of state.catalog.matches || []) {
+    for (const [k, v] of Object.entries(m.odds || {})) nextOdds[m.id + "|" + k] = Number(v);
+  }
+  state.prevOdds = nextOdds;
+  if (keepScroll) window.scrollTo(0, scrollY);
   if (state.view === "aviator" || state.view === "live") startAviatorPoll();
   if (["live", "sports", "bets", "match", "home"].includes(state.view)) startLivePoll();
   else stopLivePoll();
@@ -838,6 +955,7 @@ function bindView() {
       const same = state.slip.find((x) => x.id === id && x.pick === pick);
       if (same) {
         state.slip = state.slip.filter((x) => !(x.id === id && x.pick === pick));
+        if (!state.slip.length) state.slipOpen = false;
       } else {
         state.slip = state.slip.filter((x) => !(x.id === id && x.market === sel.market));
         state.slip.push({
@@ -850,9 +968,51 @@ function bindView() {
           away: match.away
         });
       }
-      render();
+      render(true);
     };
   });
+  document.querySelectorAll("[data-remove]").forEach((b) => {
+    b.onclick = () => {
+      const [id, pick] = b.dataset.remove.split("|");
+      state.slip = state.slip.filter((x) => !(x.id === id && x.pick === pick));
+      if (!state.slip.length) state.slipOpen = false;
+      render(true);
+    };
+  });
+  document.querySelectorAll("[data-chip]").forEach((b) => {
+    b.onclick = () => {
+      state.listChip = b.dataset.chip;
+      if (state.listChip === "today") state.dayFilter = "today";
+      else if (state.listChip === "all") state.dayFilter = "all";
+      render(true);
+    };
+  });
+  document.querySelectorAll("[data-league]").forEach((b) => {
+    b.onclick = () => { state.leagueFilter = b.dataset.league || ""; render(true); };
+  });
+  document.querySelectorAll("[data-more]").forEach((b) => {
+    b.onclick = () => {
+      state.openCards[b.dataset.more] = !state.openCards[b.dataset.more];
+      render(true);
+    };
+  });
+  document.querySelectorAll("[data-stake]").forEach((b) => {
+    b.onclick = () => {
+      state.stake = Number(b.dataset.stake);
+      const input = $("stakeInput");
+      if (input) input.value = String(state.stake);
+      updateWinPreview();
+      document.querySelectorAll("[data-stake]").forEach((chip) => {
+        chip.classList.toggle("on", Number(chip.dataset.stake) === state.stake);
+      });
+    };
+  });
+  const slipToggle = $("slipToggle");
+  if (slipToggle) slipToggle.onclick = () => { state.slipOpen = !state.slipOpen; render(true); };
+  const slipScrim = $("slipScrim");
+  if (slipScrim) slipScrim.onclick = () => { state.slipOpen = false; render(true); };
+  const slipClear = $("slipClear");
+  if (slipClear) slipClear.onclick = () => { state.slip = []; state.slipOpen = false; render(true); };
   document.querySelectorAll("[data-live-sport]").forEach((b) => {
     b.onclick = () => { state.liveSport = b.dataset.liveSport; render(); };
   });
@@ -978,8 +1138,12 @@ async function onAuth(e) {
 
 async function placeBet() {
   if (needLogin("place a bet")) return;
+  if (state.placing) return;
   const stakeEl = $("stakeInput");
   if (stakeEl) state.stake = Number(digitsOnly(stakeEl.value, 9) || 0);
+  state.placing = true;
+  const btn = $("placeBet");
+  if (btn) { btn.disabled = true; btn.textContent = "Placing…"; }
   try {
     const data = await api("/api/bet", {
       method: "POST",
@@ -995,12 +1159,15 @@ async function placeBet() {
     await loadBets();
     go("bets");
   } catch (err) {
+    state.placing = false;
     if (/insufficient|not enough/i.test(err.message)) {
       showNeedDeposit("Insufficient balance. Please deposit");
       return;
     }
     state.notice = err.message;
     render();
+  } finally {
+    state.placing = false;
   }
 }
 
@@ -1496,7 +1663,7 @@ async function loadBets() {
 
 $("menuBtn").onclick = () => { $("sidebar").classList.add("open"); $("scrim").hidden = false; };
 $("scrim").onclick = () => { $("sidebar").classList.remove("open"); $("scrim").hidden = true; };
-$("themeBtn").onclick = () => {
+if ($("themeBtn")) $("themeBtn").onclick = () => {
   const next = document.documentElement.getAttribute("data-theme") === "light" ? "" : "light";
   document.documentElement.setAttribute("data-theme", next);
 };
