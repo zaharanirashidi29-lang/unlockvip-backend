@@ -1,27 +1,38 @@
-const CACHE = "paribet-app-v3";
-const ASSETS = [
-  "/",
-  "/index.html",
-  "/styles.css?v=18",
-  "/app.js?v=31",
-  "/manifest.webmanifest",
-  "/icons/icon-192.png",
-  "/icons/icon-512.png",
-  "/download"
-];
+const CACHE = "paribet-app-v4";
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).then(() => self.skipWaiting())
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    const scope = self.registration.scope;
+    const assets = [
+      "",
+      "styles.css?v=18",
+      "app.js?v=31",
+      "manifest.webmanifest",
+      "download",
+      "icons/icon-192.png",
+      "icons/icon-512.png"
+    ];
+    await Promise.all(assets.map((path) => cache.add(new URL(path, scope)).catch(() => {})));
+    await self.skipWaiting();
+  })());
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    ).then(() => self.clients.claim())
-  );
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key)));
+    await self.clients.claim();
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    await Promise.all(windows.map((client) => {
+      if (client.url && client.navigate) return client.navigate(client.url);
+      return null;
+    }));
+  })());
+});
+
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "SKIP_WAITING") self.skipWaiting();
 });
 
 self.addEventListener("fetch", (event) => {
@@ -29,7 +40,7 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
-  if (url.pathname.startsWith("/api/")) return;
+  if (url.pathname.includes("/api/")) return;
 
   event.respondWith(
     fetch(req)

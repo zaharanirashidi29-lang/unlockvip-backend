@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Download Paribet App</title>
-  <meta name="theme-color" content="#081018">
+  <meta name="theme-color" content="#22c55e">
   <script>
     window.PARIBET_BASE = location.pathname.indexOf("/paribet/") === 0 || location.pathname === "/paribet/download" || location.pathname === "/paribet/download.html"
       ? "/paribet"
@@ -12,23 +12,21 @@
   </script>
   <link rel="manifest" href="/manifest.webmanifest" id="m">
   <link rel="apple-touch-icon" href="/icons/icon-180.png" id="a">
-  <link rel="stylesheet" href="/styles.css?v=16" id="c">
+  <link rel="stylesheet" href="/styles.css?v=18" id="c">
   <script>
     (function () {
       var b = window.PARIBET_BASE || "";
       document.getElementById("m").href = b + "/manifest.webmanifest";
       document.getElementById("a").href = b + "/icons/icon-180.png";
-      document.getElementById("c").href = b + "/styles.css?v=16";
+      document.getElementById("c").href = b + "/styles.css?v=18";
     })();
   </script>
   <style>
     body {
       min-height: 100vh;
       margin: 0;
-      background:
-        radial-gradient(circle at top right, rgba(215,164,65,.18), transparent 34%),
-        linear-gradient(160deg, #081018 0%, #101c26 55%, #0c1c18 100%);
-      color: var(--text);
+      background: #f4f4f5;
+      color: #18181b;
     }
     .wrap {
       max-width: 520px;
@@ -152,7 +150,9 @@
       apk.href = base + "/app/paribet.apk";
 
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register(base + "/sw.js").catch(function () {});
+        navigator.serviceWorker.register(base + "/sw.js").then(function (reg) {
+          reg.update();
+        }).catch(function () {});
       }
 
       window.addEventListener("beforeinstallprompt", function (e) {

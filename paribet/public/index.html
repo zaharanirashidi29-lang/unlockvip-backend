@@ -105,7 +105,15 @@
       s.src = base + "/app.js?v=31";
       document.body.appendChild(s);
       if ("serviceWorker" in navigator) {
-        navigator.serviceWorker.register(base + "/sw.js").catch(function () {});
+        var reloaded = false;
+        navigator.serviceWorker.addEventListener("controllerchange", function () {
+          if (reloaded) return;
+          reloaded = true;
+          location.reload();
+        });
+        navigator.serviceWorker.register(base + "/sw.js").then(function (reg) {
+          reg.update();
+        }).catch(function () {});
       }
     })();
   </script>

@@ -1054,7 +1054,7 @@ app.use(
     etag: false,
     lastModified: false,
     setHeaders(res, filePath) {
-      if (filePath.endsWith(".html")) res.setHeader("Cache-Control", "no-store");
+      if (/\.(html|js|css|webmanifest)$/.test(filePath)) res.setHeader("Cache-Control", "no-store");
       else res.setHeader("Cache-Control", "no-cache");
     }
   })
