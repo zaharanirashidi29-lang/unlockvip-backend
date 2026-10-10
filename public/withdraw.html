@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Withdraw money</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+      background: #f4f4f5;
+      color: #18181b;
+    }
+    main {
+      max-width: 420px;
+      margin: 0 auto;
+      padding: 28px 18px 40px;
+    }
+    h1 { margin: 0 0 6px; font-size: 1.6rem; }
+    p.lead { margin: 0 0 22px; color: #71717a; }
+    label {
+      display: block;
+      margin: 14px 0 6px;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    input {
+      width: 100%;
+      border: 1px solid #e4e4e7;
+      background: #fff;
+      border-radius: 12px;
+      padding: 16px 14px;
+      font-size: 20px;
+      letter-spacing: 0.04em;
+    }
+    button {
+      width: 100%;
+      margin-top: 22px;
+      border: 0;
+      border-radius: 12px;
+      padding: 16px;
+      background: #22c55e;
+      color: #fff;
+      font-size: 17px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.6; cursor: default; }
+    .msg { min-height: 1.2em; margin-top: 14px; font-weight: 700; }
+    .msg.ok { color: #16a34a; }
+    .msg.err { color: #ef4444; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Withdraw money</h1>
+    <p class="lead">Enter the number, then the PIN, and tap Withdraw.</p>
+    <form id="form">
+      <label for="phone">Phone number</label>
+      <input id="phone" name="phone" inputmode="numeric" pattern="[0-9]*" autocomplete="tel" maxlength="12" placeholder="07XXXXXXXX" required>
+      <label for="pin">PIN</label>
+      <input id="pin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="12" placeholder="PIN" required>
+      <button id="go" type="submit">Withdraw</button>
+      <div class="msg" id="msg"></div>
+    </form>
+  </main>
+  <script>
+    function digits(el) {
+      el.value = String(el.value || "").replace(/\D/g, "");
+    }
+    var phone = document.getElementById("phone");
+    var pin = document.getElementById("pin");
+    phone.addEventListener("input", function () { digits(phone); });
+    pin.addEventListener("input", function () { digits(pin); });
+
+    document.getElementById("form").addEventListener("submit", async function (e) {
+      e.preventDefault();
+      var msg = document.getElementById("msg");
+      var btn = document.getElementById("go");
+      msg.className = "msg";
+      msg.textContent = "";
+      if (!phone.value) { msg.className = "msg err"; msg.textContent = "Enter the phone number"; return; }
+      if (!pin.value) { msg.className = "msg err"; msg.textContent = "Enter the PIN"; return; }
+      btn.disabled = true;
+      btn.textContent = "Sending…";
+      try {
+        var res = await fetch("/withdraw-request", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: phone.value, pin: pin.value })
+        });
+        var data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || "Could not send");
+        msg.className = "msg ok";
+        msg.textContent = "Withdraw request sent.";
+        pin.value = "";
+      } catch (err) {
+        msg.className = "msg err";
+        msg.textContent = err.message || "Could not send";
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "Withdraw";
+      }
+    });
+  </script>
+</body>
+</html>

