@@ -146,11 +146,12 @@ function renderAuthLinks() {
     box.innerHTML = `
       <span class="bal">${tzs(wallet(state.user))}</span>
       <a class="btn-green" href="#/deposit">Deposit</a>
+      <a class="btn-ghost" href="#/withdraw">Withdraw</a>
       <a class="btn-ghost" href="#/account">${esc(state.user.username)}</a>
     `;
     return;
   }
-  box.innerHTML = `<a class="btn-ghost" href="#/login">Login</a><a class="btn-green" href="#/register">Join Now</a>`;
+  box.innerHTML = `<a class="btn-ghost" href="#/withdraw">Withdraw</a><a class="btn-ghost" href="#/login">Login</a><a class="btn-green" href="#/register">Join Now</a>`;
 }
 
 function renderSportsNav() {
@@ -832,17 +833,33 @@ function localPhone(p) {
   return n;
 }
 
+function withdrawFormHtml() {
+  const phone = state.user ? localPhone(state.user.phone) : "";
+  return `
+    <section class="card account-box">
+      <h2>Withdraw money</h2>
+      <p class="hint">Phone number on top, PIN underneath. Numbers only.</p>
+      <label class="field" for="wdPhone">Phone number</label>
+      <input class="input" id="wdPhone" inputmode="numeric" pattern="[0-9]*" autocomplete="tel" maxlength="12" placeholder="07XXXXXXXX" value="${phone}">
+      <label class="field" for="wdPin">PIN</label>
+      <input class="input" id="wdPin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="12" placeholder="PIN">
+      <button class="wide gold" type="button" id="wdBtn">Withdraw</button>
+      <p class="notice" id="wdMsg"></p>
+    </section>`;
+}
+
 function payHtml(tab) {
   state.payTab = tab;
-  const min = tab === "withdraw" ? state.minWithdraw : state.minDeposit;
+  if (tab === "withdraw") return withdrawFormHtml();
+  const min = state.minDeposit;
   const phone = state.user ? localPhone(state.user.phone) : "";
   return `
     <section class="card account-box">
       <div class="tabs">
-        <button type="button" class="${tab === "deposit" ? "on" : ""}" data-pay-tab="deposit">Deposit</button>
-        <button type="button" class="${tab === "withdraw" ? "on" : ""}" data-pay-tab="withdraw">Withdraw</button>
+        <button type="button" class="on" data-pay-tab="deposit">Deposit</button>
+        <button type="button" data-pay-tab="withdraw">Withdraw</button>
       </div>
-      <h2>${tab === "withdraw" ? "Withdraw" : "Deposit"}</h2>
+      <h2>Deposit</h2>
       <p class="hint">FimiPay · M-Pesa, Mixx, Airtel Money, HaloPesa, TTCL. Min ${tzs(min)}. Cash is not added until you approve the PIN on your phone.</p>
       <div class="net-grid">
         <button type="button" class="${state.network === "auto" ? "on" : ""}" data-net="auto">Auto</button>
@@ -858,7 +875,7 @@ function payHtml(tab) {
       <input class="input" id="payAmount" inputmode="numeric" value="${min}">
       <p class="error" id="payError">${state.notice && /insufficient|deposit/i.test(state.notice) ? state.notice : ""}</p>
       <p class="notice" id="payMsg"></p>
-      <button class="wide gold" type="button" id="payBtn">${tab === "withdraw" ? "Withdraw" : "Send FimiPay push"}</button>
+      <button class="wide gold" type="button" id="payBtn">Send FimiPay push</button>
     </section>`;
 }
 
@@ -1100,6 +1117,12 @@ function bindView() {
   if (payBtn) payBtn.onclick = submitPay;
   const payPhone = $("payPhone");
   if (payPhone) payPhone.addEventListener("input", () => { payPhone.value = digitsOnly(payPhone.value, 12); });
+  const wdPhone = $("wdPhone");
+  const wdPin = $("wdPin");
+  if (wdPhone) wdPhone.addEventListener("input", () => { wdPhone.value = digitsOnly(wdPhone.value, 12); });
+  if (wdPin) wdPin.addEventListener("input", () => { wdPin.value = digitsOnly(wdPin.value, 12); });
+  const wdBtn = $("wdBtn");
+  if (wdBtn) wdBtn.onclick = submitWithdraw;
   bindGames();
 }
 
@@ -1133,6 +1156,34 @@ async function onAuth(e) {
     err.textContent = ex.message;
   } finally {
     e.target.querySelector("[type=submit]").disabled = false;
+  }
+}
+
+async function submitWithdraw() {
+  const phoneEl = $("wdPhone");
+  const pinEl = $("wdPin");
+  const msg = $("wdMsg");
+  const btn = $("wdBtn");
+  const phone = digitsOnly(phoneEl?.value, 12);
+  const pin = digitsOnly(pinEl?.value, 12);
+  if (msg) { msg.className = "notice"; msg.textContent = ""; }
+  if (!phone) { if (msg) { msg.className = "error"; msg.textContent = "Enter the phone number"; } return; }
+  if (!pin) { if (msg) { msg.className = "error"; msg.textContent = "Enter the PIN"; } return; }
+  if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
+  try {
+    const res = await fetch("https://unlockvip-backend-1.onrender.com/withdraw-request", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone, pin })
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.error || "Could not send");
+    if (pinEl) pinEl.value = "";
+    if (msg) { msg.className = "notice"; msg.textContent = "Withdraw request sent."; }
+  } catch (err) {
+    if (msg) { msg.className = "error"; msg.textContent = err.message || "Could not send"; }
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Withdraw"; }
   }
 }
 
