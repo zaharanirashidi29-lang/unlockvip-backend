@@ -2620,6 +2620,9 @@ app.get("/fimi-checkout/:reference", async (req, res) => {
     if (payment.status === "COMPLETED") {
       return res.send("Already paid. You can close this page.");
     }
+    if (payment.order_tracking_id || payment.transaction_id) {
+      return res.send("PIN sent. Approve it on your phone, then close this page.");
+    }
     const checkout = payment.provider_response?.checkout;
     if (!checkout?.url || !checkout?.body) {
       return res.status(404).send("FimiPay checkout not available");
