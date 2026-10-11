@@ -606,6 +606,14 @@ body.has-slip .main { padding-bottom: 84px; }
 .mine-grid button.safe { background: #143d32; color: var(--ok); }
 .mine-grid button.boom { background: #4a1a1a; color: var(--danger); }
 .notice { margin: 8px 14px; color: var(--ok); }
+.pay-wait { text-align: center; padding: 28px 18px; }
+.pay-wait .notice, .pay-wait .error { margin: 14px 0; font-size: 16px; font-weight: 800; }
+.pay-spin {
+  width: 36px; height: 36px; margin: 0 auto 16px;
+  border: 3px solid #334; border-top-color: var(--ok); border-radius: 50%;
+  animation: payspin .8s linear infinite;
+}
+@keyframes payspin { to { transform: rotate(360deg); } }
 .code-box { margin-top: 8px; }
 .code-line {
   display: flex;

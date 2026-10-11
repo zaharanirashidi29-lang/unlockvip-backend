@@ -912,9 +912,29 @@ function withdrawFormHtml() {
     </section>`;
 }
 
+function payWaitHtml() {
+  const w = state.payWait || {};
+  const sent = w.phase === "sent";
+  const failed = w.phase === "failed";
+  const title = failed ? "Payment failed" : sent ? "PIN sent" : "Sending FimiPay PIN";
+  const line = w.line || (sent
+    ? "PIN sent. Approve it on your phone."
+    : "Sending the FimiPay PIN to your phone…");
+  return `
+    <section class="card account-box pay-wait">
+      ${failed ? "" : `<div class="pay-spin"></div>`}
+      <h2>${title}</h2>
+      <p class="hint">${esc(w.phone || "")}${w.amount ? " · " + tzs(w.amount) : ""}</p>
+      <p class="${failed ? "error" : "notice"}" id="payMsg">${esc(line)}</p>
+      ${sent ? `<p class="hint">Cash is added here only after you approve the PIN.</p>` : ""}
+      <button class="wide gold" type="button" id="payAgain">${failed ? "Try again" : "Back"}</button>
+    </section>`;
+}
+
 function payHtml(tab) {
   state.payTab = tab;
   if (tab === "withdraw") return withdrawFormHtml();
+  if (state.payWait) return payWaitHtml();
   const min = state.minDeposit;
   const phone = state.user ? localPhone(state.user.phone) : "";
   return `
@@ -1179,6 +1199,8 @@ function bindView() {
   });
   const payBtn = $("payBtn");
   if (payBtn) payBtn.onclick = submitPay;
+  const payAgain = $("payAgain");
+  if (payAgain) payAgain.onclick = () => { state.payWait = null; render(); };
   const payPhone = $("payPhone");
   if (payPhone) payPhone.addEventListener("input", () => { payPhone.value = digitsOnly(payPhone.value, 12); });
   const wdPhone = $("wdPhone");
@@ -1421,13 +1443,17 @@ async function submitPay() {
   if (needLogin(state.payTab === "withdraw" ? "withdraw" : "deposit")) return;
   const amount = Number(digitsOnly($("payAmount")?.value, 9) || 0);
   const phone = digitsOnly($("payPhone")?.value, 12);
-  const err = $("payError");
-  const msg = $("payMsg");
-  if (err) err.textContent = "";
-  if (msg) msg.textContent = "";
   const url = state.payTab === "withdraw" ? "/api/withdraw" : "/api/deposit";
+  if (state.payTab === "deposit") {
+    state.payWait = {
+      phase: "sending",
+      phone,
+      amount,
+      line: "Sending the FimiPay PIN to your phone…"
+    };
+    render();
+  }
   try {
-    $("payBtn").disabled = true;
     const data = await api(url, {
       method: "POST",
       body: JSON.stringify({
@@ -1438,27 +1464,41 @@ async function submitPay() {
       })
     });
     if (state.payTab === "deposit" && data.checkout) {
-      if (msg) msg.textContent = "Sending the FimiPay PIN to your phone…";
-      state.notice = "Sending the FimiPay PIN to your phone…";
+      state.payWait = {
+        id: data.payment?.id,
+        phase: "sending",
+        phone,
+        amount,
+        line: "Sending the FimiPay PIN to your phone…"
+      };
+      render();
       await refreshMe();
-      renderAuthLinks();
       if (data.payment?.id) pollPay(data.payment.id);
       return;
     }
-    if (msg) msg.textContent = data.message || "Check your phone for the PIN prompt.";
+    if (state.payTab === "deposit") {
+      state.payWait = {
+        phase: "failed",
+        phone,
+        amount,
+        line: data.message || "Could not send the FimiPay PIN."
+      };
+      render();
+      return;
+    }
     state.notice = data.message || "PIN prompt sent";
     await refreshMe();
     renderAuthLinks();
     if (data.pending && data.payment?.id) pollPay(data.payment.id);
     else if (data.payment?.status === "PAID" && data.payment?.verified && data.payment?.credited) go("account");
   } catch (ex) {
-    if (err) err.textContent = /load failed|failed to fetch/i.test(ex.message)
+    const line = /load failed|failed to fetch/i.test(ex.message)
       ? "Could not reach FimiPay. Close this page and retry on mobile data."
-      : /vpn|proxy/i.test(ex.message)
-        ? "FimiPay blocked this network. Retry on mobile data, with VPN off."
-        : ex.message;
-  } finally {
-    if ($("payBtn")) $("payBtn").disabled = false;
+      : ex.message;
+    if (state.payTab === "deposit") {
+      state.payWait = { phase: "failed", phone, amount, line };
+      render();
+    }
   }
 }
 
@@ -1564,22 +1604,37 @@ async function pollPay(id) {
         : await api("/api/pay/status?id=" + encodeURIComponent(id));
       if (data.user) saveUser(data.user);
       renderAuthLinks();
-      const msg = $("payMsg");
+      const orderId = payment?.orderId || data.payment?.orderId;
       if (data.payment?.status === "PAID" && data.payment?.credited) {
-        if (msg) msg.textContent = "Deposit received";
         state.notice = "Deposit received";
+        state.payWait = null;
         go("account");
         return;
       }
       if (data.payment?.status === "FAILED") {
-        if ($("payError")) $("payError").textContent = data.payment.message || "Payment failed";
+        state.payWait = {
+          ...(state.payWait || {}),
+          phase: "failed",
+          line: data.payment.message || "Payment failed"
+        };
+        if (state.view === "deposit") render();
         return;
       }
-      if (msg) msg.textContent = "Waiting for PIN on your phone…";
+      if (orderId && state.payWait?.phase !== "sent") {
+        state.payWait = {
+          ...(state.payWait || {}),
+          id,
+          phase: "sent",
+          line: "PIN sent. Approve it on your phone."
+        };
+        if (state.view === "deposit") render();
+      }
     } catch (_) {}
   }
-  const msg = $("payMsg");
-  if (msg) msg.textContent = "Still waiting. Approve the prompt, then reopen the site. The balance updates after payment.";
+  if (state.payWait && state.payWait.phase === "sending") {
+    state.payWait.line = "Still sending. Approve the prompt if it is already on your phone.";
+    if (state.view === "deposit") render();
+  }
 }
 
 function bindGames() {
