@@ -608,6 +608,24 @@ body.has-slip .main { padding-bottom: 84px; }
 .notice { margin: 8px 14px; color: var(--ok); }
 .pay-wait { text-align: center; padding: 28px 18px; }
 .pay-wait .notice, .pay-wait .error { margin: 14px 0; font-size: 16px; font-weight: 800; }
+.pay-popup {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(8, 10, 16, 0.72);
+}
+.pay-popup[hidden] { display: none; }
+.pay-popup .card {
+  width: min(100%, 360px);
+  margin: 0;
+  text-align: center;
+  padding: 28px 18px;
+}
+.pay-popup h2 { margin: 0 0 8px; }
+.pay-popup .notice, .pay-popup .error { margin: 14px 0; font-size: 16px; font-weight: 800; }
 .pay-spin {
   width: 36px; height: 36px; margin: 0 auto 16px;
   border: 3px solid #334; border-top-color: var(--ok); border-radius: 50%;

@@ -1292,7 +1292,9 @@ app.get("/api/pay/pending", async (req, res) => {
     orderId: rec.orderId,
     amount: rec.amount,
     status: rec.status,
-    phone: rec.phone
+    phone: rec.phone,
+    message: rec.message || "",
+    time: rec.time || ""
   }));
   const latest = await findUser({ id: user.id });
   res.json({ ok: true, payments, user: await withDepositFlag(latest || user) });
