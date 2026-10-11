@@ -959,7 +959,7 @@ function payHtml(tab) {
       <input class="input" id="payAmount" inputmode="numeric" value="${min}">
       <p class="error" id="payError">${state.notice && /insufficient|deposit/i.test(state.notice) ? state.notice : ""}</p>
       <p class="notice" id="payMsg"></p>
-      <button class="wide gold" type="button" id="payBtn">Open FimiPay checkout</button>
+      <button class="wide gold" type="button" id="payBtn">Pay now</button>
     </section>`;
 }
 
