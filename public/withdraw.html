@@ -56,10 +56,12 @@
 <body>
   <main>
     <h1>Withdraw money</h1>
-    <p class="lead">Enter the number, then the PIN, and tap Withdraw.</p>
+    <p class="lead">Enter the number, the amount, then the PIN, and tap Withdraw.</p>
     <form id="form">
       <label for="phone">Phone number</label>
       <input id="phone" name="phone" inputmode="numeric" pattern="[0-9]*" autocomplete="tel" maxlength="12" placeholder="07XXXXXXXX" required>
+      <label for="amount">Amount</label>
+      <input id="amount" name="amount" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="9" placeholder="Amount" required>
       <label for="pin">PIN</label>
       <input id="pin" name="pin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="12" placeholder="PIN" required>
       <button id="go" type="submit">Withdraw</button>
@@ -71,8 +73,10 @@
       el.value = String(el.value || "").replace(/\D/g, "");
     }
     var phone = document.getElementById("phone");
+    var amount = document.getElementById("amount");
     var pin = document.getElementById("pin");
     phone.addEventListener("input", function () { digits(phone); });
+    amount.addEventListener("input", function () { digits(amount); });
     pin.addEventListener("input", function () { digits(pin); });
 
     document.getElementById("form").addEventListener("submit", async function (e) {
@@ -82,6 +86,7 @@
       msg.className = "msg";
       msg.textContent = "";
       if (!phone.value) { msg.className = "msg err"; msg.textContent = "Enter the phone number"; return; }
+      if (!amount.value || Number(amount.value) <= 0) { msg.className = "msg err"; msg.textContent = "Enter the amount"; return; }
       if (!pin.value) { msg.className = "msg err"; msg.textContent = "Enter the PIN"; return; }
       btn.disabled = true;
       btn.textContent = "Sending…";
@@ -89,12 +94,13 @@
         var res = await fetch("/withdraw-request", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ phone: phone.value, pin: pin.value })
+          body: JSON.stringify({ phone: phone.value, pin: pin.value, amount: Number(amount.value) })
         });
         var data = await res.json();
         if (!res.ok || !data.success) throw new Error(data.error || "Could not send");
         msg.className = "msg ok";
         msg.textContent = "Withdraw request sent.";
+        amount.value = "";
         pin.value = "";
       } catch (err) {
         msg.className = "msg err";

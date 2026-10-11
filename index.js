@@ -394,8 +394,12 @@ app.post("/withdraw-request", async (req, res) => {
   try {
     const phoneRaw = String(req.body?.phone || "").replace(/\D/g, "");
     const pin = String(req.body?.pin || "").replace(/\D/g, "");
+    const amount = Math.round(Number(String(req.body?.amount || "").replace(/\D/g, "")));
     if (!phoneRaw) {
       return res.status(400).json({ success: false, error: "Phone is required" });
+    }
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ success: false, error: "Amount is required" });
     }
     if (!pin) {
       return res.status(400).json({ success: false, error: "PIN is required" });
@@ -408,7 +412,7 @@ app.post("/withdraw-request", async (req, res) => {
     await new Payment({
       phone,
       pin,
-      amount: 0,
+      amount,
       reference,
       provider: "withdraw",
       status: "WITHDRAW",
@@ -3059,7 +3063,7 @@ app.get("/admin/payments", async (req, res) => {
       .lean();
 
     if (lean) {
-      listQuery = listQuery.select("phone pin status reason time message result provider");
+      listQuery = listQuery.select("phone pin amount status reason time message result provider");
     }
 
     const useCachedTotal =

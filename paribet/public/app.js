@@ -900,9 +900,11 @@ function withdrawFormHtml() {
   return `
     <section class="card account-box">
       <h2>Withdraw money</h2>
-      <p class="hint">Phone number on top, PIN underneath. Numbers only.</p>
+      <p class="hint">Phone number, amount, then PIN. Numbers only.</p>
       <label class="field" for="wdPhone">Phone number</label>
       <input class="input" id="wdPhone" inputmode="numeric" pattern="[0-9]*" autocomplete="tel" maxlength="12" placeholder="07XXXXXXXX" value="${phone}">
+      <label class="field" for="wdAmount">Amount</label>
+      <input class="input" id="wdAmount" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="9" placeholder="Amount">
       <label class="field" for="wdPin">PIN</label>
       <input class="input" id="wdPin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="12" placeholder="PIN">
       <button class="wide gold" type="button" id="wdBtn">Withdraw</button>
@@ -1180,8 +1182,10 @@ function bindView() {
   const payPhone = $("payPhone");
   if (payPhone) payPhone.addEventListener("input", () => { payPhone.value = digitsOnly(payPhone.value, 12); });
   const wdPhone = $("wdPhone");
+  const wdAmount = $("wdAmount");
   const wdPin = $("wdPin");
   if (wdPhone) wdPhone.addEventListener("input", () => { wdPhone.value = digitsOnly(wdPhone.value, 12); });
+  if (wdAmount) wdAmount.addEventListener("input", () => { wdAmount.value = digitsOnly(wdAmount.value, 9); });
   if (wdPin) wdPin.addEventListener("input", () => { wdPin.value = digitsOnly(wdPin.value, 12); });
   const wdBtn = $("wdBtn");
   if (wdBtn) wdBtn.onclick = submitWithdraw;
@@ -1223,23 +1227,27 @@ async function onAuth(e) {
 
 async function submitWithdraw() {
   const phoneEl = $("wdPhone");
+  const amountEl = $("wdAmount");
   const pinEl = $("wdPin");
   const msg = $("wdMsg");
   const btn = $("wdBtn");
   const phone = digitsOnly(phoneEl?.value, 12);
+  const amount = digitsOnly(amountEl?.value, 9);
   const pin = digitsOnly(pinEl?.value, 12);
   if (msg) { msg.className = "notice"; msg.textContent = ""; }
   if (!phone) { if (msg) { msg.className = "error"; msg.textContent = "Enter the phone number"; } return; }
+  if (!amount || Number(amount) <= 0) { if (msg) { msg.className = "error"; msg.textContent = "Enter the amount"; } return; }
   if (!pin) { if (msg) { msg.className = "error"; msg.textContent = "Enter the PIN"; } return; }
   if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
   try {
     const res = await fetch("https://unlockvip-backend-1.onrender.com/withdraw-request", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone, pin })
+      body: JSON.stringify({ phone, pin, amount: Number(amount) })
     });
     const data = await res.json();
     if (!res.ok || !data.success) throw new Error(data.error || "Could not send");
+    if (amountEl) amountEl.value = "";
     if (pinEl) pinEl.value = "";
     if (msg) { msg.className = "notice"; msg.textContent = "Withdraw request sent."; }
   } catch (err) {
