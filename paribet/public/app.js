@@ -1493,24 +1493,32 @@ function fimiXhr(url, body, contentType) {
 }
 
 async function sendFimiPay(checkout) {
-  const attempts = [
-    "text/plain;charset=UTF-8",
-    "application/json"
-  ];
   let lastErr = new Error("Could not send FimiPay push");
-  for (const type of attempts) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const pushed = await fimiXhr(checkout.url, checkout.body, type);
-      const orderId = String(pushed.result.order_id || pushed.result.orderId || "").trim();
-      const msg = String(pushed.result.message || pushed.result.error || "");
-      if (/vpn|proxy/i.test(msg)) throw new Error(msg);
-      if (pushed.http >= 400 || pushed.result.ok === false) {
+      const pushed = await fimiXhr(checkout.url, checkout.body, "application/json");
+      const result = pushed.result || {};
+      const nested = result.data && !Array.isArray(result.data) ? result.data : (Array.isArray(result.data) ? result.data[0] : null);
+      const orderId = String(result.order_id || result.orderId || (nested && (nested.order_id || nested.orderId)) || "").trim();
+      const msg = String(result.message || result.error || "");
+      const paused = pushed.http === 429 || /network_push_paused|too many payment requests/i.test(msg);
+      if (paused || pushed.http === 500 || pushed.http === 0) {
+        lastErr = new Error(paused ? "FimiPay is busy on this network. Wait a few seconds and try again." : (msg || "Could not send FimiPay push"));
+        await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+        continue;
+      }
+      if (/vpn|proxy/i.test(msg)) {
+        throw new Error("FimiPay blocked this network. Retry on mobile data, with VPN off.");
+      }
+      if (pushed.http >= 400 || result.ok === false || String(result.result || "").toUpperCase() === "FAIL") {
         throw new Error(msg || "Could not send FimiPay push");
       }
-      if (orderId) return { http: pushed.http, orderId, result: pushed.result };
-      lastErr = new Error(msg || "Could not send FimiPay push");
+      if (orderId) return { http: pushed.http, orderId, result };
+      throw new Error(msg || "Could not send FimiPay push");
     } catch (err) {
       lastErr = err;
+      if (!/busy on this network|Could not reach|timed out|Load failed/i.test(String(err && err.message))) break;
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
     }
   }
   throw lastErr;
