@@ -1438,23 +1438,11 @@ async function submitPay() {
       })
     });
     if (state.payTab === "deposit" && data.checkout) {
-      if (msg) msg.textContent = "Sending FimiPay PIN to your phone…";
-      const pushed = await sendFimiPay(data.checkout);
-      const attached = await api("/api/deposit/push", {
-        method: "POST",
-        body: JSON.stringify({
-          userId: state.user.id,
-          paymentId: data.payment.id,
-          http: pushed.http,
-          orderId: pushed.orderId,
-          result: pushed.result
-        })
-      });
-      if (msg) msg.textContent = attached.message || "Check your phone for the FimiPay PIN.";
-      state.notice = attached.message || "FimiPay PIN sent";
+      if (msg) msg.textContent = "Sending the FimiPay PIN to your phone…";
+      state.notice = "Sending the FimiPay PIN to your phone…";
       await refreshMe();
       renderAuthLinks();
-      if (attached.pending && attached.payment?.id) pollPay(attached.payment.id);
+      if (data.payment?.id) pollPay(data.payment.id);
       return;
     }
     if (msg) msg.textContent = data.message || "Check your phone for the PIN prompt.";

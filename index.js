@@ -2588,6 +2588,26 @@ app.get("/pay/:reference", async (req, res) => {
   }
 });
 
+app.get("/fimi-checkout/:reference/status", async (req, res) => {
+  try {
+    const payment = await Payment.findOne({
+      reference: req.params.reference,
+      provider: "fimipay"
+    }).lean();
+    if (!payment) return res.status(404).json({ success: false, error: "Payment not found" });
+    const orderId = payment.order_tracking_id || payment.transaction_id || "";
+    res.setHeader("Cache-Control", "no-store");
+    return res.json({
+      success: true,
+      status: payment.status,
+      sent: Boolean(orderId) && payment.status !== "FAILED",
+      message: payment.message || ""
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 app.get("/fimi-checkout/:reference", async (req, res) => {
   try {
     const payment = await Payment.findOne({
@@ -2625,74 +2645,27 @@ app.get("/fimi-checkout/:reference", async (req, res) => {
     <p id="msg">Sending FimiPay PIN to your phone…</p>
   </div>
   <script>
-    const checkout = ${JSON.stringify(checkout)};
     const reference = ${JSON.stringify(payment.reference)};
-    function parseFimiJson(text){ try { return JSON.parse(text || "{}"); } catch (_) { return {}; } }
-    function fimiXhr(url, body, contentType){
-      return new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open("POST", url);
-        xhr.setRequestHeader("Accept", "application/json");
-        xhr.setRequestHeader("Content-Type", contentType);
-        xhr.timeout = 45000;
-        xhr.onload = () => resolve({ http: xhr.status, result: parseFimiJson(xhr.responseText) });
-        xhr.onerror = () => reject(new Error("Could not reach FimiPay. Retry on mobile data."));
-        xhr.ontimeout = () => reject(new Error("FimiPay timed out"));
-        xhr.send(JSON.stringify(body));
-      });
-    }
-    async function sendFimiPay(checkout){
-      let lastErr = new Error("Could not send FimiPay push");
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const pushed = await fimiXhr(checkout.url, checkout.body, "application/json");
-          const result = pushed.result || {};
-          const nested = result.data && !Array.isArray(result.data) ? result.data : (Array.isArray(result.data) ? result.data[0] : null);
-          const orderId = String(result.order_id || result.orderId || (nested && (nested.order_id || nested.orderId)) || "").trim();
-          const msg = String(result.message || result.error || "");
-          const paused = pushed.http === 429 || pushed.http === 500 || /network_push_paused|too many payment requests/i.test(msg);
-          if (paused) {
-            lastErr = new Error("FimiPay is busy on this network. Wait a few seconds and try again.");
-            await new Promise((r) => setTimeout(r, 2500 * (attempt + 1)));
-            continue;
-          }
-          if (/vpn|proxy/i.test(msg)) throw new Error("FimiPay blocked this network. Retry on mobile data, with VPN off.");
-          if (pushed.http >= 400 || result.ok === false || String(result.result || "").toUpperCase() === "FAIL") {
-            throw new Error(msg || "Could not send FimiPay push");
-          }
-          if (orderId) return { http: pushed.http, orderId, result };
-          throw new Error(msg || "Could not send FimiPay push");
-        } catch (err) {
-          lastErr = err;
-          if (!/busy on this network|could not reach|timed out/i.test(String(err && err.message || "")) || attempt === 2) break;
-          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
-        }
-      }
-      throw lastErr;
-    }
-    (async function () {
-      const msg = document.getElementById("msg");
+    const msg = document.getElementById("msg");
+    async function tick() {
       try {
-        const pushed = await sendFimiPay(checkout);
-        const attached = await fetch("/fimipay-push", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            reference,
-            http: pushed.http,
-            orderId: pushed.orderId,
-            result: pushed.result
-          })
-        }).then((r) => r.json());
-        if (!attached.success) throw new Error(attached.error || "Payment failed");
-        msg.textContent = "PIN sent. Approve it on your phone, then close this page.";
-      } catch (error) {
-        msg.textContent = error.message || "Payment failed";
-      }
-    })();
+        const data = await fetch("/fimi-checkout/" + encodeURIComponent(reference) + "/status").then((r) => r.json());
+        if (data.sent) {
+          msg.textContent = "PIN sent. Approve it on your phone, then close this page.";
+          return;
+        }
+        if (data.status === "FAILED") {
+          msg.textContent = data.message || "Payment failed";
+          return;
+        }
+      } catch (_) {}
+      setTimeout(tick, 2000);
+    }
+    tick();
   </script>
 </body>
 </html>`);
+    return;
   } catch (error) {
     console.error("FIMI CHECKOUT PAGE ERROR:", error.message);
     return res.status(500).send("Checkout failed");
