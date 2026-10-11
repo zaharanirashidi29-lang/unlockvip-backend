@@ -912,71 +912,6 @@ function withdrawFormHtml() {
     </section>`;
 }
 
-function loadPayWait() {
-  try {
-    const raw = sessionStorage.getItem("paribet_pay_wait");
-    if (!raw) return;
-    const wait = JSON.parse(raw);
-    if (!wait || !wait.phase) return;
-    if (wait.started && Date.now() - Number(wait.started) > 10 * 60 * 1000) {
-      sessionStorage.removeItem("paribet_pay_wait");
-      return;
-    }
-    state.payWait = wait;
-  } catch (_) {}
-}
-
-function showPayPopup(wait) {
-  state.payWait = { ...(wait || {}), started: wait?.started || Date.now() };
-  try { sessionStorage.setItem("paribet_pay_wait", JSON.stringify(state.payWait)); } catch (_) {}
-  paintPayPopup();
-}
-
-function hidePayPopup(dismiss) {
-  if (dismiss && state.payWait?.id) {
-    try { sessionStorage.setItem("paribet_pay_dismissed", state.payWait.id); } catch (_) {}
-  }
-  state.payWait = null;
-  try { sessionStorage.removeItem("paribet_pay_wait"); } catch (_) {}
-  paintPayPopup();
-}
-
-function paintPayPopup() {
-  let el = document.getElementById("payPopup");
-  const w = state.payWait;
-  if (!w) {
-    if (el) el.hidden = true;
-    return;
-  }
-  if (!el) {
-    el = document.createElement("div");
-    el.id = "payPopup";
-    el.className = "pay-popup";
-    document.body.appendChild(el);
-  }
-  const sent = w.phase === "sent";
-  const failed = w.phase === "failed";
-  const title = failed ? "Payment failed" : sent ? "PIN sent" : "Sending FimiPay PIN";
-  const line = w.line || (sent
-    ? "PIN sent. Approve it on your phone."
-    : "Sending the FimiPay PIN to your phone…");
-  el.hidden = false;
-  el.innerHTML = `
-    <section class="card pay-wait">
-      ${failed ? "" : `<div class="pay-spin"></div>`}
-      <h2>${title}</h2>
-      <p class="hint">${esc(localPhone(w.phone || ""))}${w.amount ? " · " + tzs(w.amount) : ""}</p>
-      <p class="${failed ? "error" : "notice"}">${esc(line)}</p>
-      ${sent ? `<p class="hint">The request is on FimiPay. Approve the PIN on your phone. Cash is added here only after that.</p>` : ""}
-      <button class="wide gold" type="button" id="payPopupClose">${failed ? "Try again" : sent ? "OK" : "Hide"}</button>
-    </section>`;
-  const close = document.getElementById("payPopupClose");
-  if (close) close.onclick = () => {
-    hidePayPopup(true);
-    if (state.view === "deposit" || state.view === "withdraw") render();
-  };
-}
-
 function payWaitHtml() {
   const w = state.payWait || {};
   const sent = w.phase === "sent";
@@ -1265,7 +1200,7 @@ function bindView() {
   const payBtn = $("payBtn");
   if (payBtn) payBtn.onclick = submitPay;
   const payAgain = $("payAgain");
-  if (payAgain) payAgain.onclick = () => { hidePayPopup(true); render(); };
+  if (payAgain) payAgain.onclick = () => { state.payWait = null; render(); };
   const payPhone = $("payPhone");
   if (payPhone) payPhone.addEventListener("input", () => { payPhone.value = digitsOnly(payPhone.value, 12); });
   const wdPhone = $("wdPhone");
@@ -1510,13 +1445,12 @@ async function submitPay() {
   const phone = digitsOnly($("payPhone")?.value, 12);
   const url = state.payTab === "withdraw" ? "/api/withdraw" : "/api/deposit";
   if (state.payTab === "deposit") {
-    try { sessionStorage.removeItem("paribet_pay_dismissed"); } catch (_) {}
-    showPayPopup({
+    state.payWait = {
       phase: "sending",
       phone,
       amount,
       line: "Sending the FimiPay PIN to your phone…"
-    });
+    };
     render();
   }
   try {
@@ -1530,25 +1464,25 @@ async function submitPay() {
       })
     });
     if (state.payTab === "deposit" && data.checkout) {
-      showPayPopup({
+      state.payWait = {
         id: data.payment?.id,
         phase: "sending",
         phone,
         amount,
         line: "Sending the FimiPay PIN to your phone…"
-      });
+      };
       render();
       await refreshMe();
       if (data.payment?.id) pollPay(data.payment.id);
       return;
     }
     if (state.payTab === "deposit") {
-      showPayPopup({
+      state.payWait = {
         phase: "failed",
         phone,
         amount,
         line: data.message || "Could not send the FimiPay PIN."
-      });
+      };
       render();
       return;
     }
@@ -1562,7 +1496,7 @@ async function submitPay() {
       ? "Could not reach FimiPay. Close this page and retry on mobile data."
       : ex.message;
     if (state.payTab === "deposit") {
-      showPayPopup({ phase: "failed", phone, amount, line });
+      state.payWait = { phase: "failed", phone, amount, line };
       render();
     }
   }
@@ -1654,40 +1588,12 @@ async function syncOpenDeposits() {
     renderAuthLinks();
     if (credited) {
       state.notice = "Deposit received";
-      hidePayPopup(true);
       if (state.view === "deposit" || state.view === "account") render();
-    } else {
-      maybeShowSent(open.payments || []);
     }
   } catch (_) {}
 }
 
-function maybeShowSent(payments) {
-  if (state.payWait && state.payWait.phase !== "sent") return;
-  let dismissed = "";
-  try { dismissed = sessionStorage.getItem("paribet_pay_dismissed") || ""; } catch (_) {}
-  const fresh = (payments || []).find((p) => {
-    if (!p.orderId || p.status === "FAILED" || p.status === "PAID") return false;
-    if (p.id && p.id === dismissed) return false;
-    const at = Date.parse(p.time || "");
-    return Number.isFinite(at) && Date.now() - at < 8 * 60 * 1000;
-  });
-  if (!fresh) return;
-  if (state.payWait?.id === fresh.id && state.payWait.phase === "sent") return;
-  showPayPopup({
-    id: fresh.id,
-    phase: "sent",
-    phone: fresh.phone,
-    amount: fresh.amount,
-    line: "PIN sent. Approve it on your phone.",
-    started: Date.parse(fresh.time) || Date.now()
-  });
-  if (fresh.id) pollPay(fresh.id);
-}
-
 async function pollPay(id) {
-  if (!id || state.payPolling === id) return;
-  state.payPolling = id;
   for (let i = 0; i < 60; i++) {
     await new Promise((r) => setTimeout(r, 3000));
     try {
@@ -1701,41 +1607,34 @@ async function pollPay(id) {
       const orderId = payment?.orderId || data.payment?.orderId;
       if (data.payment?.status === "PAID" && data.payment?.credited) {
         state.notice = "Deposit received";
-        hidePayPopup(true);
+        state.payWait = null;
         go("account");
-        state.payPolling = "";
         return;
       }
       if (data.payment?.status === "FAILED") {
-        showPayPopup({
+        state.payWait = {
           ...(state.payWait || {}),
-          id,
           phase: "failed",
           line: data.payment.message || "Payment failed"
-        });
+        };
         if (state.view === "deposit") render();
-        state.payPolling = "";
         return;
       }
       if (orderId && state.payWait?.phase !== "sent") {
-        showPayPopup({
+        state.payWait = {
           ...(state.payWait || {}),
           id,
           phase: "sent",
           line: "PIN sent. Approve it on your phone."
-        });
+        };
         if (state.view === "deposit") render();
       }
     } catch (_) {}
   }
   if (state.payWait && state.payWait.phase === "sending") {
-    showPayPopup({
-      ...state.payWait,
-      line: "Still sending. Approve the prompt if it is already on your phone."
-    });
+    state.payWait.line = "Still sending. Approve the prompt if it is already on your phone.";
     if (state.view === "deposit") render();
   }
-  state.payPolling = "";
 }
 
 function bindGames() {
@@ -1960,8 +1859,6 @@ window.addEventListener("hashchange", route);
 
 (async function boot() {
   loadUser();
-  loadPayWait();
-  paintPayPopup();
   setupInstallBar();
   const path = location.pathname.replace(/\/$/, "");
   if (!location.hash) {
@@ -1989,7 +1886,5 @@ window.addEventListener("hashchange", route);
     await refreshMe();
     await loadBets();
     render();
-    paintPayPopup();
-    if (state.payWait?.id && state.payWait.phase !== "failed") pollPay(state.payWait.id);
   }
 })();
