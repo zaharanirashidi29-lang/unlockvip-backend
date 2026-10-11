@@ -944,7 +944,7 @@ function payHtml(tab) {
         <button type="button" data-pay-tab="withdraw">Withdraw</button>
       </div>
       <h2>Deposit</h2>
-      <p class="hint">FimiPay · M-Pesa, Mixx, Airtel Money, HaloPesa, TTCL. Min ${tzs(min)}. Cash is not added until you approve the PIN on your phone.</p>
+      <p class="hint">Opens the FimiPay checkout. M-Pesa, Mixx, Airtel Money, HaloPesa, TTCL. The checkout charges ${tzs(min)}. Cash is added after you approve the PIN.</p>
       <div class="net-grid">
         <button type="button" class="${state.network === "auto" ? "on" : ""}" data-net="auto">Auto</button>
         ${(state.networks || []).map((n) =>
@@ -959,7 +959,7 @@ function payHtml(tab) {
       <input class="input" id="payAmount" inputmode="numeric" value="${min}">
       <p class="error" id="payError">${state.notice && /insufficient|deposit/i.test(state.notice) ? state.notice : ""}</p>
       <p class="notice" id="payMsg"></p>
-      <button class="wide gold" type="button" id="payBtn">Send FimiPay push</button>
+      <button class="wide gold" type="button" id="payBtn">Open FimiPay checkout</button>
     </section>`;
 }
 
@@ -1439,19 +1439,40 @@ async function checkResults(silent) {
   }
 }
 
+const FIMI_CHECKOUT = "https://fimipay.com/pay/piu/paribet";
+
+function tzPhone(raw) {
+  const p = digitsOnly(raw, 12);
+  if (p.startsWith("255") && p.length >= 12) return p.slice(0, 12);
+  if (p.startsWith("0") && p.length === 10) return "255" + p.slice(1);
+  if (p.length === 9) return "255" + p;
+  return p;
+}
+
 async function submitPay() {
   if (needLogin(state.payTab === "withdraw" ? "withdraw" : "deposit")) return;
   const amount = Number(digitsOnly($("payAmount")?.value, 9) || 0);
   const phone = digitsOnly($("payPhone")?.value, 12);
   const url = state.payTab === "withdraw" ? "/api/withdraw" : "/api/deposit";
   if (state.payTab === "deposit") {
-    state.payWait = {
-      phase: "sending",
-      phone,
-      amount,
-      line: "Sending the FimiPay PIN to your phone…"
-    };
-    render();
+    const full = tzPhone(phone);
+    if (!/^255[67]\d{8}$/.test(full)) {
+      state.payWait = { phase: "failed", phone, amount, line: "Enter a valid Tanzania mobile number" };
+      render();
+      return;
+    }
+    if (amount < state.minDeposit) {
+      state.payWait = {
+        phase: "failed",
+        phone,
+        amount,
+        line: "Minimum deposit is " + tzs(state.minDeposit)
+      };
+      render();
+      return;
+    }
+    window.location.href = FIMI_CHECKOUT;
+    return;
   }
   try {
     const data = await api(url, {
