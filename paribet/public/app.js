@@ -944,7 +944,7 @@ function payHtml(tab) {
         <button type="button" data-pay-tab="withdraw">Withdraw</button>
       </div>
       <h2>Deposit</h2>
-      <p class="hint">Opens the FimiPay checkout. M-Pesa, Mixx, Airtel Money, HaloPesa, TTCL. The checkout charges ${tzs(min)}. Cash is added after you approve the PIN.</p>
+      <p class="hint">Opens the Harak Pay checkout. The checkout charges ${tzs(min)}.</p>
       <div class="net-grid">
         <button type="button" class="${state.network === "auto" ? "on" : ""}" data-net="auto">Auto</button>
         ${(state.networks || []).map((n) =>
@@ -1439,7 +1439,7 @@ async function checkResults(silent) {
   }
 }
 
-const FIMI_CHECKOUT = "https://fimipay.com/pay/piu/paribet";
+const HARAKA_PAY = "https://harakapay.net/pay/HPMV6N3PW8";
 
 function tzPhone(raw) {
   const p = digitsOnly(raw, 12);
@@ -1471,7 +1471,7 @@ async function submitPay() {
       render();
       return;
     }
-    window.location.href = FIMI_CHECKOUT;
+    window.location.href = HARAKA_PAY;
     return;
   }
   try {
