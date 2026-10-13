@@ -1,18 +1,18 @@
 :root {
-  --bg: #f3f6f3;
-  --panel: #ffffff;
-  --card: #ffffff;
-  --line: #ced7ce;
-  --text: #0e1910;
-  --muted: #535e55;
-  --gold: #97f600;
-  --gold-2: #97f600;
-  --ink: #0e1910;
-  --teal: #97f600;
+  --bg: #141414;
+  --panel: #1b1b1b;
+  --card: #202020;
+  --line: #2c2c2c;
+  --text: #f5f5f5;
+  --muted: #ababab;
+  --gold: #1bd093;
+  --gold-2: #f0d52e;
+  --ink: #f5f5f5;
+  --teal: #1bd093;
   --danger: #e62c2c;
-  --ok: #152318;
-  --hero: #091a0d;
-  --header: #091a0d;
+  --ok: #1bd093;
+  --hero: #013424;
+  --header: #013424;
 }
 
 :root[data-theme="light"] {
@@ -146,8 +146,9 @@ button, input, select { font: inherit; }
   overflow: auto;
   height: 48px;
   padding: 0 8px;
-  background: #f3f6f3;
+  background: #141414;
   border-bottom: 0;
+  color: #f5f5f5;
   max-width: 1024px;
   margin: 0 auto;
 }
@@ -156,11 +157,11 @@ button, input, select { font: inherit; }
   padding: 6px 12px;
   font-size: 12px;
   font-weight: 800;
-  color: #0e1910;
+  color: #f5f5f5;
   border-bottom: 0;
   border-radius: 999px;
 }
-.subnav a.on { background: #0e1910; color: #f3f6f3; }
+.subnav a.on { background: #f5f5f5; color: #111; }
 .sub-search { margin-left: auto; border: 0; background: transparent; width: 32px; height: 32px; font-size: 16px; cursor: pointer; }
 .icon-btn {
   width: 36px;
@@ -943,13 +944,32 @@ button.gold-lite {
 }
 
 .filters .input { width: 148px; flex: 0 0 148px; }
+.rb-match { padding: 12px 12px 8px; border-bottom: 1px solid #2a2a2a; }
+.rb-match-top, .rb-match-row { display: flex; align-items: center; gap: 8px; }
+.rb-min {
+  min-width: 28px; padding: 2px 6px; border-radius: 6px; background: #1bd093;
+  color: #062016; font-size: 11px; font-weight: 800; text-align: center;
+}
+.rb-league { flex: 1; color: #d7d7d7; font-size: 12px; font-weight: 700; }
+.rb-more { color: #1bd093; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.rb-teams { flex: 1; display: grid; gap: 6px; min-width: 0; font-weight: 700; font-size: 14px; }
+.rb-teams span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-score { color: #1bd093; font-size: 14px; min-width: 36px; text-align: center; }
+.rb-match .odds { display: grid; grid-template-columns: repeat(3, 64px); gap: 6px; }
+.rb-match .odd-btn {
+  min-height: 48px; border: 0; border-radius: 8px; background: #2a2a2a; color: #cfcfcf;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; cursor: pointer;
+}
+.rb-match .odd-btn b { color: #f0d52e; font-size: 15px; }
+.rb-match .odd-btn.on { background: #1bd093; }
+.rb-match .odd-btn.on b, .rb-match .odd-btn.on span { color: #062016; }
 .event {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 6px 10px;
   margin: 0;
   padding: 10px 12px;
-  background: #fff;
+  background: #202020;
   border-bottom: 1px solid var(--line);
 }
 .event-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }

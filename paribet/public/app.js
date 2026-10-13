@@ -376,32 +376,40 @@ function quickMarketBtns(m) {
   return buttons.join("");
 }
 
+function minuteLabel(m) {
+  const raw = String(m.clock || m.time || "");
+  const hit = raw.match(/(\d{1,3})/);
+  if (m.live && hit) return hit[1] + "'";
+  return raw;
+}
+
+function marketCount(m) {
+  const n = (m.markets || []).reduce((sum, g) => sum + (g.sels || []).length, 0);
+  return Math.max(0, n - 3);
+}
+
 function matchCard(m) {
   const score = m.score || "";
-  const clock = m.clock || m.time;
-  const open = Boolean(state.openCards[m.id]);
-  const extra = m.extra || Math.max(0, (m.markets || []).reduce((n, g) => n + (g.sels || []).length, 0) - 3);
+  const extra = marketCount(m);
   return `
-    <article class="event">
-      <div class="event-body">
-        <div class="event-meta">
-          <span>${m.live ? '<span class="live-dot">LIVE</span> ' : ""}${esc(m.league)}</span>
-          <span>${m.live && score ? esc(score) + " · " : ""}${esc(clock)}</span>
-        </div>
-        <a class="event-teams" href="#/match/${m.id}">
+    <article class="rb-match">
+      <div class="rb-match-top">
+        <span class="rb-min">${esc(minuteLabel(m))}</span>
+        <span class="rb-league">${esc(m.league)}</span>
+        <a class="rb-more" href="#/match/${m.id}">+${extra} market</a>
+      </div>
+      <div class="rb-match-row">
+        <a class="rb-teams" href="#/match/${m.id}">
           <span>${esc(m.home)}</span>
           <span>${esc(m.away)}</span>
         </a>
-      </div>
-      <div class="event-side">
+        <b class="rb-score">${esc(score)}</b>
         <div class="odds">
           ${oddBtn(m, "1", "1")}
           ${oddBtn(m, "x", "X")}
           ${oddBtn(m, "2", "2")}
         </div>
-        <button type="button" class="more-link" data-more="${m.id}">${open ? "Hide markets" : "More markets +" + extra}</button>
       </div>
-      ${open ? `<div class="more-markets">${(m.markets || []).map((g) => marketBlock(m, g)).join("")}</div>` : ""}
     </article>
   `;
 }
@@ -660,8 +668,12 @@ function listHtml(title, view) {
         </div>
       </section>
       ${state.showSearch ? `<div class="filters"><input class="input" id="searchBox" placeholder="Search team or league" value="${esc(state.search)}"></div>` : ""}
-      <div class="sec-head"><h2>Upcoming Matches</h2><a href="#/sports">View all</a></div>
-      ${rows.length ? eventList(rows.slice(0, 8), todayPin) : loading ? `<p class="rb-loading">Loading the latest matches…</p>` : `<p class="empty">${state.catalogError || "No events for this filter."}</p>`}
+      <div class="sec-head"><h2>In-Play</h2><a href="#/live">View all</a></div>
+      ${(() => {
+        const liveRows = (state.catalog.matches || []).filter((m) => m.live);
+        const show = liveRows.length ? liveRows.slice(0, 8) : rows.slice(0, 8);
+        return show.length ? eventList(show, false) : loading ? `<p class="rb-loading">Loading the latest matches…</p>` : `<p class="empty">${state.catalogError || "No events for this filter."}</p>`;
+      })()}
       <a class="rb-all" href="#/sports">All Upcoming Matches</a>
       ${loadBetBox()}
       <section class="promo-card">
