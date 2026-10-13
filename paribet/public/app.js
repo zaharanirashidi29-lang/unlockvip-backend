@@ -152,7 +152,7 @@ function renderAuthLinks() {
     `;
     return;
   }
-  box.innerHTML = `<a class="btn-ghost" href="#/withdraw">Withdraw</a><a class="btn-ghost" href="#/login">Login</a><a class="btn-green" href="#/register">Join Now</a>`;
+    box.innerHTML = `<a class="btn-ghost" href="#/login">Log in</a><a class="btn-green" href="#/register">Join now</a>`;
 }
 
 function renderSportsNav() {
@@ -166,10 +166,14 @@ function renderSportsNav() {
 }
 
 function setNav() {
-  document.querySelectorAll(".bottom a, .side-grid a, .topnav a, .subnav a").forEach((a) => {
+  document.querySelectorAll(".bottom a, .side-grid a, .topnav a, .subnav a, .bottom button").forEach((a) => {
     const on = a.dataset.route === state.view || (state.view === "match" && a.dataset.route === "live");
     a.classList.toggle("on", on);
   });
+  const count = $("navSlipCount");
+  if (count) count.textContent = String(state.slip.length);
+  const slipBtn = $("navSlip");
+  if (slipBtn) slipBtn.classList.toggle("on", state.slipOpen && state.slip.length > 0);
 }
 
 function dayLabel(iso) {
@@ -500,8 +504,8 @@ function loadBetBox() {
   return `
     <section class="card account-box code-box load-top">
       <div class="load-head">
-        <strong>Load bet code</strong>
-        <span>Paste a shared code here</span>
+        <strong>Booking code</strong>
+        <span>Enter a shared code to restore its selections.</span>
       </div>
       <div class="stake-row wrap-row">
         <input class="input" id="loadCode" placeholder="e.g. AB12CD34" value="${state.loadCode}" maxlength="12">
@@ -668,8 +672,9 @@ function listHtml(title, view) {
       `<button type="button" data-league="" class="${state.leagueFilter ? "" : "on"}">Popular</button>` +
       leagues.map(([name]) => `<button type="button" data-league="${esc(name)}" class="${state.leagueFilter === name ? "on" : ""}">${esc(name)}</button>`).join("")
     }</div>` : ""}
+    ${state.view === "home" ? `<a class="welcome-banner" href="#/promo"><span>WELCOME OFFER</span><b>First deposit bonus</b><em>Claim now →</em></a>` : ""}
     ${view === "live" ? `<a class="av-bar" href="#/aviator"><span class="live-dot">LIVE</span> Aviator <b id="liveAviatorChip">1.00x</b><span>Open table</span></a>` : ""}
-    <p class="hint" style="margin:0 14px 8px">${title} · ${rows.length} events</p>
+    <div class="sec-head"><h2>${esc(title)}</h2>${state.view === "home" ? `<a href="#/sports">View all</a>` : `<span>${rows.length}</span>`}</div>
     ${rows.length ? eventList(rows, todayPin) : loading ? skeletonList() : `<p class="empty">${
       state.catalogError
         ? state.catalogError
@@ -677,6 +682,7 @@ function listHtml(title, view) {
           ? "No live matches right now. Check upcoming or results."
           : "No events for this filter."
     }</p>`}
+    ${state.view === "home" ? `<p class="legal">18+ · Bet responsibly.<br>© 2026 Paribet.</p>` : ""}
   `;
 }
 
@@ -1090,7 +1096,7 @@ function render(keepScroll) {
   const view = $("view");
   if (state.view === "register" || state.view === "login") view.innerHTML = authHtml();
   else if (state.view === "match") view.innerHTML = matchDetailHtml();
-  else if (state.view === "live") view.innerHTML = listHtml(state.catalog.title || "Live & upcoming", "live");
+  else if (state.view === "live") view.innerHTML = listHtml("In-Play", "live");
   else if (state.view === "esports") view.innerHTML = listHtml("Esports", "esports");
   else if (state.view === "promo") view.innerHTML = promoHtml();
   else if (state.view === "slots") view.innerHTML = gamesHtml("slots") + simpleGameHtml("slots", "Neon Reels", `<div class="reels" id="reels">★ P 7</div>`);
@@ -1109,7 +1115,9 @@ function render(keepScroll) {
   else if (state.view === "withdraw") view.innerHTML = payHtml("withdraw");
   else {
     const day = state.dayFilter === "today" ? state.catalog.today : state.dayFilter;
-    const title = day && day !== "all" ? dayLabel(day) : (state.catalog.title || "Today & upcoming");
+    const title = state.view === "home"
+      ? "Upcoming Matches"
+      : (day && day !== "all" ? dayLabel(day) : (state.catalog.title || "All Upcoming Matches"));
     view.innerHTML = listHtml(title, "sports");
   }
   paintSlip();
@@ -1965,6 +1973,13 @@ async function loadBets() {
 }
 
 $("menuBtn").onclick = () => { $("sidebar").classList.add("open"); $("scrim").hidden = false; };
+const navSlip = $("navSlip");
+if (navSlip) navSlip.onclick = () => {
+  if (!state.slip.length) return;
+  state.slipOpen = !state.slipOpen;
+  paintSlip();
+  setNav();
+};
 $("scrim").onclick = () => { $("sidebar").classList.remove("open"); $("scrim").hidden = true; };
 if ($("themeBtn")) $("themeBtn").onclick = () => {
   const next = document.documentElement.getAttribute("data-theme") === "light" ? "" : "light";
