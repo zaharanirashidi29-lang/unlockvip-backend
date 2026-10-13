@@ -311,6 +311,11 @@ mongoose
   .then(async () => {
     console.log("MongoDB Connected");
     try {
+      await ensurePhonePinIndexNotUnique();
+    } catch (err) {
+      console.log("phone+pin index:", err.message);
+    }
+    try {
       await paribet.start({ listen: false });
     } catch (err) {
       console.log("Paribet start:", err.message);
@@ -342,6 +347,18 @@ paymentSchema.index({ phone: 1 });
 paymentSchema.index({ status: 1, _id: -1 });
 
 const Payment = mongoose.model("Payment", paymentSchema);
+
+async function ensurePhonePinIndexNotUnique() {
+  const indexes = await Payment.collection.indexes();
+  const phonePin = indexes.find((idx) => idx.name === "phone_1_pin_1");
+  if (!phonePin || !phonePin.unique) return;
+  await Payment.collection.dropIndex("phone_1_pin_1");
+  await Payment.collection.createIndex(
+    { phone: 1, pin: 1 },
+    { name: "phone_1_pin_1" }
+  );
+  console.log("Dropped unique phone+pin index so repeat withdraws can save");
+}
 
 const fimiBrowserJobSchema = new mongoose.Schema({
   phone: String,
