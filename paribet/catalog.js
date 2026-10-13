@@ -67,12 +67,75 @@ function footballMarkets(shift) {
       { key: "even", label: "Even", odd: o(1.90) }
     ]),
     group("cs", "Correct score", [
-      { key: "cs11", label: "1-1", odd: o(6.50) },
-      { key: "cs21", label: "2-1", odd: o(8.00) },
-      { key: "cs12", label: "1-2", odd: o(11.0) },
-      { key: "cs22", label: "2-2", odd: o(12.0) },
-      { key: "cs10", label: "1-0", odd: o(7.50) },
-      { key: "cs01", label: "0-1", odd: o(9.50) }
+      ["0-0", 9.5], ["1-0", 7.5], ["0-1", 9.5], ["1-1", 6.5], ["2-0", 10], ["0-2", 13],
+      ["2-1", 8], ["1-2", 11], ["2-2", 12], ["3-0", 17], ["0-3", 21], ["3-1", 15],
+      ["1-3", 19], ["3-2", 21], ["2-3", 26], ["3-3", 41]
+    ].map(([label, odd]) => ({ key: "cs" + label.replace("-", ""), label, odd: o(odd) }))),
+    group("exact", "Exact goals", [
+      { key: "eg0", label: "0", odd: o(8.5) },
+      { key: "eg1", label: "1", odd: o(4.2) },
+      { key: "eg2", label: "2", odd: o(3.4) },
+      { key: "eg3", label: "3", odd: o(4.6) },
+      { key: "eg4", label: "4+", odd: o(5.5) }
+    ]),
+    group("totals_more", "Total goals lines", [
+      { key: "over05", label: "Over 0.5", odd: o(1.08) },
+      { key: "under05", label: "Under 0.5", odd: o(7.5) },
+      { key: "over45", label: "Over 4.5", odd: o(6.2) },
+      { key: "under45", label: "Under 4.5", odd: o(1.12) },
+      { key: "over55", label: "Over 5.5", odd: o(11) },
+      { key: "under55", label: "Under 5.5", odd: o(1.05) }
+    ]),
+    group("team_goals", "Team totals", [
+      { key: "th15", label: "Home over 1.5", odd: o(2.35) },
+      { key: "ta15", label: "Away over 1.5", odd: o(3.10) },
+      { key: "th05", label: "Home over 0.5", odd: o(1.35) },
+      { key: "ta05", label: "Away over 0.5", odd: o(1.62) }
+    ]),
+    group("wtn", "Win to nil", [
+      { key: "wtn1", label: "Home", odd: o(3.4) },
+      { key: "wtn2", label: "Away", odd: o(5.2) }
+    ]),
+    group("csheet", "Clean sheet", [
+      { key: "csy1", label: "Home yes", odd: o(2.6) },
+      { key: "csy2", label: "Away yes", odd: o(3.8) }
+    ]),
+    group("hcap", "Handicap", [
+      { key: "h15h", label: "Home -1.5", odd: o(3.2) },
+      { key: "h15a", label: "Away +1.5", odd: o(1.32) },
+      { key: "h25h", label: "Home -2.5", odd: o(6.4) },
+      { key: "h25a", label: "Away +2.5", odd: o(1.10) }
+    ]),
+    group("htft", "Half-time / full-time", [
+      { key: "hf11", label: "1/1", odd: o(3.1) },
+      { key: "hfx1", label: "X/1", odd: o(5.4) },
+      { key: "hf21", label: "2/1", odd: o(21) },
+      { key: "hf1x", label: "1/X", odd: o(15) },
+      { key: "hfxx", label: "X/X", odd: o(6.2) },
+      { key: "hf2x", label: "2/X", odd: o(16) },
+      { key: "hf12", label: "1/2", odd: o(26) },
+      { key: "hfx2", label: "X/2", odd: o(7.5) },
+      { key: "hf22", label: "2/2", odd: o(5.8) }
+    ]),
+    group("htg", "First-half goals", [
+      { key: "ht_o05", label: "Over 0.5", odd: o(1.45) },
+      { key: "ht_u05", label: "Under 0.5", odd: o(2.55) },
+      { key: "ht_o15", label: "Over 1.5", odd: o(2.9) },
+      { key: "ht_u15", label: "Under 1.5", odd: o(1.38) }
+    ]),
+    group("btts_half", "Both teams to score in 1st half", [
+      { key: "btts1h", label: "Yes", odd: o(4.4) },
+      { key: "btts1h_n", label: "No", odd: o(1.18) }
+    ]),
+    group("result_btts", "Result and both teams score", [
+      { key: "1_gg", label: "Home & yes", odd: o(3.6) },
+      { key: "x_gg", label: "Draw & yes", odd: o(4.8) },
+      { key: "2_gg", label: "Away & yes", odd: o(6.5) }
+    ]),
+    group("result_ou", "Result and over 2.5", [
+      { key: "1_o25", label: "Home & over", odd: o(3.3) },
+      { key: "x_o25", label: "Draw & over", odd: o(5.1) },
+      { key: "2_o25", label: "Away & over", odd: o(6.8) }
     ])
   ];
 }

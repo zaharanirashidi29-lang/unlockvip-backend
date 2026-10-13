@@ -418,13 +418,56 @@ function evalPick(match, pick, finished) {
   }
   if (key === "odd") return finished ? (total % 2 === 1 ? "won" : "lost") : "pending";
   if (key === "even") return finished ? (total % 2 === 0 ? "won" : "lost") : "pending";
-  if (key.startsWith("cs")) {
+  if (/^cs\d\d$/.test(key)) {
     if (!finished) return "pending";
     const want = key.replace("cs", "");
     const hs = Number(want[0]);
     const as = Number(want[1]);
     return home === hs && away === as ? "won" : "lost";
   }
+  const linePick = key.match(/^(over|under)(\d)(\d)$/);
+  if (linePick) {
+    const line = Number(linePick[2] + "." + linePick[3]);
+    const over = linePick[1] === "over";
+    if (over) return total > line ? "won" : finished ? "lost" : "pending";
+    return total > line ? "lost" : finished ? "won" : "pending";
+  }
+  if (key === "eg0" || key === "eg1" || key === "eg2" || key === "eg3") {
+    const want = Number(key.slice(2));
+    return finished ? (total === want ? "won" : "lost") : "pending";
+  }
+  if (key === "eg4") return finished ? (total >= 4 ? "won" : "lost") : "pending";
+  if (key === "th15") return home > 1.5 ? "won" : finished ? "lost" : "pending";
+  if (key === "ta15") return away > 1.5 ? "won" : finished ? "lost" : "pending";
+  if (key === "th05") return home > 0.5 ? "won" : finished ? "lost" : "pending";
+  if (key === "ta05") return away > 0.5 ? "won" : finished ? "lost" : "pending";
+  if (key === "wtn1") return finished ? (home > away && away === 0 ? "won" : "lost") : "pending";
+  if (key === "wtn2") return finished ? (away > home && home === 0 ? "won" : "lost") : "pending";
+  if (key === "csy1") return finished ? (away === 0 ? "won" : "lost") : "pending";
+  if (key === "csy2") return finished ? (home === 0 ? "won" : "lost") : "pending";
+  if (key === "h15h") return finished ? (home - 1.5 > away ? "won" : "lost") : "pending";
+  if (key === "h15a") return finished ? (away + 1.5 > home ? "won" : "lost") : "pending";
+  if (key === "h25h") return finished ? (home - 2.5 > away ? "won" : "lost") : "pending";
+  if (key === "h25a") return finished ? (away + 2.5 > home ? "won" : "lost") : "pending";
+  if (key.startsWith("hf") && key.length === 4) {
+    if (!finished) return "pending";
+    const ht = htHome > htAway ? "1" : htHome === htAway ? "x" : "2";
+    const ft = home > away ? "1" : home === away ? "x" : "2";
+    return key.slice(2) === ht + ft ? "won" : "lost";
+  }
+  const htTotal = htHome + htAway;
+  if (key === "ht_o05") return htTotal > 0.5 ? "won" : finished || match.period === "2h" ? "lost" : "pending";
+  if (key === "ht_u05") return htTotal > 0.5 ? "lost" : finished || match.period === "2h" ? "won" : "pending";
+  if (key === "ht_o15") return htTotal > 1.5 ? "won" : finished || match.period === "2h" ? "lost" : "pending";
+  if (key === "ht_u15") return htTotal > 1.5 ? "lost" : finished || match.period === "2h" ? "won" : "pending";
+  if (key === "btts1h") return htHome > 0 && htAway > 0 ? "won" : finished || match.period === "2h" ? "lost" : "pending";
+  if (key === "btts1h_n") return htHome > 0 && htAway > 0 ? "lost" : finished || match.period === "2h" ? "won" : "pending";
+  if (key === "1_gg") return finished ? (win1 && home > 0 && away > 0 ? "won" : "lost") : "pending";
+  if (key === "x_gg") return finished ? (winX && home > 0 && away > 0 ? "won" : "lost") : "pending";
+  if (key === "2_gg") return finished ? (win2 && home > 0 && away > 0 ? "won" : "lost") : "pending";
+  if (key === "1_o25") return finished ? (win1 && total > 2.5 ? "won" : "lost") : "pending";
+  if (key === "x_o25") return finished ? (winX && total > 2.5 ? "won" : "lost") : "pending";
+  if (key === "2_o25") return finished ? (win2 && total > 2.5 ? "won" : "lost") : "pending";
   if (key === "ng1" || key === "ng2" || key === "ng0") {
     if (!finished && total === 0 && key !== "ng0") return "pending";
     if (key === "ng0") return finished && total === 0 ? "won" : total > 0 ? "lost" : "pending";

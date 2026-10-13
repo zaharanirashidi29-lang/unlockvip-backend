@@ -951,7 +951,12 @@ button.gold-lite {
   color: #062016; font-size: 11px; font-weight: 800; text-align: center;
 }
 .rb-league { flex: 1; color: #d7d7d7; font-size: 12px; font-weight: 700; }
-.rb-more { color: #1bd093; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.rb-more { border: 0; background: transparent; color: #1bd093; font-size: 12px; font-weight: 800; white-space: nowrap; cursor: pointer; }
+.more-markets { margin-top: 8px; display: grid; gap: 8px; }
+.more-markets .market-card { margin: 0; background: #1b1b1b; border: 1px solid #2c2c2c; }
+.more-markets .markets { display: flex; flex-wrap: wrap; gap: 6px; }
+.more-markets .odd-btn { min-width: 72px; min-height: 46px; border: 0; border-radius: 8px; background: #2a2a2a; color: #cfcfcf; }
+.more-markets .odd-btn b { color: #f0d52e; }
 .rb-teams { flex: 1; display: grid; gap: 6px; min-width: 0; font-weight: 700; font-size: 14px; }
 .rb-teams span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rb-score { color: #1bd093; font-size: 14px; min-width: 36px; text-align: center; }

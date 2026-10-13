@@ -391,12 +391,14 @@ function marketCount(m) {
 function matchCard(m) {
   const score = m.score || "";
   const extra = marketCount(m);
+  const open = Boolean(state.openCards[m.id]);
+  const groups = m.markets || [];
   return `
     <article class="rb-match">
       <div class="rb-match-top">
         <span class="rb-min">${esc(minuteLabel(m))}</span>
         <span class="rb-league">${esc(m.league)}</span>
-        <a class="rb-more" href="#/match/${m.id}">+${extra} market</a>
+        <button type="button" class="rb-more" data-more="${m.id}">${open ? "Hide markets" : "More markets +" + extra}</button>
       </div>
       <div class="rb-match-row">
         <a class="rb-teams" href="#/match/${m.id}">
@@ -410,6 +412,7 @@ function matchCard(m) {
           ${oddBtn(m, "2", "2")}
         </div>
       </div>
+      ${open ? `<div class="more-markets">${groups.map((g) => marketBlock(m, g)).join("") || `<p class="empty">No extra markets</p>`}</div>` : ""}
     </article>
   `;
 }
