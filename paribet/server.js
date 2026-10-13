@@ -1523,15 +1523,15 @@ app.get("/api/bet/code/:code", async (req, res) => {
 });
 
 app.post("/api/bet/load", async (req, res) => {
-  const user = await findUser({ id: String(req.body.userId || "") });
-  if (!user) return res.status(401).json({ ok: false, error: "Log in first to load a bet code" });
-  if (!(await hasDeposited(user.id))) {
-    return res.status(403).json({ ok: false, error: "Deposit first, then you can load a bet code" });
-  }
   const found = await findByCode(req.body.code);
   if (!found) return res.status(404).json({ ok: false, error: "Bet code not found" });
   if (found.kind === "book") {
     return res.json(slipPayload(found.rec, { placed: false, booking: true }));
+  }
+  const user = await findUser({ id: String(req.body.userId || "") });
+  if (!user) return res.status(401).json({ ok: false, error: "Log in first to load a bet code" });
+  if (!(await hasDeposited(user.id))) {
+    return res.status(403).json({ ok: false, error: "Deposit first, then you can load a bet code" });
   }
   res.json(slipPayload(found.rec, { placed: true, booking: false }));
 });

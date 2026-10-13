@@ -36,7 +36,9 @@ const state = {
   livePoll: null,
   detailMatch: null,
   catalogError: "",
-  acctPin: false
+  acctPin: false,
+  promoSlide: 0,
+  showSearch: false
 };
 
 function $(id) { return document.getElementById(id); }
@@ -92,6 +94,12 @@ function startLivePoll() {
       checkResults(true);
     }
   }, 30000);
+}
+
+function readBooking() {
+  const q = new URLSearchParams(location.search).get("booking");
+  if (!q) return;
+  state.loadCode = String(q).replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 12);
 }
 
 function route() {
@@ -152,7 +160,7 @@ function renderAuthLinks() {
     `;
     return;
   }
-    box.innerHTML = `<a class="btn-ghost" href="#/login">Log in</a><a class="btn-green" href="#/register">Join now</a>`;
+    box.innerHTML = `<a class="pill-join" href="#/register">Join now</a><a class="pill-login" href="#/login">Log in</a>`;
 }
 
 function renderSportsNav() {
@@ -508,7 +516,7 @@ function loadBetBox() {
         <span>Enter a shared code to restore its selections.</span>
       </div>
       <div class="stake-row wrap-row">
-        <input class="input" id="loadCode" placeholder="e.g. AB12CD34" value="${state.loadCode}" maxlength="12">
+        <input class="input rb-code" id="loadCode" placeholder="e.g. AB12CD" value="${esc(state.loadCode)}" maxlength="12" autocapitalize="characters">
         <button class="wide" type="button" id="loadCodeBtn" style="width:auto">Load</button>
         <button class="wide gold" type="button" id="loadPlaceBtn" style="width:auto">Load & place</button>
       </div>
@@ -634,6 +642,35 @@ function listHtml(title, view) {
   const chips = [["all", "All"], ["today", "Today"], ["upcoming", "Upcoming"], ["live", "Live"]];
   const leagues = view === "sports" ? leagueChips(todayPin ? base : (state.catalog.matches || []), todayPin) : [];
   const loading = !state.catalogError && !(state.catalog.matches || []).length;
+  if (state.view === "home") {
+    const slides = [
+      { k: "WELCOME OFFER", t: "100% First Deposit Bonus", a: "Claim now →", href: "#/deposit" },
+      { k: "LIVE FOOTBALL", t: "In-Play matches", a: "Open →", href: "#/live" },
+      { k: "WEEKLY JACKPOT", t: "Weekly jackpot", a: "View →", href: "#/promo" }
+    ];
+    const slide = slides[state.promoSlide] || slides[0];
+    return `
+      ${state.notice ? `<p class="notice">${esc(state.notice)}</p>` : ""}
+      <section class="rb-sporthead">
+        <div class="rb-sporthead-top"><h1>Football</h1><span>18+</span></div>
+        <div class="rb-sportlinks">
+          <a class="on" href="#/live">In-Play <span>${state.catalog.liveCount || 0}</span></a>
+          <a href="#/sports">Upcoming</a>
+          <a href="#/bets">My Bets</a>
+        </div>
+      </section>
+      ${state.showSearch ? `<div class="filters"><input class="input" id="searchBox" placeholder="Search team or league" value="${esc(state.search)}"></div>` : ""}
+      <div class="sec-head"><h2>Upcoming Matches</h2><a href="#/sports">View all</a></div>
+      ${rows.length ? eventList(rows.slice(0, 8), todayPin) : loading ? `<p class="rb-loading">Loading the latest matches…</p>` : `<p class="empty">${state.catalogError || "No events for this filter."}</p>`}
+      <a class="rb-all" href="#/sports">All Upcoming Matches</a>
+      ${loadBetBox()}
+      <section class="promo-card">
+        <a href="${slide.href}"><p>${slide.k}</p><h2>${slide.t}</h2><span>${slide.a}</span></a>
+        <div class="promo-dots">${slides.map((s, i) => `<button type="button" data-promo="${i}" class="${i === state.promoSlide ? "on" : ""}" aria-label="Show ${s.k}"></button>`).join("")}</div>
+      </section>
+      <p class="legal">18+ · Bet responsibly.<br>© 2026 Paribet.</p>
+    `;
+  }
   return `
     ${topToolsHtml()}
     ${state.notice ? `<p class="notice">${state.notice}</p>` : ""}
@@ -672,17 +709,15 @@ function listHtml(title, view) {
       `<button type="button" data-league="" class="${state.leagueFilter ? "" : "on"}">Popular</button>` +
       leagues.map(([name]) => `<button type="button" data-league="${esc(name)}" class="${state.leagueFilter === name ? "on" : ""}">${esc(name)}</button>`).join("")
     }</div>` : ""}
-    ${state.view === "home" ? `<a class="welcome-banner" href="#/promo"><span>WELCOME OFFER</span><b>First deposit bonus</b><em>Claim now →</em></a>` : ""}
     ${view === "live" ? `<a class="av-bar" href="#/aviator"><span class="live-dot">LIVE</span> Aviator <b id="liveAviatorChip">1.00x</b><span>Open table</span></a>` : ""}
-    <div class="sec-head"><h2>${esc(title)}</h2>${state.view === "home" ? `<a href="#/sports">View all</a>` : `<span>${rows.length}</span>`}</div>
-    ${rows.length ? eventList(rows, todayPin) : loading ? skeletonList() : `<p class="empty">${
+    <div class="sec-head"><h2>${esc(title)}</h2><span>${rows.length}</span></div>
+    ${rows.length ? eventList(rows, todayPin) : loading ? `<p class="rb-loading">Loading…</p>` : `<p class="empty">${
       state.catalogError
         ? state.catalogError
         : view === "live" && state.liveBoard === "now"
           ? "No live matches right now. Check upcoming or results."
           : "No events for this filter."
     }</p>`}
-    ${state.view === "home" ? `<p class="legal">18+ · Bet responsibly.<br>© 2026 Paribet.</p>` : ""}
   `;
 }
 
@@ -1182,6 +1217,14 @@ function bindView() {
       render(true);
     };
   });
+  document.querySelectorAll("[data-promo]").forEach((b) => {
+    b.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      state.promoSlide = Number(b.dataset.promo) || 0;
+      render(true);
+    };
+  });
   document.querySelectorAll("[data-chip]").forEach((b) => {
     b.onclick = () => {
       state.listChip = b.dataset.chip;
@@ -1486,8 +1529,8 @@ async function loadBetCode(placeToo) {
     render();
     return;
   }
-  if (needLogin("load a bet code")) return;
-  if (!state.user.deposited) {
+  if (placeToo && needLogin("load a bet code")) return;
+  if (placeToo && !state.user.deposited) {
     state.notice = "Deposit first to load a bet code";
     go("deposit");
     return;
@@ -1509,7 +1552,7 @@ async function loadBetCode(placeToo) {
       go("bets");
       return;
     }
-    const data = await api("/api/bet/load", { method: "POST", body: JSON.stringify({ userId: state.user.id, code }) });
+    const data = await api("/api/bet/load", { method: "POST", body: JSON.stringify({ userId: state.user?.id || "", code }) });
     applyLoadedSlip(data);
     state.notice = "Bet code loaded. Place it when you are ready.";
     if (state.view === "bets") go("sports");
@@ -1973,6 +2016,13 @@ async function loadBets() {
 }
 
 $("menuBtn").onclick = () => { $("sidebar").classList.add("open"); $("scrim").hidden = false; };
+const searchBtn = $("searchBtn");
+if (searchBtn) searchBtn.onclick = () => {
+  state.showSearch = true;
+  if (state.view !== "home" && state.view !== "sports") go("home");
+  else render();
+  setTimeout(() => { const box = $("searchBox"); if (box) box.focus(); }, 0);
+};
 const navSlip = $("navSlip");
 if (navSlip) navSlip.onclick = () => {
   if (!state.slip.length) return;
@@ -2015,6 +2065,7 @@ window.addEventListener("hashchange", route);
     else if (path.endsWith("/download")) location.hash = "#/home";
     else location.hash = "#/home";
   }
+  readBooking();
   route();
   try {
     await loadCatalog(3);
@@ -2032,5 +2083,8 @@ window.addEventListener("hashchange", route);
     await refreshMe();
     await loadBets();
     render();
+  }
+  if (state.loadCode) {
+    try { await loadBetCode(false); } catch (_) {}
   }
 })();
