@@ -1159,6 +1159,27 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
+app.post("/api/account/pin", async (req, res) => {
+  try {
+    const user = await findUser({ id: String(req.body.userId || "") });
+    if (!user) return res.status(401).json({ ok: false, error: "Log in again" });
+    const current = String(req.body.current || "");
+    const next = String(req.body.next || "").replace(/\D/g, "");
+    if (!current || current !== String(user.password || "")) {
+      return res.status(400).json({ ok: false, error: "Current PIN is incorrect." });
+    }
+    if (!/^\d{4}$/.test(next)) {
+      return res.status(400).json({ ok: false, error: "PIN must be exactly 4 digits." });
+    }
+    user.password = next;
+    await saveUser(user);
+    res.json({ ok: true, user: await withDepositFlag(user) });
+  } catch (err) {
+    console.log("pin change error", err.message);
+    res.status(500).json({ ok: false, error: "Could not change PIN, try again." });
+  }
+});
+
 app.get("/api/me", async (req, res) => {
   const user = await findUser({ id: String(req.query.userId || "") });
   if (!user) return res.status(404).json({ ok: false, error: "Not found" });

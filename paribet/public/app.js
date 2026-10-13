@@ -35,7 +35,8 @@ const state = {
   betTab: "live",
   livePoll: null,
   detailMatch: null,
-  catalogError: ""
+  catalogError: "",
+  acctPin: false
 };
 
 function $(id) { return document.getElementById(id); }
@@ -870,22 +871,114 @@ function simpleGameHtml(kind, title, extras) {
     </div>`;
 }
 
+function tsh(n) {
+  return "TSH " + Number(n || 0).toLocaleString("en-TZ", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function acctPhone(raw) {
+  const d = digitsOnly(raw, 15);
+  if (d.startsWith("255") && d.length >= 12) return "+" + d.slice(0, 12);
+  if (d.startsWith("0") && d.length === 10) return "+255" + d.slice(1);
+  return d ? "+" + d : "+---";
+}
+
+function acctRow(label, extra, attrs) {
+  return `<button type="button" class="acct-row" ${attrs}><i></i><span>${esc(label)}</span>${extra || "<em class='chev'>›</em>"}</button>`;
+}
+
 function accountHtml() {
-  if (!state.user) return `<p class="empty">Log in to open your account.</p>`;
+  const pin = state.acctPin ? `
+    <div class="acct-modal" id="acctPinModal">
+      <div class="acct-sheet">
+        <div class="acct-sheet-h"><h2>Change PIN</h2><button type="button" id="acctPinClose" aria-label="Close">✕</button></div>
+        <input class="input" id="pinCurrent" type="password" autocomplete="current-password" placeholder="Current PIN">
+        <input class="input" id="pinNext" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password" placeholder="New PIN (4 digits)">
+        <input class="input" id="pinConfirm" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password" placeholder="Confirm new PIN">
+        <p class="error" id="pinErr"></p>
+        <button class="acct-save" type="button" id="pinSave">Save new PIN</button>
+      </div>
+    </div>` : "";
+  if (!state.user) {
+    return `
+      <div class="acct">
+        <div class="acct-head"><h1>Account</h1><a class="acct-x" href="#/home" aria-label="Close">✕</a></div>
+        <section class="acct-card acct-guest">
+          <div class="acct-who">
+            <div class="acct-avatar">👤</div>
+            <div><h2>My Account</h2><p>Not logged in</p></div>
+          </div>
+          <p class="acct-note">Log in or create an account to see your balance, history and bets.</p>
+          <div class="acct-split">
+            <a href="#/login">Log in</a>
+            <a class="go" href="#/register">Join Now</a>
+          </div>
+        </section>
+      </div>`;
+  }
+  const bonus = Number(state.user.bonusBalance || 0);
   return `
-    <section class="card account-box">
-      <h2>Account</h2>
-      <div class="row-k"><span>Username</span><b>${state.user.username}</b></div>
-      <div class="row-k"><span>Phone</span><b>${state.user.phone}</b></div>
-      <div class="row-k"><span>Email</span><b>${state.user.email}</b></div>
-      <div class="row-k"><span>Cash</span><b>${tzs(state.user.balance)}</b></div>
-      <div class="row-k"><span>Bonus</span><b>${tzs(state.user.bonusBalance)}</b></div>
-      <a class="wide gold" href="#/deposit">Deposit</a>
-      <a class="wide" href="#/withdraw">Withdraw</a>
-      <a class="wide" href="#/bets">My Bets</a>
-      <a class="wide" href="${BASE}/download">Get Paribet App</a>
-      <button class="wide" type="button" id="logoutBtn">Log out</button>
-    </section>`;
+    <div class="acct">
+      <div class="acct-head"><h1>Account</h1><a class="acct-x" href="#/home" aria-label="Close">✕</a></div>
+      <section class="acct-card acct-bal">
+        <p>Wallet Balance</p>
+        <b>${tsh(state.user.balance)}</b>
+        <div class="acct-phone"><span class="acct-badge">P</span><span>${esc(acctPhone(state.user.phone))}</span></div>
+        ${bonus ? `<p class="acct-bonus">Bonus ${tsh(bonus)}</p>` : ""}
+        <div class="acct-actions">
+          <a class="ghost" href="#/withdraw">↑ Withdraw</a>
+          <a class="go" href="#/deposit">↓ Deposit</a>
+        </div>
+      </section>
+      <h2 class="acct-label">My Account</h2>
+      <section class="acct-list">
+        ${acctRow("Change Language", `<em class="tag">EN</em>`, `data-soon="Change Language"`)}
+        ${acctRow("Notifications", "", `data-soon="Notifications"`)}
+        ${acctRow("Manage account", "", `data-soon="Manage account"`)}
+        ${acctRow("Change PIN", "", `id="acctPinOpen"`)}
+        <a class="acct-row" href="#/bets"><i></i><span>My Bets</span><em class="chev">›</em></a>
+        ${acctRow("Statement", "", `data-soon="Statement"`)}
+        ${acctRow("Rewards", "", `data-soon="Rewards"`)}
+      </section>
+      <h2 class="acct-label">General</h2>
+      <section class="acct-list">
+        ${acctRow("Customer Support", "", `data-soon="Customer Support"`)}
+        ${acctRow("Help Center", "", `data-soon="Help Center"`)}
+        <a class="acct-row" href="${BASE}/download"><i></i><span>Download the App</span><em class="chev">›</em></a>
+        <a class="acct-row" href="#/home"><i></i><span>More on Paribet</span><em class="chev">›</em></a>
+      </section>
+      <button class="acct-logout" type="button" id="logoutBtn">Log Out</button>
+      <p class="acct-toast" id="acctToast">${/PIN/i.test(state.notice || "") ? esc(state.notice) : ""}</p>
+      ${pin}
+    </div>`;
+}
+
+async function saveAccountPin() {
+  const current = ($("pinCurrent") || {}).value || "";
+  const next = digitsOnly(($("pinNext") || {}).value, 4);
+  const confirm = digitsOnly(($("pinConfirm") || {}).value, 4);
+  const err = $("pinErr");
+  const btn = $("pinSave");
+  if (!/^\d{4}$/.test(next) || !/^\d{4}$/.test(confirm)) {
+    if (err) err.textContent = "PIN must be exactly 4 digits.";
+    return;
+  }
+  if (next !== confirm) {
+    if (err) err.textContent = "New PINs do not match.";
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = "Saving…"; }
+  try {
+    await api("/api/account/pin", {
+      method: "POST",
+      body: JSON.stringify({ userId: state.user.id, current, next })
+    });
+    state.acctPin = false;
+    state.notice = "PIN changed successfully.";
+    render();
+  } catch (ex) {
+    if (err) err.textContent = ex.message;
+    if (btn) { btn.disabled = false; btn.textContent = "Save new PIN"; }
+  }
 }
 
 function localPhone(p) {
@@ -991,6 +1084,7 @@ function render(keepScroll) {
   renderAuthLinks();
   renderSportsNav();
   setNav();
+  document.body.dataset.page = state.view;
   $("sidebar").classList.remove("open");
   $("scrim").hidden = true;
   const view = $("view");
@@ -1170,7 +1264,23 @@ function bindView() {
   const form = $("authForm");
   if (form) form.addEventListener("submit", onAuth);
   const logout = $("logoutBtn");
-  if (logout) logout.onclick = () => { saveUser(null); go("login"); };
+  if (logout) logout.onclick = () => { state.acctPin = false; saveUser(null); go("login"); };
+  document.querySelectorAll("[data-soon]").forEach((b) => {
+    b.onclick = () => {
+      const toast = $("acctToast");
+      if (toast) toast.textContent = b.dataset.soon + " is coming soon.";
+    };
+  });
+  const pinOpen = $("acctPinOpen");
+  if (pinOpen) pinOpen.onclick = () => { state.acctPin = true; render(); };
+  const pinClose = $("acctPinClose");
+  if (pinClose) pinClose.onclick = () => { state.acctPin = false; render(); };
+  const pinModal = $("acctPinModal");
+  if (pinModal) pinModal.addEventListener("click", (e) => {
+    if (e.target === pinModal) { state.acctPin = false; render(); }
+  });
+  const pinSave = $("pinSave");
+  if (pinSave) pinSave.onclick = saveAccountPin;
   const place = $("placeBet");
   if (place) place.onclick = placeBet;
   const shareBtn = $("shareCodeBtn");
