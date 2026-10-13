@@ -38,7 +38,9 @@ const state = {
   catalogError: "",
   acctPin: false,
   promoSlide: 0,
-  showSearch: false
+  showSearch: false,
+  marketCache: {},
+  marketLoading: {}
 };
 
 function $(id) { return document.getElementById(id); }
@@ -384,15 +386,18 @@ function minuteLabel(m) {
 }
 
 function marketCount(m) {
-  const n = (m.markets || []).reduce((sum, g) => sum + (g.sels || []).length, 0);
-  return Math.max(0, n - 3);
+  const groups = state.marketCache[m.id] || m.markets || [];
+  const n = groups.reduce((sum, g) => sum + (g.sels || []).length, 0);
+  if (n > 3) return n - 3;
+  return Number(m.extra || 0);
 }
 
 function matchCard(m) {
   const score = m.score || "";
   const extra = marketCount(m);
   const open = Boolean(state.openCards[m.id]);
-  const groups = m.markets || [];
+  const groups = state.marketCache[m.id] || m.markets || [];
+  const loadingMarkets = Boolean(state.marketLoading[m.id]);
   return `
     <article class="rb-match">
       <div class="rb-match-top">
@@ -412,7 +417,7 @@ function matchCard(m) {
           ${oddBtn(m, "2", "2")}
         </div>
       </div>
-      ${open ? `<div class="more-markets">${groups.map((g) => marketBlock(m, g)).join("") || `<p class="empty">No extra markets</p>`}</div>` : ""}
+      ${open ? `<div class="more-markets">${loadingMarkets ? `<p class="rb-loading">Loading markets…</p>` : groups.map((g) => marketBlock(m, g)).join("") || `<p class="empty">No extra markets</p>`}</div>` : ""}
     </article>
   `;
 }
@@ -1252,8 +1257,19 @@ function bindView() {
     b.onclick = () => { state.leagueFilter = b.dataset.league || ""; render(true); };
   });
   document.querySelectorAll("[data-more]").forEach((b) => {
-    b.onclick = () => {
-      state.openCards[b.dataset.more] = !state.openCards[b.dataset.more];
+    b.onclick = async () => {
+      const id = b.dataset.more;
+      const opening = !state.openCards[id];
+      state.openCards[id] = opening;
+      render(true);
+      if (!opening || state.marketCache[id]) return;
+      state.marketLoading[id] = true;
+      render(true);
+      try {
+        const data = await api("/api/match/" + encodeURIComponent(id));
+        if (data.match?.markets?.length) state.marketCache[id] = data.match.markets;
+      } catch (_) {}
+      state.marketLoading[id] = false;
       render(true);
     };
   });
