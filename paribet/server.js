@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const mongoose = require("mongoose");
-const { MATCHES, SPORTS, PROMOS, GAMES, sportsFrom } = require("./catalog");
+const { MATCHES, DEMO_MATCHES, SPORTS, PROMOS, GAMES, sportsFrom } = require("./catalog");
 const live = require("./live");
 const fixtures = require("./fixtures");
 const fimipay = require("./fimipay");
@@ -462,7 +462,10 @@ async function saveBet(rec) {
 }
 
 function currentMatches() {
-  return live.liveMatches(board.matches);
+  const demos = DEMO_MATCHES || [];
+  const ids = new Set(demos.map((m) => m.id));
+  const rest = (board.matches || []).filter((m) => !ids.has(m.id) && m.source !== "demo");
+  return live.liveMatches([...demos, ...rest]);
 }
 
 function catalogSports() {
@@ -498,7 +501,7 @@ function lightMatch(m) {
 
 function catalogMatches() {
   return currentMatches()
-    .filter((m) => m.live || m.period === "pre" || m.apiState === "pre" || m.apiState === "in")
+    .filter((m) => m.source === "demo" || m.live || m.period === "pre" || m.apiState === "pre" || m.apiState === "in")
     .map(lightMatch)
     .filter(Boolean);
 }
@@ -643,7 +646,7 @@ async function matchesForSettlement(rows) {
 async function applySettlements(rows, matches) {
   const out = [];
   for (const rec of rows) {
-    if (rec.kind !== "sports" || rec.paidOut || rec.status === "Won" || rec.status === "Lost" || rec.status === "Void") {
+    if (rec.kind !== "sports" || rec.paidOut || ["Won", "Lost", "Void", "Cashout"].includes(rec.status)) {
       out.push(live.decorateBet(rec, matches));
       continue;
     }
@@ -677,11 +680,11 @@ async function settleOpenSports() {
     rows = await Bet.find({
       kind: "sports",
       paidOut: { $ne: true },
-      status: { $nin: ["Won", "Lost", "Void"] }
+      status: { $nin: ["Won", "Lost", "Void", "Cashout"] }
     }).lean();
   } else {
     rows = readJson(BETS_FILE).filter(
-      (b) => b.kind === "sports" && !b.paidOut && !["Won", "Lost", "Void"].includes(b.status)
+      (b) => b.kind === "sports" && !b.paidOut && !["Won", "Lost", "Void", "Cashout"].includes(b.status)
     );
   }
   if (!rows.length) return [];
@@ -695,7 +698,7 @@ async function refreshFixtures() {
     if (pack.matches && pack.matches.length) {
       const incoming = new Set(pack.matches.map((m) => m.id));
       for (const old of board.matches || []) {
-        if (incoming.has(old.id)) continue;
+        if (incoming.has(old.id) || old.source === "demo" || String(old.id || "").startsWith("demo-")) continue;
         const row = live.applyLive(old);
         await saveArchive({
           ...row,
@@ -1653,6 +1656,34 @@ app.post("/api/bet/place-code", async (req, res) => {
   const settled = (await settleUserSports(user.id)).find((b) => b.id === rec.id) || rec;
   const latest = await findUser({ id: user.id });
   res.json({ ok: true, bet: settled, code: rec.code, user: await withDepositFlag(latest) });
+});
+
+app.post("/api/bet/cashout", async (req, res) => {
+  const user = await findUser({ id: String(req.body.userId || "") });
+  const betId = String(req.body.betId || "");
+  if (!user) return res.status(404).json({ ok: false, error: "Log in first" });
+  const rows = await listBets(user.id);
+  const rec = rows.find((b) => b.id === betId);
+  if (!rec || rec.kind !== "sports") return res.status(404).json({ ok: false, error: "Bet not found" });
+  if (["Won", "Lost", "Void", "Cashout"].includes(rec.status) || rec.paidOut) {
+    return res.status(400).json({ ok: false, error: "This bet is already settled" });
+  }
+  const matches = await matchesForSettlement([rec]);
+  const amount = live.offerCashout(rec, matches);
+  if (amount == null) return res.status(400).json({ ok: false, error: "Cashout is available once the match is live" });
+  if (amount <= 0) return res.status(400).json({ ok: false, error: "Cashout is not available for this score" });
+  await credit(user, amount);
+  const updated = {
+    ...rec,
+    status: "Cashout",
+    payout: amount,
+    paidOut: true,
+    detail: `Cashed out ${amount} TZS`,
+    ...nowStamp()
+  };
+  await saveBet(updated);
+  const latest = await findUser({ id: user.id });
+  res.json({ ok: true, bet: live.decorateBet(updated, matches), cashout: amount, user: await withDepositFlag(latest) });
 });
 
 app.get("/api/bets", async (req, res) => {

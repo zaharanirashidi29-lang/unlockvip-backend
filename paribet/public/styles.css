@@ -1114,7 +1114,14 @@ body[data-page="account"] .main { background: #f3f6f3; }
 .slip-live { display: block; margin-top: 4px; color: #1bd093; font-style: normal; font-size: 11px; font-weight: 800; }
 .odd-was { display: block; color: #8d8d8d; font-size: 10px; font-weight: 700; text-decoration: line-through; }
 .slip-share { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
-.book-code { margin: 8px 0 0; font-size: 13px; letter-spacing: .08em; }
+.book-code a { color: #f0d52e; word-break: break-all; }
+.cashout-line {
+  display: flex; align-items: center; gap: 8px; margin-top: 8px;
+  padding: 8px 10px; border-radius: 8px; background: #013424; color: #f6f9f6;
+}
+.cashout-line b { color: #f0d52e; margin-right: auto; }
+.cashout-line button { width: auto; min-width: 96px; }
+.cashout-line em { color: #8d8d8d; font-style: normal; font-size: 12px; }
 .welcome-bonus {
   position: fixed; inset: 0; z-index: 80; display: grid; place-items: center;
   background: rgba(0, 0, 0, .72); animation: welcomeIn .35s ease;

@@ -186,6 +186,56 @@ function pack(row, markets) {
   return { ...row, markets, odds: flatten(markets), extra: extraCount(markets) };
 }
 
+function withPrice(markets, key, odd) {
+  return markets.map((g) => ({
+    ...g,
+    sels: g.sels.map((s) => (s.key === key ? { ...s, odd: o(odd) } : s))
+  }));
+}
+
+function demoMatch(row, key, odd) {
+  return pack({
+    source: "demo",
+    sport: "football",
+    live: false,
+    period: "pre",
+    score: "",
+    stats: blankStats(),
+    day: "2026-10-14",
+    time: "10:40",
+    kickMin: 10 * 60 + 40,
+    ...row
+  }, withPrice(footballMarkets(0), key, odd));
+}
+
+const DEMO_MATCHES = [
+  demoMatch({
+    id: "demo-cf-city",
+    league: "Demo",
+    home: "CF City",
+    away: "Atlético Heroes",
+    script: { home: 1, away: 0, htHome: 1, htAway: 0, times: [{ min: 34, side: "home" }] }
+  }, "cs10", 10.97),
+  demoMatch({
+    id: "demo-rc-wanderers",
+    league: "Liga Primera",
+    home: "RC Wanderers",
+    away: "RC Athletic",
+    script: {
+      home: 3,
+      away: 1,
+      htHome: 2,
+      htAway: 0,
+      times: [
+        { min: 18, side: "home" },
+        { min: 41, side: "home" },
+        { min: 63, side: "away" },
+        { min: 78, side: "home" }
+      ]
+    }
+  }, "cs31", 22.07)
+];
+
 function blankStats() {
   return { possession: [0, 0], shots: [0, 0], corners: [0, 0] };
 }
@@ -355,6 +405,7 @@ function buildMatch(row, realOdds) {
 
 module.exports = {
   MATCHES,
+  DEMO_MATCHES,
   SPORTS,
   SPORT_DEFS,
   PROMOS,

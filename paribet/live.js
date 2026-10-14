@@ -100,6 +100,21 @@ function parseListedScore(m) {
 
 function planFor(m) {
   const seed = hash(m.id);
+  if (m.script && (m.sport === "football" || !m.sport)) {
+    const script = m.script;
+    return {
+      home: script.home,
+      away: script.away,
+      htHome: script.htHome || 0,
+      htAway: script.htAway || 0,
+      cornersHome: 5,
+      cornersAway: 4,
+      cardsHome: 1,
+      cardsAway: 2,
+      times: script.times || [],
+      kind: "football"
+    };
+  }
   if (m.sport === "football") {
     const home = seed % 4;
     const away = (seed >>> 3) % 3;
@@ -237,7 +252,53 @@ function applyOfficial(m) {
   return row;
 }
 
-function applyLive(m) {
+function applyDemo(m, now) {
+  const row = {
+    ...m,
+    stats: {
+      possession: [...(m.stats?.possession || [50, 50])],
+      shots: [...(m.stats?.shots || [0, 0])],
+      corners: [...(m.stats?.corners || [0, 0])]
+    }
+  };
+  const p = eatParts(now || new Date());
+  const today = `${p.year}-${p.month}-${p.day}`;
+  const nowMin = Number(p.hour) * 60 + Number(p.minute);
+  const kick = Number(row.kickMin ?? 640);
+  let elapsed = nowMin - kick;
+  if (row.day && row.day < today) elapsed = 200;
+  if (row.day && row.day > today) elapsed = -60;
+  if (elapsed < 0) {
+    row.live = false;
+    row.period = "pre";
+    row.score = "";
+    row.result = emptyResult();
+    row.clock = "10:40";
+    row.time = "10:40";
+    row.minute = 0;
+    return row;
+  }
+  const finished = elapsed >= 105;
+  const clock = footballClock(Math.min(elapsed, 120));
+  row.period = finished ? "ft" : clock.period;
+  row.time = finished ? "FT" : clock.label;
+  row.clock = row.time;
+  row.minute = finished ? 90 : clock.minute;
+  row.live = !finished;
+  row.result = footballAt(planFor(row), finished ? 90 : clock.minute, finished);
+  row.score = formatScore("football", row.result);
+  row.stats = {
+    possession: [54, 46],
+    shots: [row.result.home + 3, row.result.away + 2],
+    corners: [row.result.cornersHome || 0, row.result.cornersAway || 0]
+  };
+  if (finished) row.completedAt = row.completedAt || new Date(now || Date.now()).toISOString();
+  return row;
+}
+
+function applyLive(m, when) {
+  const at = when instanceof Date ? when : new Date();
+  if (m?.source === "demo") return applyDemo(m, at);
   if (isOfficial(m)) return applyOfficial(m);
   const row = {
     ...m,
@@ -536,11 +597,14 @@ function settleBet(rec, matches) {
 
 function decorateBet(rec, matches) {
   const legs = rec.legs || decorateLegs(rec, matches);
-  const live = legs.some((l) => l.live) && rec.status !== "Won" && rec.status !== "Lost" && rec.status !== "Void";
+  const closed = rec.status === "Won" || rec.status === "Lost" || rec.status === "Void" || rec.status === "Cashout";
+  const live = legs.some((l) => l.live) && !closed;
+  const cashout = offerCashout(rec, matches);
   return {
     ...rec,
     legs,
     live,
+    cashout,
     toReturn: rec.status === "Lost" ? 0 : rec.payout,
     toWin: rec.status === "Lost" ? 0 : Math.max(0, Number(rec.payout || 0) - Number(rec.stake || 0))
   };
@@ -556,10 +620,86 @@ function minuteOf(match) {
   return match?.live ? 15 : 0;
 }
 
+function correctScoreLive(match, pick) {
+  const key = String(pick || "");
+  if (!/^cs\d\d$/.test(key)) return null;
+  const hs = Number(key[2]);
+  const as = Number(key[3]);
+  const home = Number(match?.result?.home || 0);
+  const away = Number(match?.result?.away || 0);
+  if (match?.period === "ft") return home === hs && away === as ? "won" : "lost";
+  if (home > hs || away > as) return "lost";
+  if (home === hs && away === as) return "hitting";
+  return "open";
+}
+
+function goalsStillNeeded(match, pick) {
+  const key = String(pick || "");
+  if (!/^cs\d\d$/.test(key)) return 1;
+  const home = Number(match?.result?.home || 0);
+  const away = Number(match?.result?.away || 0);
+  return Math.max(0, Number(key[2]) - home) + Math.max(0, Number(key[3]) - away);
+}
+
+function selectionState(match, pick) {
+  if (!match) return "lost";
+  const cs = correctScoreLive(match, pick);
+  if (cs) return cs === "won" ? "won" : cs;
+  if (match.period === "ft") {
+    const st = evalPick(match, pick, true);
+    if (st === "void") return "void";
+    return st === "won" ? "won" : "lost";
+  }
+  const now = evalPick(match, pick, false);
+  if (now === "lost") return "lost";
+  if (now === "won") return "won";
+  return "open";
+}
+
+function offerCashout(rec, matches) {
+  if (!rec || (rec.kind && rec.kind !== "sports")) return null;
+  if (["Won", "Lost", "Void", "Cashout"].includes(rec.status) || rec.paidOut) return null;
+  const legs = rec.selections || [];
+  if (!legs.length) return null;
+  const stake = Number(rec.stake || 0);
+  if (stake <= 0) return null;
+  let booked = 1;
+  let current = 1;
+  let anyLive = false;
+  for (const s of legs) {
+    const match = matchById(s.id, matches);
+    const base = Math.max(1.01, Number(s.bookedOdd || s.odd || 1));
+    if (!match) return 0;
+    if (match.live) anyLive = true;
+    const st = selectionState(match, s.pick);
+    if (st === "lost") return match.live || match.period === "ft" || anyLive ? 0 : null;
+    if (st === "void") continue;
+    booked *= base;
+    if (st === "won" || match.period === "ft") current *= 1;
+    else if (match.live) current *= liveOdd(base, match, s.pick);
+    else current *= base;
+  }
+  if (!anyLive) return null;
+  const raw = stake * (booked / Math.max(current, 1.01)) * 0.9;
+  const cap = stake * booked * 0.97;
+  return Math.max(0, Math.round(Math.min(raw, cap)));
+}
+
 function liveOdd(booked, match, pick) {
   const base = Math.max(1.01, Number(booked) || 1.5);
   if (!match || !match.live || match.period === "ft") return Math.round(base * 100) / 100;
   const progress = Math.max(0, Math.min(1, minuteOf(match) / 90));
+  const cs = correctScoreLive(match, pick);
+  if (cs === "lost") return Math.round(Math.min(80, base * (1 + progress * 3.2)) * 100) / 100;
+  if (cs === "hitting") {
+    const next = 1 + Math.max(0.01, base - 1) * (1 - progress * 0.7);
+    return Math.round(Math.min(80, Math.max(1.01, next)) * 100) / 100;
+  }
+  if (cs === "open") {
+    const need = goalsStillNeeded(match, pick);
+    const next = base * (1 + progress * (0.25 + need * 0.55));
+    return Math.round(Math.min(80, Math.max(1.01, next)) * 100) / 100;
+  }
   const status = evalPick(match, pick, true);
   let next = base;
   if (status === "won") next = 1 + Math.max(0.01, base - 1) * (1 - progress * 0.82);
@@ -585,5 +725,6 @@ module.exports = {
   decorateLegs,
   closedMatchError,
   evalPick,
-  liveOdd
+  liveOdd,
+  offerCashout
 };

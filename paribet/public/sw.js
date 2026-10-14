@@ -1,4 +1,4 @@
-const CACHE = "paribet-app-v22";
+const CACHE = "paribet-app-v23";
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
@@ -6,8 +6,8 @@ self.addEventListener("install", (event) => {
     const scope = self.registration.scope;
     const assets = [
       "",
-      "styles.css?v=27",
-      "app.js?v=49",
+      "styles.css?v=28",
+      "app.js?v=50",
       "manifest.webmanifest",
       "download",
       "icons/icon-192.png",

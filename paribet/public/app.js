@@ -117,10 +117,10 @@ function stopLivePoll() {
 function startLivePoll() {
   if (state.livePoll) return;
   state.livePoll = setInterval(() => {
-    if (["live", "bets", "match"].includes(state.view) || openTickets().length) {
+    if (["home", "sports", "live", "bets", "match"].includes(state.view) || openTickets().length) {
       checkResults(true);
     }
-  }, 30000);
+  }, 15000);
 }
 
 function startSlipPoll() {
@@ -147,10 +147,27 @@ function slipLeg(s) {
   };
 }
 
+function fold(s) {
+  return String(s || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function shareCodeFromLocation() {
+  const fromSearch = new URLSearchParams(location.search);
+  let code = fromSearch.get("code") || fromSearch.get("booking") || "";
+  const hash = location.hash || "";
+  const q = hash.indexOf("?");
+  if (q >= 0) {
+    const hq = new URLSearchParams(hash.slice(q + 1));
+    code = hq.get("code") || hq.get("booking") || code;
+  }
+  return String(code || "").replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 12);
+}
+
 function readBooking() {
-  const q = new URLSearchParams(location.search).get("booking");
-  if (!q) return;
-  state.loadCode = String(q).replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 12);
+  const code = shareCodeFromLocation();
+  if (!code) return;
+  state.loadCode = code;
+  if (code !== state.loadedShare) state.sharePending = true;
 }
 
 function route() {
@@ -325,7 +342,7 @@ function matchesFor(view, opts) {
     if (state.livePeriod !== "all") rows = rows.filter((m) => m.period === state.livePeriod);
   }
   if (view === "sports") {
-    rows = rows.filter((m) => m.period !== "ft");
+    rows = rows.filter((m) => m.period !== "ft" || m.source === "demo");
     const day = state.dayFilter === "today" ? state.catalog.today : state.dayFilter;
     if (day && day !== "all") rows = rows.filter((m) => m.day === day);
   }
@@ -335,8 +352,8 @@ function matchesFor(view, opts) {
   if (view === "sports" && state.listChip === "upcoming") rows = rows.filter((m) => m.period === "pre");
   if (!opts?.skipLeague && state.leagueFilter) rows = rows.filter((m) => m.league === state.leagueFilter);
   if (state.search) {
-    const q = state.search.toLowerCase();
-    rows = rows.filter((m) => (m.home + m.away + m.league).toLowerCase().includes(q));
+    const q = fold(state.search);
+    rows = rows.filter((m) => fold(m.home + " " + m.away + " " + m.league).includes(q));
   }
   return rows;
 }
@@ -352,7 +369,7 @@ function openTickets() {
 }
 
 function settledTickets() {
-  return (state.bets || []).filter((b) => b.kind === "sports" && (b.status === "Won" || b.status === "Lost" || b.status === "Void"));
+  return (state.bets || []).filter((b) => b.kind === "sports" && (b.status === "Won" || b.status === "Lost" || b.status === "Void" || b.status === "Cashout"));
 }
 
 function slipTotals() {
@@ -585,7 +602,7 @@ function loadBetBox() {
         <button class="wide" type="button" id="loadCodeBtn" style="width:auto">Load</button>
         <button class="wide gold" type="button" id="loadPlaceBtn" style="width:auto">Load & place</button>
       </div>
-      ${!state.user ? `<p class="hint">Log in and deposit to load a bet code.</p>` : can ? "" : `<p class="error">Deposit first to load a bet code. <a href="#/deposit">Go to deposit</a></p>`}
+      ${!state.user ? `<p class="hint">A booking link loads the selections. Log in when you are ready to place.</p>` : can ? "" : `<p class="hint">Selections load without a stake. Deposit when you are ready to place.</p>`}
       ${state.lastBetCode ? `<p class="hint">Last code <b>${state.lastBetCode}</b> <button type="button" class="ghost" data-copy="${state.lastBetCode}">Copy</button></p>` : ""}
     </section>`;
 }
@@ -604,7 +621,7 @@ function ticketCard(b) {
       ${legs.map((l) => `
         <div class="ticket-leg">
           <a href="#/match/${l.id}">${l.home} vs ${l.away}</a>
-          <span>${l.live ? '<span class="live-dot">LIVE</span> ' : ""}${l.score || l.clock || ""}${l.result ? " · " + String(l.result).toUpperCase() : ""}</span>
+          <span>${l.live ? '<span class="live-dot">LIVE</span> ' : l.period === "ft" ? "FT " : ""}${l.clock ? esc(l.clock) + " " : ""}${l.score ? "· " + esc(l.score) + " " : ""}${l.result ? " · " + String(l.result).toUpperCase() : ""}</span>
           <div class="hint">${l.market ? l.market + " / " : ""}${l.label || l.pick} @ ${Number(l.odd || 0).toFixed(2)}</div>
         </div>`).join("")}
       <div class="win-line">
@@ -612,6 +629,7 @@ function ticketCard(b) {
         <span>To return ${tzs(toReturn || 0)}</span>
         <span>To win ${tzs(toWin || 0)}</span>
       </div>
+      ${b.cashout != null && (b.status === "Live" || b.status === "Open") ? `<div class="cashout-line"><span>Cashout</span><b>${tzs(b.cashout)}</b>${Number(b.cashout) > 0 ? `<button type="button" data-cashout="${esc(b.id)}">Cash out</button>` : `<em>Not available</em>`}</div>` : ""}
       ${b.code ? `<div class="code-line"><span>Bet code <b>${b.code}</b></span><button type="button" class="ghost" data-copy="${b.code}">Copy</button></div>` : ""}
     </article>`;
 }
@@ -673,10 +691,10 @@ function slipSheet(t, n) {
       ${state.notice && /stake|booking|code|slip|match|odd|expired|removed/i.test(state.notice) ? `<p class="error">${esc(state.notice)}</p>` : ""}
       <button class="wide" type="button" id="bookBetBtn">Book bet</button>
       <div class="slip-share">
-        <button type="button" id="copyCodeBtn">Copy code</button>
+        <button type="button" id="copyCodeBtn">Copy link</button>
         <button type="button" id="shareLinkBtn">Share link</button>
       </div>
-      ${state.lastBetCode ? `<p class="book-code">Code <b>${esc(state.lastBetCode)}</b></p>` : ""}
+      ${state.lastBetCode ? `<p class="book-code"><a href="${esc(bookingUrl(state.lastBetCode))}">${esc(bookingUrl(state.lastBetCode))}</a></p>` : ""}
     </section>`;
 }
 
@@ -739,7 +757,9 @@ function listHtml(title, view) {
       <div class="sec-head"><h2>In-Play</h2><a href="#/live">View all</a></div>
       ${(() => {
         const liveRows = (state.catalog.matches || []).filter((m) => m.live);
-        const show = liveRows.length ? liveRows.slice(0, 8) : rows.slice(0, 8);
+        const demos = liveRows.filter((m) => m.source === "demo");
+        const rest = liveRows.filter((m) => m.source !== "demo");
+        const show = state.search ? rows : (liveRows.length ? [...demos, ...rest].slice(0, 8) : rows.slice(0, 8));
         return show.length ? eventList(show, false, true) : loading ? `<p class="rb-loading">Loading the latest matches…</p>` : `<p class="empty">${state.catalogError || "No events for this filter."}</p>`;
       })()}
       <a class="rb-all" href="#/sports">All Upcoming Matches</a>
@@ -1375,7 +1395,11 @@ function bindView() {
     };
   });
   const search = $("searchBox");
-  if (search) search.onchange = () => { state.search = search.value.trim(); render(); };
+  if (search) {
+    const applySearch = () => { state.search = search.value.trim(); render(true); };
+    search.oninput = applySearch;
+    search.onchange = applySearch;
+  }
   const stake = $("stakeInput");
   if (stake) stake.oninput = () => {
     state.stake = Number(digitsOnly(stake.value, 9) || 0);
@@ -1412,6 +1436,9 @@ function bindView() {
   });
   const pinSave = $("pinSave");
   if (pinSave) pinSave.onclick = saveAccountPin;
+  document.querySelectorAll("[data-cashout]").forEach((b) => {
+    b.onclick = () => cashOutBet(b.dataset.cashout);
+  });
   const place = $("placeBet");
   if (place) place.onclick = placeBet;
   const bookBtn = $("bookBetBtn");
@@ -1511,6 +1538,23 @@ async function submitWithdraw() {
   }
 }
 
+async function cashOutBet(betId) {
+  if (needLogin("cash out")) return;
+  try {
+    const data = await api("/api/bet/cashout", {
+      method: "POST",
+      body: JSON.stringify({ userId: state.user.id, betId })
+    });
+    state.notice = "Cashed out " + tzs(data.cashout || data.bet?.payout || 0);
+    await loadBets();
+    if (state.view !== "bets") go("bets");
+    else render();
+  } catch (err) {
+    state.notice = err.message;
+    render();
+  }
+}
+
 async function placeBet() {
   if (needLogin("place a bet")) return;
   if (state.placing) return;
@@ -1579,14 +1623,14 @@ async function ensureBookedCode() {
 }
 
 function bookingUrl(code) {
-  return location.origin + "/?booking=" + encodeURIComponent(code);
+  return "https://paribet.co.tz/#/share?code=" + encodeURIComponent(code);
 }
 
 async function bookBet() {
   try {
     const code = await ensureBookedCode();
-    await copyText(code);
-    state.notice = "Booking code " + code + " copied. Share it any time.";
+    await copyText(bookingUrl(code));
+    state.notice = "Link copied: " + bookingUrl(code);
     render();
   } catch (err) {
     state.notice = err.message;
@@ -1597,8 +1641,8 @@ async function bookBet() {
 async function copyBookedCode() {
   try {
     const code = state.lastBetCode || await ensureBookedCode();
-    await copyText(code);
-    state.notice = "Code copied: " + code;
+    await copyText(bookingUrl(code));
+    state.notice = "Link copied: " + bookingUrl(code);
     render();
   } catch (err) {
     state.notice = err.message;
@@ -1696,7 +1740,10 @@ async function loadBetCode(placeToo) {
     }
     const data = await api("/api/bet/load", { method: "POST", body: JSON.stringify({ userId: state.user?.id || "", code }) });
     applyLoadedSlip(data);
-    state.notice = data.notice || "Bet code loaded. Place it when you are ready.";
+    state.slipOpen = state.slip.length > 0;
+    state.loadedShare = data.code || state.loadCode;
+    state.sharePending = false;
+    state.notice = data.notice || "Booking loaded. Add a stake when you want to place it.";
     if (state.view === "bets") go("sports");
     else render();
   } catch (err) {
@@ -2193,7 +2240,11 @@ function setupInstallBar() {
   }
 }
 
-window.addEventListener("hashchange", route);
+window.addEventListener("hashchange", () => {
+  readBooking();
+  route();
+  if (state.sharePending) loadBetCode(false);
+});
 
 (async function boot() {
   loadUser();
