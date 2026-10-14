@@ -263,7 +263,7 @@ function applyDemo(m, now) {
   };
   const p = eatParts(now || new Date());
   const today = `${p.year}-${p.month}-${p.day}`;
-  const nowMin = Number(p.hour) * 60 + Number(p.minute);
+  const nowMin = Number(p.hour) * 60 + Number(p.minute) + Number(p.second || 0) / 60;
   const kick = Number(row.kickMin ?? (11 * 60 + 35));
   let elapsed = nowMin - kick;
   if (row.day && row.day < today) elapsed = 200;
@@ -276,16 +276,38 @@ function applyDemo(m, now) {
     row.clock = row.time || "11:35";
     row.time = row.clock;
     row.minute = 0;
+    row.demoMinutes = 16;
     return row;
   }
-  const finished = elapsed >= 105;
-  const clock = footballClock(Math.min(elapsed, 120));
-  row.period = finished ? "ft" : clock.period;
-  row.time = finished ? "FT" : clock.label;
-  row.clock = row.time;
-  row.minute = finished ? 90 : clock.minute;
+  let period = "1h";
+  let minute = 1;
+  let label = "1'";
+  let finished = false;
+  if (elapsed < 8) {
+    minute = Math.min(8, Math.floor(elapsed) + 1);
+    label = minute + "'";
+    period = "1h";
+  } else if (elapsed < 10) {
+    minute = 8;
+    label = "HT";
+    period = "ht";
+  } else if (elapsed < 18) {
+    minute = Math.min(16, 9 + Math.floor(elapsed - 10));
+    label = minute + "'";
+    period = "2h";
+  } else {
+    minute = 16;
+    label = "FT";
+    period = "ft";
+    finished = true;
+  }
+  row.period = period;
+  row.time = label;
+  row.clock = label;
+  row.minute = minute;
   row.live = !finished;
-  row.result = footballAt(planFor(row), finished ? 90 : clock.minute, finished);
+  row.demoMinutes = 16;
+  row.result = footballAt(planFor(row), minute, finished);
   row.score = formatScore("football", row.result);
   row.stats = {
     possession: [54, 46],
@@ -688,7 +710,8 @@ function offerCashout(rec, matches) {
 function liveOdd(booked, match, pick) {
   const base = Math.max(1.01, Number(booked) || 1.5);
   if (!match || !match.live || match.period === "ft") return Math.round(base * 100) / 100;
-  const progress = Math.max(0, Math.min(1, minuteOf(match) / 90));
+  const span = Number(match?.demoMinutes) > 0 ? Number(match.demoMinutes) : 90;
+  const progress = Math.max(0, Math.min(1, minuteOf(match) / span));
   const cs = correctScoreLive(match, pick);
   if (cs === "lost") return Math.round(Math.min(80, base * (1 + progress * 3.2)) * 100) / 100;
   if (cs === "hitting") {

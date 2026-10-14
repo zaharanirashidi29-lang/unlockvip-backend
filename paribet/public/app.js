@@ -125,14 +125,14 @@ function startLivePoll() {
     if (["home", "sports", "live", "bets", "match"].includes(state.view) || openTickets().length) {
       checkResults(true);
     }
-  }, 15000);
+  }, 8000);
 }
 
 function startSlipPoll() {
   if (state.slipPoll) return;
   state.slipPoll = setInterval(() => {
     if (state.slip.some((s) => s.live) && !state.placing) repriceSlip();
-  }, 15000);
+  }, 8000);
 }
 
 function slipLeg(s) {
@@ -179,7 +179,7 @@ function route() {
   stopAviatorPoll();
   const raw = (location.hash || "#/home").replace("#/", "");
   const parts = raw.split("/").filter(Boolean);
-  const page = parts[0] || "home";
+  const page = (parts[0] || "home").split("?")[0];
   if (page === "match" && parts[1]) {
     state.view = "match";
     state.matchId = parts[1];
@@ -192,7 +192,7 @@ function route() {
   }
   const map = {
     register: "register", join: "register", login: "login",
-    home: "home", sports: "sports", live: "live", bets: "bets", account: "account",
+    home: "home", sports: "sports", live: "live", bets: "bets", account: "account", share: "home",
     promo: "promo", esports: "esports", slots: "slots", casino: "casino",
     games: "games", tv: "tv", aviator: "aviator", mines: "mines", dice: "dice",
     roulette: "roulette", deposit: "deposit", withdraw: "withdraw"
@@ -1761,9 +1761,10 @@ async function loadBetCode(placeToo) {
     state.slipOpen = state.slip.length > 0;
     state.loadedShare = data.code || state.loadCode;
     state.sharePending = false;
-    state.notice = data.notice || "Booking loaded. Add a stake when you want to place it.";
-    if (state.view === "bets") go("sports");
+    state.notice = data.notice || "Booking loaded in your betslip. Enter the stake, then place the bet.";
+    if (state.view !== "home" && state.view !== "sports" && state.view !== "live") go("home");
     else render();
+    setTimeout(() => { const box = $("stakeInput"); if (box) box.focus(); }, 60);
   } catch (err) {
     if (/insufficient|not enough/i.test(err.message)) {
       showNeedDeposit("Insufficient balance. Please deposit");

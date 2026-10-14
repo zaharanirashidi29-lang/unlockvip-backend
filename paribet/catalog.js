@@ -214,7 +214,7 @@ const DEMO_MATCHES = [
     league: "Demo",
     home: "CF City",
     away: "Atlético Heroes",
-    script: { home: 1, away: 0, htHome: 1, htAway: 0, times: [{ min: 34, side: "home" }] }
+    script: { home: 1, away: 0, htHome: 1, htAway: 0, times: [{ min: 5, side: "home" }] }
   }, "cs10", 10.97),
   demoMatch({
     id: "demo-rc-wanderers",
@@ -227,10 +227,10 @@ const DEMO_MATCHES = [
       htHome: 2,
       htAway: 0,
       times: [
-        { min: 18, side: "home" },
-        { min: 41, side: "home" },
-        { min: 63, side: "away" },
-        { min: 78, side: "home" }
+        { min: 3, side: "home" },
+        { min: 6, side: "home" },
+        { min: 11, side: "away" },
+        { min: 14, side: "home" }
       ]
     }
   }, "cs31", 22.07)
