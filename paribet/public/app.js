@@ -165,6 +165,8 @@ function shareCodeFromLocation() {
     const hq = new URLSearchParams(hash.slice(q + 1));
     code = hq.get("code") || hq.get("booking") || code;
   }
+  const pathHit = String(location.pathname || "").match(/\/share\/([A-Za-z0-9]+)/i);
+  if (pathHit) code = pathHit[1];
   return String(code || "").replace(/[^a-z0-9]/gi, "").toUpperCase().slice(0, 12);
 }
 
@@ -744,7 +746,7 @@ function homeFront(matches) {
   const demos = (matches || []).filter((m) => m.source === "demo" && m.period !== "ft");
   let html = "";
   if (demos.length) {
-    html += `<div class="sec-head"><h2>Demo · 11:35</h2></div>${eventList(demos, false, false)}`;
+    html += `<div class="sec-head"><h2>Demo · 11:55</h2></div>${eventList(demos, false, false)}`;
   }
   for (const [title, keys] of leagues) {
     const rows = (matches || []).filter((m) => m.period !== "ft" && keys.some((k) => fold(m.league).includes(fold(k)))).slice(0, 3);
@@ -1646,7 +1648,10 @@ async function ensureBookedCode() {
 }
 
 function bookingUrl(code) {
-  return "https://paribet.co.tz/#/share?code=" + encodeURIComponent(code);
+  const origin = (location.origin && location.protocol.startsWith("http"))
+    ? location.origin
+    : "https://paribet-tz.onrender.com";
+  return origin + "/share/" + encodeURIComponent(code);
 }
 
 async function bookBet() {
