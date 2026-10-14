@@ -211,7 +211,7 @@ function demoMatch(row, key, odd) {
 const DEMO_MATCHES = [
   demoMatch({
     id: "demo-cf-city",
-    league: "Demo",
+    league: "",
     home: "CF City",
     away: "Atlético Heroes",
     script: { home: 1, away: 0, htHome: 1, htAway: 0, times: [{ min: 5, side: "home" }] }

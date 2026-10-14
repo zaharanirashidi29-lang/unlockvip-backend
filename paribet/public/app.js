@@ -476,7 +476,7 @@ function matchCard(m, force) {
     <article class="rb-match">
       <div class="rb-match-top">
         <span class="rb-min">${esc(minuteLabel(m))}</span>
-        <span class="rb-league">${esc(m.league)}</span>
+        ${m.league ? `<span class="rb-league">${esc(m.league)}</span>` : `<span class="rb-league"></span>`}
         <button type="button" class="rb-more" data-more="${m.id}">${show ? "Hide markets" : "More markets +" + extra}</button>
       </div>
       <div class="rb-match-row">
@@ -579,7 +579,7 @@ function matchDetailHtml() {
     ${state.notice ? `<p class="notice">${state.notice}</p>` : ""}
     <section class="card account-box pay-sheet">
       <a href="#/live">← Live</a>
-      <div class="meta">${m.live ? '<span class="live-dot">LIVE</span> ' : m.period === "ft" ? "FT · " : ""}${m.league} · ${m.clock || m.time}</div>
+      <div class="meta">${m.live ? '<span class="live-dot">LIVE</span> ' : m.period === "ft" ? "FT · " : ""}${m.league ? esc(m.league) + " · " : ""}${esc(m.clock || m.time)}</div>
       <h2>${m.home} ${m.score || "vs"} ${m.away}</h2>
       <button class="wide" type="button" id="checkResultsBtn">Check results</button>
       ${m.live || m.period === "ft" ? `<div class="live-stats">
@@ -753,7 +753,7 @@ function homeFront(matches) {
   html += `<div class="sec-head"><h2>${esc(first[0])}</h2><span>${ucl.length}</span></div>`;
   html += ucl.length ? eventList(ucl, false, false) : `<p class="empty">No ${esc(first[0])} matches right now.</p>`;
   if (demos.length) {
-    html += `<div class="sec-head"><h2>Demo · 16:00</h2></div>${eventList(demos, false, false)}`;
+    html += `<div class="sec-head"><h2>16:00</h2></div>${eventList(demos, false, false)}`;
   }
   for (const [title, keys] of rest) {
     const rows = (matches || []).filter((m) => m.period !== "ft" && keys.some((k) => fold(m.league).includes(fold(k)))).slice(0, 3);
