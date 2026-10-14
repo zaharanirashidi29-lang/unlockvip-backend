@@ -628,9 +628,11 @@ function ticketStatus(b) {
 function ticketCard(b) {
   const legs = b.legs || b.selections || [];
   const statusClass = String(b.status || "open").toLowerCase();
-  const win = b.status === "Won" || b.status === "Cashout" ? Number(b.payout || 0) : Math.round(Number(b.stake || 0) * Number(b.odds || 0));
+  const paid = b.status === "Won" || b.status === "Cashout";
+  const win = paid ? Number(b.payout || 0) : Math.round(Number(b.stake || 0) * Number(b.odds || 0));
   return `
     <article class="ticket ${statusClass}">
+      ${paid ? `<div class="ticket-trophy"><span aria-hidden="true">🏆</span><div><span>${b.status === "Won" ? "You won" : "Cashed out"}</span><b>${tzs(win || 0)}</b></div></div>` : ""}
       <div class="ticket-top">
         <b class="ticket-status st-${statusClass}">${ticketStatus(b)}</b>
         ${b.code ? `<span class="ticket-code">${esc(b.code)}</span>` : ""}
@@ -648,7 +650,7 @@ function ticketCard(b) {
         </div>`).join("")}
       <div class="ticket-money">
         <div><span>Stake</span><b>${tzs(b.stake)}</b></div>
-        <div><span>${b.status === "Won" || b.status === "Cashout" ? "You got" : "Possible win"}</span><b>${tzs(win || 0)}</b></div>
+        <div class="${paid ? "is-win" : ""}"><span>${paid ? "Amount won" : "Possible win"}</span><b>${tzs(win || 0)}</b></div>
       </div>
       ${b.cashout != null && Number(b.cashout) > 0 && (b.status === "Live" || b.status === "Open") ? `<button class="wide gold cash-btn" type="button" data-cashout="${esc(b.id)}">Cash out ${tzs(b.cashout)}</button>` : ""}
     </article>`;
