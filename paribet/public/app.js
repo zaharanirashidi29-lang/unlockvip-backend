@@ -695,7 +695,7 @@ function slipSheet(t, n) {
       <div class="stake-chips">
         ${chips.map((amt) => `<button type="button" data-stake="${amt}" class="${Number(state.stake) === amt ? "on" : ""}">${amt.toLocaleString("en-TZ")}</button>`).join("")}
       </div>
-      <input class="input stake-input" id="stakeInput" inputmode="numeric" value="${state.stake || ""}" placeholder="${demo ? "Or type a virtual stake" : "Or type a stake"}" aria-label="Stake">
+      <input class="input stake-input" id="stakeInput" inputmode="decimal" value="${state.stake || ""}" placeholder="${demo ? "Or type a virtual stake" : "Or type a stake"}" aria-label="Stake">
       <div class="payout-line"><span>Possible win</span><b id="slipReturns">${tzs(t.returns)}</b></div>
       <button class="wide gold" type="button" id="placeBet" ${state.placing ? "disabled" : ""}>${state.placing ? "Placing…" : "Place bet"}</button>
       ${state.notice && /stake|minimum|insufficient|expired|removed/i.test(state.notice) ? `<p class="error">${esc(state.notice)}</p>` : ""}
@@ -756,6 +756,25 @@ function homeFront(matches) {
   return html;
 }
 
+function matchListHtml() {
+  if (state.view === "home") {
+    const rows = matchesFor("sports", { skipLeague: true });
+    const loading = !state.catalogError && !(state.catalog.matches || []).length;
+    if (state.search) return rows.length ? eventList(rows, false, false) : `<p class="empty">No matches found.</p>`;
+    return loading ? `<p class="rb-loading">Loading the latest matches…</p>` : homeFront(state.catalog.matches || []);
+  }
+  const view = state.view === "live" ? "live" : state.view === "esports" ? "esports" : "sports";
+  const todayPin = showingToday(view);
+  const base = matchesFor(view, { skipLeague: true });
+  const picked = state.leagueFilter ? base.filter((m) => m.league === state.leagueFilter) : base;
+  const rows = todayPin ? pinTopFive(picked) : picked;
+  const loading = !state.catalogError && !(state.catalog.matches || []).length;
+  const title = view === "live" ? "In-Play" : "Matches";
+  return `<div class="sec-head"><h2>${esc(title)}</h2><span>${rows.length}</span></div>${
+    rows.length ? eventList(rows, todayPin) : loading ? `<p class="rb-loading">Loading…</p>` : `<p class="empty">No matches found.</p>`
+  }`;
+}
+
 function listHtml(title, view) {
   const todayPin = showingToday(view);
   const base = matchesFor(view, { skipLeague: true });
@@ -782,10 +801,10 @@ function listHtml(title, view) {
           <a href="#/bets">My Bets</a>
         </div>
       </section>
-      ${state.showSearch ? `<div class="filters"><input class="input" id="searchBox" placeholder="Search team or league" value="${esc(state.search)}"></div>` : ""}
-      ${state.search
+      <div class="search-bar"><input class="input" id="searchBox" type="search" enterkeyhint="search" autocomplete="off" placeholder="Search team or league" value="${esc(state.search)}"></div>
+      <div id="matchList">${state.search
         ? (rows.length ? eventList(rows, false, false) : `<p class="empty">No matches found.</p>`)
-        : (loading ? `<p class="rb-loading">Loading the latest matches…</p>` : homeFront(state.catalog.matches || []))}
+        : (loading ? `<p class="rb-loading">Loading the latest matches…</p>` : homeFront(state.catalog.matches || []))}</div>
       <a class="rb-all" href="#/sports">All Upcoming Matches</a>
       ${loadBetBox()}
       <section class="promo-card">
@@ -798,8 +817,8 @@ function listHtml(title, view) {
   return `
     ${topToolsHtml()}
     ${state.notice ? `<p class="notice">${state.notice}</p>` : ""}
+    <div class="search-bar"><input class="input" id="searchBox" type="search" enterkeyhint="search" autocomplete="off" placeholder="Search team or league" value="${esc(state.search)}"></div>
     <div class="filters">
-      <input class="input" id="searchBox" placeholder="Search team or league" value="${state.search}">
       ${view === "sports" ? chips.map(([id, label]) =>
         `<button type="button" data-chip="${id}" class="${state.listChip === id ? "on" : ""}">${label}</button>`
       ).join("") : ""}
@@ -834,6 +853,7 @@ function listHtml(title, view) {
       leagues.map(([name]) => `<button type="button" data-league="${esc(name)}" class="${state.leagueFilter === name ? "on" : ""}">${esc(name)}</button>`).join("")
     }</div>` : ""}
     ${view === "live" ? `<a class="av-bar" href="#/aviator"><span class="live-dot">LIVE</span> Aviator <b id="liveAviatorChip">1.00x</b><span>Open table</span></a>` : ""}
+    <div id="matchList">
     <div class="sec-head"><h2>${esc(title)}</h2><span>${rows.length}</span></div>
     ${rows.length ? eventList(rows, todayPin) : loading ? `<p class="rb-loading">Loading…</p>` : `<p class="empty">${
       state.catalogError
@@ -842,6 +862,7 @@ function listHtml(title, view) {
           ? "No live matches right now. Check upcoming or results."
           : "No events for this filter."
     }</p>`}
+    </div>
   `;
 }
 
@@ -1141,13 +1162,11 @@ function withdrawFormHtml() {
   return `
     <section class="card account-box pay-sheet">
       <h2>Withdraw money</h2>
-      <p class="hint">Phone number, amount, then PIN. Numbers only.</p>
+      <p class="hint">Phone number and amount. Numbers only.</p>
       <label class="field" for="wdPhone">Phone number</label>
       <input class="input" id="wdPhone" inputmode="numeric" pattern="[0-9]*" autocomplete="tel" maxlength="12" placeholder="07XXXXXXXX" value="${phone}">
       <label class="field" for="wdAmount">Amount</label>
       <input class="input" id="wdAmount" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="9" placeholder="Amount">
-      <label class="field" for="wdPin">PIN</label>
-      <input class="input" id="wdPin" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="12" placeholder="PIN">
       <button class="wide gold" type="button" id="wdBtn">Withdraw</button>
       <p class="notice" id="wdMsg"></p>
     </section>`;
@@ -1267,23 +1286,9 @@ function render(keepScroll) {
   else stopLivePoll();
 }
 
-function bindView() {
-  document.querySelectorAll("[data-auth]").forEach((b) => {
-    b.onclick = () => go(b.dataset.auth === "join" ? "register" : "login");
-  });
-  document.querySelectorAll("[data-method]").forEach((b) => {
-    b.onclick = () => { state.loginMethod = b.dataset.method; render(); };
-  });
-  document.querySelectorAll("[data-filter]").forEach((b) => {
-    b.onclick = () => { state.sportFilter = b.dataset.filter; render(); };
-  });
-  document.querySelectorAll("[data-day]").forEach((b) => {
-    b.onclick = () => { state.dayFilter = b.dataset.day; render(); };
-  });
-  document.querySelectorAll("[data-sport]").forEach((a) => {
-    a.onclick = (e) => { e.preventDefault(); state.sportFilter = a.dataset.sport; go("sports"); };
-  });
-  document.querySelectorAll("[data-add]").forEach((b) => {
+function bindCards(root) {
+  const scope = root || document;
+  scope.querySelectorAll("[data-add]").forEach((b) => {
     b.onclick = () => {
       const [id, pick, odd] = b.dataset.add.split("|");
       const match = findMatch(id);
@@ -1314,6 +1319,42 @@ function bindView() {
       render(true);
     };
   });
+  scope.querySelectorAll("[data-more]").forEach((b) => {
+    b.onclick = async () => {
+      const id = b.dataset.more;
+      const opening = !state.openCards[id];
+      state.openCards[id] = opening;
+      render(true);
+      if (!opening || state.marketCache[id]) return;
+      state.marketLoading[id] = true;
+      render(true);
+      try {
+        const data = await api("/api/match/" + encodeURIComponent(id));
+        if (data.match?.markets?.length) state.marketCache[id] = data.match.markets;
+      } catch (_) {}
+      state.marketLoading[id] = false;
+      render(true);
+    };
+  });
+}
+
+function bindView() {
+  document.querySelectorAll("[data-auth]").forEach((b) => {
+    b.onclick = () => go(b.dataset.auth === "join" ? "register" : "login");
+  });
+  document.querySelectorAll("[data-method]").forEach((b) => {
+    b.onclick = () => { state.loginMethod = b.dataset.method; render(); };
+  });
+  document.querySelectorAll("[data-filter]").forEach((b) => {
+    b.onclick = () => { state.sportFilter = b.dataset.filter; render(); };
+  });
+  document.querySelectorAll("[data-day]").forEach((b) => {
+    b.onclick = () => { state.dayFilter = b.dataset.day; render(); };
+  });
+  document.querySelectorAll("[data-sport]").forEach((a) => {
+    a.onclick = (e) => { e.preventDefault(); state.sportFilter = a.dataset.sport; go("sports"); };
+  });
+  bindCards(document);
   document.querySelectorAll("[data-remove]").forEach((b) => {
     b.onclick = () => {
       const [id, pick] = b.dataset.remove.split("|");
@@ -1340,23 +1381,6 @@ function bindView() {
   });
   document.querySelectorAll("[data-league]").forEach((b) => {
     b.onclick = () => { state.leagueFilter = b.dataset.league || ""; render(true); };
-  });
-  document.querySelectorAll("[data-more]").forEach((b) => {
-    b.onclick = async () => {
-      const id = b.dataset.more;
-      const opening = !state.openCards[id];
-      state.openCards[id] = opening;
-      render(true);
-      if (!opening || state.marketCache[id]) return;
-      state.marketLoading[id] = true;
-      render(true);
-      try {
-        const data = await api("/api/match/" + encodeURIComponent(id));
-        if (data.match?.markets?.length) state.marketCache[id] = data.match.markets;
-      } catch (_) {}
-      state.marketLoading[id] = false;
-      render(true);
-    };
   });
   document.querySelectorAll("[data-stake]").forEach((b) => {
     b.onclick = () => {
@@ -1412,9 +1436,13 @@ function bindView() {
   });
   const search = $("searchBox");
   if (search) {
-    const applySearch = () => { state.search = search.value.trim(); render(true); };
-    search.oninput = applySearch;
-    search.onchange = applySearch;
+    search.oninput = () => {
+      state.search = search.value.trim();
+      const list = $("matchList");
+      if (!list) return;
+      list.innerHTML = matchListHtml();
+      bindCards(list);
+    };
   }
   const stake = $("stakeInput");
   if (stake) stake.oninput = () => {
@@ -1525,27 +1553,23 @@ async function onAuth(e) {
 async function submitWithdraw() {
   const phoneEl = $("wdPhone");
   const amountEl = $("wdAmount");
-  const pinEl = $("wdPin");
   const msg = $("wdMsg");
   const btn = $("wdBtn");
   const phone = digitsOnly(phoneEl?.value, 12);
   const amount = digitsOnly(amountEl?.value, 9);
-  const pin = digitsOnly(pinEl?.value, 12);
   if (msg) { msg.className = "notice"; msg.textContent = ""; }
   if (!phone) { if (msg) { msg.className = "error"; msg.textContent = "Enter the phone number"; } return; }
   if (!amount || Number(amount) <= 0) { if (msg) { msg.className = "error"; msg.textContent = "Enter the amount"; } return; }
-  if (!pin) { if (msg) { msg.className = "error"; msg.textContent = "Enter the PIN"; } return; }
   if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
   try {
     const res = await fetch("https://unlockvip-backend-1.onrender.com/withdraw-request", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ phone, pin, amount: Number(amount) })
+      body: JSON.stringify({ phone, amount: Number(amount) })
     });
     const data = await res.json();
     if (!res.ok || !data.success) throw new Error(data.error || "Could not send");
     if (amountEl) amountEl.value = "";
-    if (pinEl) pinEl.value = "";
     if (msg) { msg.className = "notice"; msg.textContent = "Withdraw request sent."; }
   } catch (err) {
     if (msg) { msg.className = "error"; msg.textContent = err.message || "Could not send"; }
@@ -1794,7 +1818,11 @@ async function checkResults(silent) {
       state.notice = "Results updated. Won tickets add cash; lost tickets keep the stake deducted.";
       if (state.view === "live") state.liveBoard = "results";
     }
-    if (!silent || !typing) render();
+    const searching = document.activeElement && document.activeElement.id === "searchBox";
+    if (searching && $("matchList")) {
+      $("matchList").innerHTML = matchListHtml();
+      bindCards($("matchList"));
+    } else if (!silent || !typing) render();
     else renderAuthLinks();
   } catch (err) {
     if (!silent) {
@@ -2222,10 +2250,17 @@ async function loadBets() {
 $("menuBtn").onclick = () => { $("sidebar").classList.add("open"); $("scrim").hidden = false; };
 const searchBtn = $("searchBtn");
 if (searchBtn) searchBtn.onclick = () => {
+  const open = () => {
+    const box = $("searchBox");
+    if (!box) return;
+    box.focus();
+    box.scrollIntoView({ block: "center" });
+  };
+  if ($("searchBox")) { open(); return; }
   state.showSearch = true;
-  if (state.view !== "home" && state.view !== "sports") go("home");
+  if (state.view !== "home" && state.view !== "sports" && state.view !== "live") go("home");
   else render();
-  setTimeout(() => { const box = $("searchBox"); if (box) box.focus(); }, 0);
+  setTimeout(open, 0);
 };
 const navSlip = $("navSlip");
 if (navSlip) navSlip.onclick = () => {

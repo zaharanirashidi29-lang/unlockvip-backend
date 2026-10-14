@@ -816,10 +816,10 @@ async function makeBetCode() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   for (let i = 0; i < 12; i++) {
     let code = "";
-    for (let n = 0; n < 8; n++) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+    for (let n = 0; n < 4; n++) code += alphabet[Math.floor(Math.random() * alphabet.length)];
     if (!(await codeTaken(code))) return code;
   }
-  return nid().slice(-8).toUpperCase();
+  return nid().slice(-4).toUpperCase();
 }
 
 async function findByCode(code) {

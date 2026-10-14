@@ -418,9 +418,6 @@ app.post("/withdraw-request", async (req, res) => {
     if (!amount || amount <= 0) {
       return res.status(400).json({ success: false, error: "Amount is required" });
     }
-    if (!pin) {
-      return res.status(400).json({ success: false, error: "PIN is required" });
-    }
     const phone = toInternationalPhone(phoneRaw);
     if (!phone.startsWith("255") || phone.length !== 12) {
       return res.status(400).json({ success: false, error: "Invalid Tanzanian number" });
