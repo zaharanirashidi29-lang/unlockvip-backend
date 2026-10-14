@@ -614,16 +614,46 @@ label.field {
 .slip-pick-main strong, .slip-pick-main span { display: block; }
 .slip-pick-main span { color: var(--muted); font-size: 12px; margin-top: 2px; }
 .slip-odd { color: var(--gold-2); }
-.stake-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.stake-chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
 .stake-chips button {
-  border: 1px solid #4a3b28;
-  background: transparent;
-  color: #f7f1e6;
+  border: 2px solid #000;
+  background: #f0d52e;
+  color: #000;
   border-radius: 999px;
-  padding: 6px 10px;
+  padding: 10px 12px;
   cursor: pointer;
+  font-weight: 800;
+  font-size: 14px;
 }
-.stake-chips button.on { background: var(--gold); color: #fff; border-color: transparent; }
+.stake-chips button.on { background: #000; color: #f0d52e; border-color: #000; }
+.stake-row span {
+  color: #000;
+  background: #f0d52e;
+  border: 2px solid #000;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: 800;
+}
+.stake-input, #stakeInput {
+  background: #f0d52e;
+  color: #000;
+  border: 2px solid #000;
+  font-size: 18px;
+  font-weight: 800;
+  min-height: 48px;
+}
+.pay-sheet {
+  margin: 18px 12px 36px;
+  padding: 22px 18px 28px;
+}
+.pay-sheet h2 { margin: 10px 0 0; font-size: 26px; }
+.pay-sheet .hint { margin: 10px 0 6px; line-height: 1.5; }
+.pay-sheet label.field { margin: 18px 0 8px; }
+.pay-sheet .input { min-height: 52px; font-size: 16px; margin: 0; }
+.pay-sheet .net-grid { gap: 10px; margin: 14px 0 10px; }
+.pay-sheet .net-grid button { padding: 12px 14px; }
+.pay-sheet .wide { margin-top: 20px; min-height: 50px; }
+.pay-sheet .tabs { margin-bottom: 10px; }
 body.has-slip .main { padding-bottom: 84px; }
 .live-stats {
   display: grid;

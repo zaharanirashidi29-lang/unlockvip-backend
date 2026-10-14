@@ -50,6 +50,11 @@ function esc(s) {
 function digitsOnly(v, max) { return String(v || "").replace(/\D/g, "").slice(0, max || 20); }
 function tzs(n) { return "TZS " + Number(n || 0).toLocaleString("en-TZ"); }
 function wallet(u) { return Number(u?.balance || 0) + Number(u?.bonusBalance || 0); }
+function playMoney(u) { return Number(u?.virtualBalance || 0); }
+
+function slipIsDemo() {
+  return state.slip.length > 0 && state.slip.every((s) => String(s.id || "").startsWith("demo-"));
+}
 const BASE = typeof window !== "undefined" && window.PARIBET_BASE ? window.PARIBET_BASE : "";
 
 function loadUser() {
@@ -209,7 +214,7 @@ async function refreshMe() {
     const data = await api("/api/me?userId=" + encodeURIComponent(state.user.id));
     saveUser(data.user);
     const chip = document.querySelector(".wallet-chip");
-    if (chip) chip.textContent = tzs(wallet(state.user));
+    if (chip) chip.textContent = tzs(playMoney(state.user)) + " virtual";
     if (Date.now() - depositSyncAt > 15000) {
       depositSyncAt = Date.now();
       syncOpenDeposits();
@@ -221,7 +226,7 @@ function renderAuthLinks() {
   const box = $("authLinks");
   if (state.user) {
     box.innerHTML = `
-      <span class="bal">${tzs(wallet(state.user))}</span>
+      <span class="bal">${tzs(playMoney(state.user))} virtual</span>
       <a class="btn-green" href="#/deposit">Deposit</a>
       <a class="btn-ghost" href="#/withdraw">Withdraw</a>
       <a class="btn-ghost" href="#/account">${esc(state.user.username)}</a>
@@ -568,7 +573,7 @@ function matchDetailHtml() {
   return `
     ${topToolsHtml()}
     ${state.notice ? `<p class="notice">${state.notice}</p>` : ""}
-    <section class="card account-box">
+    <section class="card account-box pay-sheet">
       <a href="#/live">← Live</a>
       <div class="meta">${m.live ? '<span class="live-dot">LIVE</span> ' : m.period === "ft" ? "FT · " : ""}${m.league} · ${m.clock || m.time}</div>
       <h2>${m.home} ${m.score || "vs"} ${m.away}</h2>
@@ -602,7 +607,7 @@ function loadBetBox() {
         <button class="wide" type="button" id="loadCodeBtn" style="width:auto">Load</button>
         <button class="wide gold" type="button" id="loadPlaceBtn" style="width:auto">Load & place</button>
       </div>
-      ${!state.user ? `<p class="hint">A booking link loads the selections. Log in when you are ready to place.</p>` : can ? "" : `<p class="hint">Selections load without a stake. Deposit when you are ready to place.</p>`}
+      ${!state.user ? `<p class="hint">A booking link loads the selections. Demo codes place with virtual money.</p>` : can ? "" : `<p class="hint">Demo booking codes use virtual money and do not need a deposit. Other codes still need a deposit.</p>`}
       ${state.lastBetCode ? `<p class="hint">Last code <b>${state.lastBetCode}</b> <button type="button" class="ghost" data-copy="${state.lastBetCode}">Copy</button></p>` : ""}
     </section>`;
 }
@@ -649,7 +654,8 @@ function topToolsHtml() {
 }
 
 function slipSheet(t, n) {
-  const chips = [60000, 100000, 150000, 200000];
+  const demo = slipIsDemo();
+  const chips = demo ? [1000, 5000, 10000, 20000] : [60000, 100000, 150000, 200000];
   return `
     <section class="slip-sheet" role="dialog" aria-label="Betslip">
       <div class="slip-head">
@@ -679,8 +685,8 @@ function slipSheet(t, n) {
         ${chips.map((amt) => `<button type="button" data-stake="${amt}" class="${Number(state.stake) === amt ? "on" : ""}">${amt.toLocaleString("en-TZ")}</button>`).join("")}
       </div>
       <div class="stake-row">
-        <input class="input" id="stakeInput" inputmode="numeric" value="${state.stake || ""}" placeholder="Stake to place" aria-label="Stake">
-        <span>Stake TZS</span>
+        <input class="input stake-input" id="stakeInput" inputmode="numeric" value="${state.stake || ""}" placeholder="${demo ? "Virtual stake" : "Stake to place"}" aria-label="${demo ? "Virtual stake" : "Stake"}">
+        <span>${demo ? "Virtual TZS" : "Stake TZS"}</span>
       </div>
       <div class="win-box">
         <div><span>Total odds</span><b>${t.odds.toFixed(2)}</b></div>
@@ -727,6 +733,27 @@ function paintSlip() {
   document.body.classList.toggle("slip-open", on && state.slipOpen);
 }
 
+function homeFront(matches) {
+  const leagues = [
+    ["Premier League", ["premier league"]],
+    ["La Liga", ["la liga", "laliga"]],
+    ["Serie A", ["serie a"]],
+    ["Bundesliga", ["bundesliga"]],
+    ["Ligue 1", ["ligue 1"]]
+  ];
+  const demos = (matches || []).filter((m) => m.source === "demo" && m.period !== "ft");
+  let html = "";
+  if (demos.length) {
+    html += `<div class="sec-head"><h2>Demo · 11:35</h2></div>${eventList(demos, false, false)}`;
+  }
+  for (const [title, keys] of leagues) {
+    const rows = (matches || []).filter((m) => m.period !== "ft" && keys.some((k) => fold(m.league).includes(fold(k)))).slice(0, 3);
+    html += `<div class="sec-head"><h2>${esc(title)}</h2><span>${rows.length}</span></div>`;
+    html += rows.length ? eventList(rows, false, false) : `<p class="empty">No ${esc(title)} matches right now.</p>`;
+  }
+  return html;
+}
+
 function listHtml(title, view) {
   const todayPin = showingToday(view);
   const base = matchesFor(view, { skipLeague: true });
@@ -754,14 +781,9 @@ function listHtml(title, view) {
         </div>
       </section>
       ${state.showSearch ? `<div class="filters"><input class="input" id="searchBox" placeholder="Search team or league" value="${esc(state.search)}"></div>` : ""}
-      <div class="sec-head"><h2>In-Play</h2><a href="#/live">View all</a></div>
-      ${(() => {
-        const liveRows = (state.catalog.matches || []).filter((m) => m.live);
-        const demos = liveRows.filter((m) => m.source === "demo");
-        const rest = liveRows.filter((m) => m.source !== "demo");
-        const show = state.search ? rows : (liveRows.length ? [...demos, ...rest].slice(0, 8) : rows.slice(0, 8));
-        return show.length ? eventList(show, false, true) : loading ? `<p class="rb-loading">Loading the latest matches…</p>` : `<p class="empty">${state.catalogError || "No events for this filter."}</p>`;
-      })()}
+      ${state.search
+        ? (rows.length ? eventList(rows, false, false) : `<p class="empty">No matches found.</p>`)
+        : (loading ? `<p class="rb-loading">Loading the latest matches…</p>` : homeFront(state.catalog.matches || []))}
       <a class="rb-all" href="#/sports">All Upcoming Matches</a>
       ${loadBetBox()}
       <section class="promo-card">
@@ -1115,7 +1137,7 @@ function localPhone(p) {
 function withdrawFormHtml() {
   const phone = state.user ? localPhone(state.user.phone) : "";
   return `
-    <section class="card account-box">
+    <section class="card account-box pay-sheet">
       <h2>Withdraw money</h2>
       <p class="hint">Phone number, amount, then PIN. Numbers only.</p>
       <label class="field" for="wdPhone">Phone number</label>
@@ -1155,7 +1177,7 @@ function payHtml(tab) {
   const min = state.minDeposit;
   const phone = state.user ? localPhone(state.user.phone) : "";
   return `
-    <section class="card account-box">
+    <section class="card account-box pay-sheet">
       <div class="tabs">
         <button type="button" class="on" data-pay-tab="deposit">Deposit</button>
         <button type="button" data-pay-tab="withdraw">Withdraw</button>
@@ -1560,7 +1582,8 @@ async function placeBet() {
   if (state.placing) return;
   const stakeEl = $("stakeInput");
   if (stakeEl) state.stake = Number(digitsOnly(stakeEl.value, 9) || 0);
-  if (state.stake < 60000) {
+  const demo = slipIsDemo();
+  if (!demo && state.stake < 60000) {
     state.notice = "Minimum stake amount to place a bet is 60,000 TZS.";
     render();
     return;
@@ -1576,7 +1599,7 @@ async function placeBet() {
     state.slip = [];
     state.lastBetCode = data.code || data.bet?.code || "";
     state.notice = data.bet?.status === "Won"
-      ? "Won · " + tzs(data.bet.payout || 0) + " added to cash"
+      ? "Won · " + tzs(data.bet.payout || 0) + (demo ? " added to virtual balance" : " added to cash")
       : data.bet?.status === "Lost"
         ? "Bet placed · already lost, stake deducted"
         : "Bet placed · code " + state.lastBetCode;
@@ -1716,11 +1739,6 @@ async function loadBetCode(placeToo) {
     return;
   }
   if (placeToo && needLogin("load a bet code")) return;
-  if (placeToo && !state.user.deposited) {
-    state.notice = "Deposit first to load a bet code";
-    go("deposit");
-    return;
-  }
   try {
     if (placeToo) {
       const data = await api("/api/bet/place-code", {

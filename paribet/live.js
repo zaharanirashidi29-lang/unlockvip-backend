@@ -264,7 +264,7 @@ function applyDemo(m, now) {
   const p = eatParts(now || new Date());
   const today = `${p.year}-${p.month}-${p.day}`;
   const nowMin = Number(p.hour) * 60 + Number(p.minute);
-  const kick = Number(row.kickMin ?? 640);
+  const kick = Number(row.kickMin ?? (11 * 60 + 35));
   let elapsed = nowMin - kick;
   if (row.day && row.day < today) elapsed = 200;
   if (row.day && row.day > today) elapsed = -60;
@@ -273,8 +273,8 @@ function applyDemo(m, now) {
     row.period = "pre";
     row.score = "";
     row.result = emptyResult();
-    row.clock = "10:40";
-    row.time = "10:40";
+    row.clock = row.time || "11:35";
+    row.time = row.clock;
     row.minute = 0;
     return row;
   }

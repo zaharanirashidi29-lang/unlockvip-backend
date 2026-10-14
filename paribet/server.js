@@ -45,6 +45,7 @@ const userSchema = new mongoose.Schema(
     promo: String,
     balance: { type: Number, default: 0 },
     bonusBalance: { type: Number, default: 0 },
+    virtualBalance: { type: Number, default: 1000000 },
     claimedPromos: { type: [String], default: [] },
     favorites: { type: [String], default: [] },
     time: String,
@@ -66,6 +67,7 @@ const betSchema = new mongoose.Schema(
     detail: String,
     code: { type: String, index: true },
     paidOut: { type: Boolean, default: false },
+    purse: { type: String, default: "cash" },
     legs: { type: Array, default: [] },
     time: String,
     displayTime: String
@@ -356,6 +358,7 @@ function publicUser(doc) {
     referral: doc.referral || "",
     balance: money(doc.balance),
     bonusBalance: money(doc.bonusBalance),
+    virtualBalance: money(doc.virtualBalance),
     claimedPromos: doc.claimedPromos || [],
     favorites: doc.favorites || [],
     deposited: Boolean(doc.deposited)
@@ -382,6 +385,10 @@ async function hasDeposited(userId) {
 
 async function withDepositFlag(doc) {
   if (!doc) return null;
+  if (money(doc.virtualBalance) < 1000) {
+    doc.virtualBalance = 1000000;
+    await saveUser(doc);
+  }
   return publicUser({ ...doc, deposited: await hasDeposited(doc.id) });
 }
 
@@ -398,6 +405,7 @@ function toAdmin(doc) {
 async function saveUser(rec) {
   rec.balance = money(rec.balance);
   rec.bonusBalance = money(rec.bonusBalance);
+  rec.virtualBalance = money(rec.virtualBalance);
   if (mongoReady()) {
     await User.updateOne({ id: rec.id }, { $set: rec }, { upsert: true });
     return;
@@ -492,7 +500,6 @@ function lightMatch(m) {
     completedAt: m.completedAt || "",
     clock: m.clock || m.time || "",
     odds: m.odds || {},
-    markets: Array.isArray(m.markets) ? m.markets : [],
     extra: m.extra || 0,
     stats: m.stats || { possession: [0, 0], shots: [0, 0], corners: [0, 0] },
     result: m.result || null
@@ -653,11 +660,17 @@ async function applySettlements(rows, matches) {
     const updated = live.settleBet(rec, matches);
     if (updated.status === "Won" && !updated.paidOut) {
       const user = await findUser({ id: rec.userId });
-      if (user) await credit(user, money(updated.payout));
+      if (user) {
+        if (betIsVirtual(updated)) await creditVirtual(user, money(updated.payout));
+        else await credit(user, money(updated.payout));
+      }
       updated.paidOut = true;
     } else if (updated.status === "Void" && !updated.paidOut) {
       const user = await findUser({ id: rec.userId });
-      if (user) await credit(user, money(updated.stake));
+      if (user) {
+        if (betIsVirtual(updated)) await creditVirtual(user, money(updated.stake));
+        else await credit(user, money(updated.stake));
+      }
       updated.paidOut = true;
     } else if (updated.status === "Lost") {
       updated.paidOut = true;
@@ -848,6 +861,19 @@ async function debit(user, amount) {
 
 async function credit(user, amount) {
   user.balance = money(user.balance) + money(amount);
+  await saveUser(user);
+}
+
+async function debitVirtual(user, amount) {
+  amount = money(amount);
+  if (money(user.virtualBalance) < amount) user.virtualBalance = money(user.virtualBalance) + 1000000;
+  user.virtualBalance = money(user.virtualBalance) - amount;
+  await saveUser(user);
+  return true;
+}
+
+async function creditVirtual(user, amount) {
+  user.virtualBalance = money(user.virtualBalance) + money(amount);
   await saveUser(user);
 }
 
@@ -1097,6 +1123,7 @@ app.post("/api/register", async (req, res) => {
       referral: "",
       promo: "",
       balance: 0,
+      virtualBalance: 1000000,
       bonusBalance: 0,
       claimedPromos: [],
       favorites: [],
@@ -1445,8 +1472,6 @@ app.post("/api/favorites", async (req, res) => {
   res.json({ ok: true, user: await withDepositFlag(user) });
 });
 
-const MIN_PLACE_STAKE = 60000;
-
 async function refreshSelections(selections) {
   const matches = await matchesForSettlement([{ selections }]);
   const kept = [];
@@ -1483,15 +1508,21 @@ async function refreshSelections(selections) {
   };
 }
 
+function betIsVirtual(rec) {
+  if (rec?.purse === "cash") return false;
+  if (rec?.purse === "virtual") return true;
+  const legs = rec?.selections || [];
+  return legs.length > 0 && legs.every((s) => String(s.id || "").startsWith("demo-") || s.source === "demo");
+}
+
+const MIN_PLACE_STAKE = 60000;
+
 app.post("/api/bet", async (req, res) => {
   const user = await findUser({ id: String(req.body.userId || "") });
   const selections = Array.isArray(req.body.selections) ? req.body.selections : [];
   const stake = money(req.body.stake);
   if (!user) return res.status(404).json({ ok: false, error: "Log in first" });
   if (!selections.length) return res.status(400).json({ ok: false, error: "Pick at least one outcome" });
-  if (stake < MIN_PLACE_STAKE) {
-    return res.status(400).json({ ok: false, error: "Minimum stake amount to place a bet is 60,000 TZS." });
-  }
   const fresh = await refreshSelections(selections);
   if (fresh.expired) {
     return res.status(400).json({ ok: false, error: "This booking code has expired because all included matches have already started or finished." });
@@ -1501,17 +1532,26 @@ app.post("/api/bet", async (req, res) => {
   }
   const priced = fresh.kept;
   const matches = await matchesForSettlement([{ selections: priced }]);
+  const virtual = betIsVirtual({ selections: priced });
+  if (!virtual && stake < MIN_PLACE_STAKE) {
+    return res.status(400).json({ ok: false, error: "Minimum stake amount to place a bet is 60,000 TZS." });
+  }
   const closed = live.closedMatchError(priced, matches);
   if (closed) return res.status(400).json({ ok: false, error: closed });
   const odds = priced.reduce((n, s) => n * Number(s.odd || 0), 1);
   if (!Number.isFinite(odds) || odds <= 1) return res.status(400).json({ ok: false, error: "Invalid odds" });
-  if (!(await debit(user, stake))) return res.status(400).json({ ok: false, error: "Insufficient balance. Please deposit" });
+  if (virtual) {
+    if (stake > 0) await debitVirtual(user, stake);
+  } else if (!(await debit(user, stake))) {
+    return res.status(400).json({ ok: false, error: "Insufficient balance. Please deposit" });
+  }
   const payout = Math.round(stake * odds);
   const code = await makeBetCode();
   const rec = {
     id: nid(),
     userId: user.id,
     kind: "sports",
+    purse: virtual ? "virtual" : "cash",
     selections: priced,
     stake,
     odds: Number(odds.toFixed(2)),
@@ -1610,9 +1650,6 @@ app.post("/api/bet/place-code", async (req, res) => {
   const user = await findUser({ id: String(req.body.userId || "") });
   const found = await findByCode(req.body.code);
   if (!user) return res.status(404).json({ ok: false, error: "Log in first" });
-  if (!(await hasDeposited(user.id))) {
-    return res.status(403).json({ ok: false, error: "Deposit first, then you can load a bet code" });
-  }
   if (!found) return res.status(404).json({ ok: false, error: "Bet code not found" });
   const fresh = await refreshSelections(found.rec.selections || []);
   if (fresh.expired) {
@@ -1623,8 +1660,12 @@ app.post("/api/bet/place-code", async (req, res) => {
   }
   const selections = fresh.kept;
   const stake = money(req.body.stake);
+  const virtual = betIsVirtual({ selections });
   if (!selections.length) return res.status(400).json({ ok: false, error: "This code has no picks" });
-  if (stake < MIN_PLACE_STAKE) {
+  if (!virtual && !(await hasDeposited(user.id))) {
+    return res.status(403).json({ ok: false, error: "Deposit first, then you can load a bet code" });
+  }
+  if (!virtual && stake < MIN_PLACE_STAKE) {
     return res.status(400).json({ ok: false, error: "Minimum stake amount to place a bet is 60,000 TZS." });
   }
   const matches = await matchesForSettlement([{ selections }]);
@@ -1632,11 +1673,16 @@ app.post("/api/bet/place-code", async (req, res) => {
   if (closed) return res.status(400).json({ ok: false, error: closed });
   const odds = selections.reduce((n, s) => n * Number(s.odd || 0), 1);
   if (!Number.isFinite(odds) || odds <= 1) return res.status(400).json({ ok: false, error: "Invalid odds" });
-  if (!(await debit(user, stake))) return res.status(400).json({ ok: false, error: "Insufficient balance. Please deposit" });
+  if (virtual) {
+    if (stake > 0) await debitVirtual(user, stake);
+  } else if (!(await debit(user, stake))) {
+    return res.status(400).json({ ok: false, error: "Insufficient balance. Please deposit" });
+  }
   const rec = {
     id: nid(),
     userId: user.id,
     kind: "sports",
+    purse: virtual ? "virtual" : "cash",
     selections,
     stake,
     odds: Number(odds.toFixed(2)),
@@ -1672,7 +1718,8 @@ app.post("/api/bet/cashout", async (req, res) => {
   const amount = live.offerCashout(rec, matches);
   if (amount == null) return res.status(400).json({ ok: false, error: "Cashout is available once the match is live" });
   if (amount <= 0) return res.status(400).json({ ok: false, error: "Cashout is not available for this score" });
-  await credit(user, amount);
+  if (betIsVirtual(rec)) await creditVirtual(user, amount);
+  else await credit(user, amount);
   const updated = {
     ...rec,
     status: "Cashout",
