@@ -187,14 +187,19 @@ function pack(row, markets) {
 }
 
 function withPrice(markets, key, odd) {
-  return markets.map((g) => ({
-    ...g,
-    sels: g.sels.map((s) => (s.key === key ? { ...s, odd: o(odd) } : s))
-  }));
+  const label = key.startsWith("cs") && key.length === 4 ? key[2] + "-" + key[3] : key;
+  return markets.map((g) => {
+    const has = g.sels.some((s) => s.key === key);
+    if (!has && g.id !== "cs") return g;
+    const sels = has
+      ? g.sels.map((s) => (s.key === key ? { ...s, odd: o(odd) } : s))
+      : [...g.sels, { key, label, odd: o(odd) }];
+    return { ...g, sels };
+  });
 }
 
 function demoMatch(row, key, odd) {
-  return pack({
+  const body = {
     source: "demo",
     sport: "football",
     live: false,
@@ -205,7 +210,9 @@ function demoMatch(row, key, odd) {
     time: "16:00",
     kickMin: 16 * 60,
     ...row
-  }, withPrice(footballMarkets(0), key, odd));
+  };
+  body.kickLabel = body.time;
+  return pack(body, withPrice(footballMarkets(0), key, odd));
 }
 
 const DEMO_MATCHES = [
@@ -233,7 +240,30 @@ const DEMO_MATCHES = [
         { min: 14, side: "home" }
       ]
     }
-  }, "cs31", 22.07)
+  }, "cs31", 22.07),
+  demoMatch({
+    id: "demo-drino-contum",
+    league: "Elite Star League",
+    home: "Drino Contum",
+    away: "Latrivia",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 5,
+      away: 2,
+      htHome: 3,
+      htAway: 1,
+      times: [
+        { min: 7, side: "home" },
+        { min: 18, side: "away" },
+        { min: 33, side: "home" },
+        { min: 44, side: "home" },
+        { min: 58, side: "home" },
+        { min: 71, side: "away" },
+        { min: 84, side: "home" }
+      ]
+    }
+  }, "cs52", 18)
 ];
 
 function blankStats() {

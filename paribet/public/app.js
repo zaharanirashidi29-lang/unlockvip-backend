@@ -755,7 +755,19 @@ function homeFront(matches) {
   html += `<div class="sec-head"><h2>${esc(first[0])}</h2><span>${ucl.length}</span></div>`;
   html += ucl.length ? eventList(ucl, false, false) : `<p class="empty">No ${esc(first[0])} matches right now.</p>`;
   if (demos.length) {
-    html += `<div class="sec-head"><h2>16:00</h2></div>${eventList(demos, false, false)}`;
+    const groups = [];
+    for (const m of demos) {
+      const head = m.kickLabel || (m.period === "pre" ? (m.clock || m.time || "") : "Live");
+      let group = groups.find((g) => g.head === head);
+      if (!group) {
+        group = { head, rows: [] };
+        groups.push(group);
+      }
+      group.rows.push(m);
+    }
+    for (const group of groups) {
+      html += `<div class="sec-head"><h2>${esc(group.head)}</h2></div>${eventList(group.rows, false, false)}`;
+    }
   }
   for (const [title, keys] of rest) {
     const rows = (matches || []).filter((m) => m.period !== "ft" && keys.some((k) => fold(m.league).includes(fold(k)))).slice(0, 3);

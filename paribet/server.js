@@ -536,6 +536,7 @@ function lightMatch(m) {
     score: m.score || "",
     completedAt: m.completedAt || "",
     clock: m.clock || m.time || "",
+    kickLabel: m.kickLabel || "",
     odds: m.odds || {},
     extra: m.extra || 0,
     stats: m.stats || { possession: [0, 0], shots: [0, 0], corners: [0, 0] },
