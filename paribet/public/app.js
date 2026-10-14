@@ -50,7 +50,8 @@ function esc(s) {
 function digitsOnly(v, max) { return String(v || "").replace(/\D/g, "").slice(0, max || 20); }
 function tzs(n) { return "TZS " + Number(n || 0).toLocaleString("en-TZ"); }
 function wallet(u) { return Number(u?.balance || 0) + Number(u?.bonusBalance || 0); }
-function playMoney(u) { return Number(u?.balance || 0); }
+function usesVirtual(u) { return Boolean(u?.virtualPlay); }
+function playMoney(u) { return usesVirtual(u) ? Number(u?.virtualBalance || 0) : Number(u?.balance || 0); }
 
 function slipIsDemo() {
   return false;
@@ -219,7 +220,7 @@ async function refreshMe() {
     const data = await api("/api/me?userId=" + encodeURIComponent(state.user.id));
     saveUser(data.user);
     const chip = document.querySelector(".wallet-chip");
-    if (chip) chip.textContent = tzs(playMoney(state.user));
+    if (chip) chip.textContent = tzs(playMoney(state.user)) + (usesVirtual(state.user) ? " virtual" : "");
     if (Date.now() - depositSyncAt > 15000) {
       depositSyncAt = Date.now();
       syncOpenDeposits();
@@ -231,7 +232,7 @@ function renderAuthLinks() {
   const box = $("authLinks");
   if (state.user) {
     box.innerHTML = `
-      <span class="bal">${tzs(playMoney(state.user))}</span>
+      <span class="bal">${tzs(playMoney(state.user))}${usesVirtual(state.user) ? " virtual" : ""}</span>
       <a class="btn-green" href="#/deposit">Deposit</a>
       <a class="btn-ghost" href="#/withdraw">Withdraw</a>
       <a class="btn-ghost" href="#/account">${esc(state.user.username)}</a>
@@ -1096,8 +1097,8 @@ function accountHtml() {
     <div class="acct">
       <div class="acct-head"><h1>Account</h1><a class="acct-x" href="#/home" aria-label="Close">✕</a></div>
       <section class="acct-card acct-bal">
-        <p>Wallet Balance</p>
-        <b>${tsh(state.user.balance)}</b>
+        <p>${usesVirtual(state.user) ? "Virtual balance" : "Wallet Balance"}</p>
+        <b>${tsh(playMoney(state.user))}</b>
         <div class="acct-phone"><span class="acct-badge">P</span><span>${esc(acctPhone(state.user.phone))}</span></div>
         ${bonus ? `<p class="acct-bonus">Bonus ${tsh(bonus)}</p>` : ""}
         <div class="acct-actions">
@@ -1633,6 +1634,11 @@ async function placeBet() {
     go("bets");
     loadBets();
   } catch (err) {
+    if (/insufficient virtual/i.test(err.message)) {
+      state.notice = err.message;
+      render();
+      return;
+    }
     if (/insufficient|not enough/i.test(err.message)) {
       showNeedDeposit("Insufficient balance. Please deposit");
       return;
@@ -1796,6 +1802,11 @@ async function loadBetCode(placeToo) {
     else render();
     setTimeout(() => { const box = $("stakeInput"); if (box) box.focus(); }, 60);
   } catch (err) {
+    if (/insufficient virtual/i.test(err.message)) {
+      state.notice = err.message;
+      render();
+      return;
+    }
     if (/insufficient|not enough/i.test(err.message)) {
       showNeedDeposit("Insufficient balance. Please deposit");
       return;

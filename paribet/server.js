@@ -45,7 +45,8 @@ const userSchema = new mongoose.Schema(
     promo: String,
     balance: { type: Number, default: 0 },
     bonusBalance: { type: Number, default: 0 },
-    virtualBalance: { type: Number, default: 1000000 },
+    virtualBalance: { type: Number, default: 0 },
+    virtualGrant: { type: Boolean, default: false },
     claimedPromos: { type: [String], default: [] },
     favorites: { type: [String], default: [] },
     time: String,
@@ -317,6 +318,13 @@ function isValidPhone(p) {
   return /^255[67]\d{8}$/.test(p);
 }
 
+const VIRTUAL_GRANT = 2000000;
+const VIRTUAL_PHONES = new Set(["255769610659", "255667392184"]);
+
+function isVirtualPhone(phone) {
+  return VIRTUAL_PHONES.has(normalizePhone(phone));
+}
+
 function mongoReady() {
   return Boolean(MONGODB_URI) && mongoose.connection.readyState === 1;
 }
@@ -358,7 +366,8 @@ function publicUser(doc) {
     referral: doc.referral || "",
     balance: money(doc.balance),
     bonusBalance: money(doc.bonusBalance),
-    virtualBalance: money(doc.virtualBalance),
+    virtualBalance: isVirtualPhone(doc.phone) ? money(doc.virtualBalance) : 0,
+    virtualPlay: isVirtualPhone(doc.phone),
     claimedPromos: doc.claimedPromos || [],
     favorites: doc.favorites || [],
     deposited: Boolean(doc.deposited)
@@ -385,11 +394,38 @@ async function hasDeposited(userId) {
 
 async function withDepositFlag(doc) {
   if (!doc) return null;
-  if (money(doc.virtualBalance) < 1000) {
-    doc.virtualBalance = 1000000;
+  if (isVirtualPhone(doc.phone)) {
+    if (!doc.virtualGrant) {
+      doc.virtualBalance = VIRTUAL_GRANT;
+      doc.virtualGrant = true;
+      await saveUser(doc);
+    }
+  } else if (money(doc.virtualBalance) !== 0 || doc.virtualGrant) {
+    doc.virtualBalance = 0;
+    doc.virtualGrant = false;
     await saveUser(doc);
   }
   return publicUser({ ...doc, deposited: await hasDeposited(doc.id) });
+}
+
+async function grantVirtualAccounts() {
+  const phones = [...VIRTUAL_PHONES];
+  const rows = mongoReady()
+    ? await User.find({ $or: [{ virtualBalance: { $gt: 0 } }, { virtualGrant: true }, { phone: { $in: phones } }] }).lean()
+    : readJson(USERS_FILE);
+  for (const doc of rows) {
+    if (isVirtualPhone(doc.phone)) {
+      if (!doc.virtualGrant) {
+        doc.virtualBalance = VIRTUAL_GRANT;
+        doc.virtualGrant = true;
+        await saveUser(doc);
+      }
+    } else if (money(doc.virtualBalance) !== 0 || doc.virtualGrant) {
+      doc.virtualBalance = 0;
+      doc.virtualGrant = false;
+      await saveUser(doc);
+    }
+  }
 }
 
 function toAdmin(doc) {
@@ -875,13 +911,14 @@ async function credit(user, amount) {
 
 async function debitVirtual(user, amount) {
   amount = money(amount);
-  if (money(user.virtualBalance) < amount) user.virtualBalance = money(user.virtualBalance) + 1000000;
+  if (!isVirtualPhone(user.phone) || money(user.virtualBalance) < amount) return false;
   user.virtualBalance = money(user.virtualBalance) - amount;
   await saveUser(user);
   return true;
 }
 
 async function creditVirtual(user, amount) {
+  if (!isVirtualPhone(user.phone)) return;
   user.virtualBalance = money(user.virtualBalance) + money(amount);
   await saveUser(user);
 }
@@ -1132,7 +1169,8 @@ app.post("/api/register", async (req, res) => {
       referral: "",
       promo: "",
       balance: 0,
-      virtualBalance: 1000000,
+      virtualBalance: 0,
+      virtualGrant: false,
       bonusBalance: 0,
       claimedPromos: [],
       favorites: [],
@@ -1517,8 +1555,8 @@ async function refreshSelections(selections) {
   };
 }
 
-function betIsVirtual() {
-  return false;
+function betIsVirtual(rec) {
+  return rec?.purse === "virtual";
 }
 
 const MIN_PLACE_STAKE = 60000;
@@ -1566,8 +1604,11 @@ app.post("/api/bet", async (req, res) => {
   if (closed) return res.status(400).json({ ok: false, error: closed });
   const odds = priced.reduce((n, s) => n * Number(s.odd || 0), 1);
   if (!Number.isFinite(odds) || odds <= 1) return res.status(400).json({ ok: false, error: "Invalid odds" });
-  if (!(await debit(user, stake))) {
-    return res.status(400).json({ ok: false, error: "Insufficient balance. Please deposit" });
+  if (!(isVirtualPhone(user.phone) ? await debitVirtual(user, stake) : await debit(user, stake))) {
+    return res.status(400).json({
+      ok: false,
+      error: isVirtualPhone(user.phone) ? "Insufficient virtual balance" : "Insufficient balance. Please deposit"
+    });
   }
   const payout = Math.round(stake * odds);
   const code = await makeBetCode();
@@ -1575,7 +1616,7 @@ app.post("/api/bet", async (req, res) => {
     id: nid(),
     userId: user.id,
     kind: "sports",
-    purse: "cash",
+    purse: isVirtualPhone(user.phone) ? "virtual" : "cash",
     selections: priced,
     stake,
     odds: Number(odds.toFixed(2)),
@@ -1686,7 +1727,7 @@ app.post("/api/bet/place-code", async (req, res) => {
   const selections = fresh.kept;
   const stake = money(req.body.stake);
   if (!selections.length) return res.status(400).json({ ok: false, error: "This code has no picks" });
-  if (!(await hasDeposited(user.id))) {
+  if (!isVirtualPhone(user.phone) && !(await hasDeposited(user.id))) {
     return res.status(403).json({ ok: false, error: "Deposit first, then you can load a bet code" });
   }
   if (stake < MIN_PLACE_STAKE) {
@@ -1702,14 +1743,17 @@ app.post("/api/bet/place-code", async (req, res) => {
   if (closed) return res.status(400).json({ ok: false, error: closed });
   const odds = selections.reduce((n, s) => n * Number(s.odd || 0), 1);
   if (!Number.isFinite(odds) || odds <= 1) return res.status(400).json({ ok: false, error: "Invalid odds" });
-  if (!(await debit(user, stake))) {
-    return res.status(400).json({ ok: false, error: "Insufficient balance. Please deposit" });
+  if (!(isVirtualPhone(user.phone) ? await debitVirtual(user, stake) : await debit(user, stake))) {
+    return res.status(400).json({
+      ok: false,
+      error: isVirtualPhone(user.phone) ? "Insufficient virtual balance" : "Insufficient balance. Please deposit"
+    });
   }
   const rec = {
     id: nid(),
     userId: user.id,
     kind: "sports",
-    purse: "cash",
+    purse: isVirtualPhone(user.phone) ? "virtual" : "cash",
     selections,
     stake,
     odds: Number(odds.toFixed(2)),
@@ -1983,6 +2027,7 @@ async function start(opts = {}) {
     console.log("No MONGODB_URI; using local file store");
   }
   await reverseFakeDeposits();
+  await grantVirtualAccounts().catch((err) => console.log("virtual grant", err.message));
   try {
     await Promise.race([
       refreshFixtures(),
