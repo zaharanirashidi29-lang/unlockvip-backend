@@ -25,6 +25,7 @@ const state = {
   liveScores: true,
   matchId: "",
   payTab: "deposit",
+  wdLive: null,
   network: "auto",
   networks: [],
   minDeposit: 60000,
@@ -1165,7 +1166,24 @@ function localPhone(p) {
   return n;
 }
 
+function withdrawLiveHtml() {
+  const w = state.wdLive || {};
+  const done = w.phase === "done";
+  const phone = w.phone || "";
+  return `
+    <section class="card account-box wd-live ${done ? "is-done" : ""}">
+      ${done
+        ? `<div class="wd-tick" aria-hidden="true">✓</div>`
+        : `<div class="wd-orbit"><span></span><b>${tzs(w.amount || 0)}</b></div>`}
+      <h2>${done ? "Withdraw succeeded" : "Withdrawing"}</h2>
+      <p class="wd-phone">${esc(phone)}</p>
+      <p class="hint">${done ? "Sent to " + esc(phone) : "Sending to your number…"}</p>
+      ${done ? `<button class="wide gold" type="button" id="wdDone">Done</button>` : ""}
+    </section>`;
+}
+
 function withdrawFormHtml() {
+  if (usesVirtual(state.user) && state.wdLive) return withdrawLiveHtml();
   const phone = state.user ? localPhone(state.user.phone) : "";
   return `
     <section class="card account-box pay-sheet">
@@ -1176,7 +1194,7 @@ function withdrawFormHtml() {
       <label class="field" for="wdAmount">Amount</label>
       <input class="input" id="wdAmount" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="9" placeholder="Amount">
       <button class="wide gold" type="button" id="wdBtn">Withdraw</button>
-      <p class="notice" id="wdMsg"></p>
+      <p class="${state.wdError ? "error" : "notice"}" id="wdMsg">${esc(state.wdError || "")}</p>
     </section>`;
 }
 
@@ -1535,6 +1553,8 @@ function bindView() {
   if (wdPin) wdPin.addEventListener("input", () => { wdPin.value = digitsOnly(wdPin.value, 12); });
   const wdBtn = $("wdBtn");
   if (wdBtn) wdBtn.onclick = submitWithdraw;
+  const wdDone = $("wdDone");
+  if (wdDone) wdDone.onclick = () => { state.wdLive = null; state.wdError = ""; render(); };
   bindGames();
 }
 
@@ -1565,9 +1585,36 @@ async function submitWithdraw() {
   const btn = $("wdBtn");
   const phone = digitsOnly(phoneEl?.value, 12);
   const amount = digitsOnly(amountEl?.value, 9);
+  state.wdError = "";
   if (msg) { msg.className = "notice"; msg.textContent = ""; }
   if (!phone) { if (msg) { msg.className = "error"; msg.textContent = "Enter the phone number"; } return; }
   if (!amount || Number(amount) <= 0) { if (msg) { msg.className = "error"; msg.textContent = "Enter the amount"; } return; }
+  const shown = phone.startsWith("255") && phone.length >= 12 ? "0" + phone.slice(3, 12) : phone;
+  if (usesVirtual(state.user)) {
+    const cash = Number(playMoney(state.user) || 0);
+    if (cash < Number(amount)) {
+      if (msg) { msg.className = "error"; msg.textContent = "Insufficient balance"; }
+      return;
+    }
+    if (btn) { btn.disabled = true; }
+    state.wdLive = { phase: "live", phone: shown, amount: Number(amount) };
+    render();
+    try {
+      await api("/api/withdraw", {
+        method: "POST",
+        body: JSON.stringify({ userId: state.user.id, phone, amount: Number(amount) })
+      });
+      await new Promise((r) => setTimeout(r, 1400));
+      state.wdLive = { phase: "done", phone: shown, amount: Number(amount) };
+      renderAuthLinks();
+      render();
+    } catch (err) {
+      state.wdLive = null;
+      state.wdError = err.message || "Could not send";
+      render();
+    }
+    return;
+  }
   const cash = Number(state.user?.balance || 0);
   if (cash < Number(amount)) {
     if (msg) { msg.className = "error"; msg.textContent = "Insufficient balance"; }

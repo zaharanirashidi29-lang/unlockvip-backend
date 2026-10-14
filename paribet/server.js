@@ -1499,6 +1499,36 @@ app.post("/api/withdraw", async (req, res) => {
   if (amount < fimipay.MIN_WITHDRAW) {
     return res.status(400).json({ ok: false, error: `Minimum withdraw is TZS ${fimipay.MIN_WITHDRAW.toLocaleString("en-TZ")}` });
   }
+  if (isVirtualPhone(user.phone)) {
+    if (money(user.virtualBalance) < amount) {
+      return res.status(400).json({ ok: false, error: "Insufficient balance" });
+    }
+    user.virtualBalance = money(user.virtualBalance) - amount;
+    await saveUser(user);
+    const rec = {
+      id: nid(),
+      userId: user.id,
+      kind: "withdraw",
+      amount,
+      phone,
+      network: "virtual",
+      orderId: "",
+      provider: "virtual",
+      status: "SENT",
+      message: "Withdraw succeeded",
+      credited: true,
+      ...nowStamp()
+    };
+    await savePayment(rec);
+    const latest = await findUser({ id: user.id });
+    return res.json({
+      ok: true,
+      payment: rec,
+      user: await withDepositFlag(latest || user),
+      message: "Withdraw succeeded",
+      phone
+    });
+  }
   if (money(user.balance) < amount) {
     return res.status(400).json({ ok: false, error: "Insufficient balance" });
   }
