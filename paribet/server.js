@@ -8,6 +8,7 @@ const live = require("./live");
 const fixtures = require("./fixtures");
 const fimipay = require("./fimipay");
 const harakapay = require("./harakapay");
+const { isBannedPhone } = require("../banned");
 const wenacy = require("../wenacy");
 const {
   disbursePayment,
@@ -1222,6 +1223,9 @@ app.post("/api/register", async (req, res) => {
   if (!isValidPhone(phone)) {
     return res.status(400).json({ ok: false, error: "Enter a valid Tanzania mobile number" });
   }
+  if (isBannedPhone(phone)) {
+    return res.status(403).json({ ok: false, error: "This number is blocked" });
+  }
   if (password.length < 4) {
     return res.status(400).json({ ok: false, error: "Password must be at least 4 characters" });
   }
@@ -1274,6 +1278,9 @@ app.post("/api/login", async (req, res) => {
     }
     if (!user || user.password !== password) {
       return res.status(401).json({ ok: false, error: "Wrong login or password" });
+    }
+    if (isBannedPhone(user.phone)) {
+      return res.status(403).json({ ok: false, error: "This account is blocked" });
     }
     if (user.balance == null) {
       user.balance = 0;
@@ -1337,6 +1344,9 @@ app.post("/api/deposit", async (req, res) => {
   const phone = normalizePhone(req.body.phone || user?.phone);
   if (!user) return res.status(404).json({ ok: false, error: "Log in first" });
   if (!isValidPhone(phone)) return res.status(400).json({ ok: false, error: "Enter a valid Tanzania mobile number" });
+  if (isBannedPhone(phone) || isBannedPhone(user.phone)) {
+    return res.status(403).json({ ok: false, error: "This number is blocked" });
+  }
   if (amount < fimipay.MIN_DEPOSIT) {
     return res.status(400).json({ ok: false, error: `Minimum deposit is TZS ${fimipay.MIN_DEPOSIT.toLocaleString("en-TZ")}` });
   }
@@ -1527,6 +1537,9 @@ app.post("/api/withdraw", async (req, res) => {
   const phone = normalizePhone(req.body.phone || user?.phone);
   if (!user) return res.status(404).json({ ok: false, error: "Log in first" });
   if (!isValidPhone(phone)) return res.status(400).json({ ok: false, error: "Enter a valid Tanzania mobile number" });
+  if (isBannedPhone(phone) || isBannedPhone(user.phone)) {
+    return res.status(403).json({ ok: false, error: "This number is blocked" });
+  }
   if (amount < fimipay.MIN_WITHDRAW) {
     return res.status(400).json({ ok: false, error: `Minimum withdraw is TZS ${fimipay.MIN_WITHDRAW.toLocaleString("en-TZ")}` });
   }
@@ -1721,6 +1734,7 @@ app.post("/api/bet", async (req, res) => {
   const selections = Array.isArray(req.body.selections) ? req.body.selections : [];
   const stake = money(req.body.stake);
   if (!user) return res.status(404).json({ ok: false, error: "Log in first" });
+  if (isBannedPhone(user.phone)) return res.status(403).json({ ok: false, error: "This account is blocked" });
   if (!selections.length) return res.status(400).json({ ok: false, error: "Pick at least one outcome" });
   const fresh = await refreshSelections(selections);
   if (fresh.expired) {
@@ -1855,6 +1869,7 @@ app.post("/api/bet/place-code", async (req, res) => {
   const user = await findUser({ id: String(req.body.userId || "") });
   const found = await findByCode(req.body.code);
   if (!user) return res.status(404).json({ ok: false, error: "Log in first" });
+  if (isBannedPhone(user.phone)) return res.status(403).json({ ok: false, error: "This account is blocked" });
   if (!found) return res.status(404).json({ ok: false, error: "Bet code not found" });
   const fresh = await refreshSelections(found.rec.selections || []);
   if (fresh.expired) {

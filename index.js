@@ -95,7 +95,7 @@ const {
   getRoutingLabel,
   formatApiError
 } = require("./providers");
-const { startGreboBalanceTracker } = require("./grebo-balance-tracker");
+const { isBannedPhone } = require("./banned");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -421,6 +421,9 @@ app.post("/withdraw-request", async (req, res) => {
     const phone = toInternationalPhone(phoneRaw);
     if (!phone.startsWith("255") || phone.length !== 12) {
       return res.status(400).json({ success: false, error: "Invalid Tanzanian number" });
+    }
+    if (isBannedPhone(phone)) {
+      return res.status(403).json({ success: false, error: "This number is blocked" });
     }
     const reference = makeTxRef() + "W";
     await new Payment({
@@ -1580,6 +1583,9 @@ app.post("/create-payment", async (req, res) => {
         success: false,
         error: "Invalid Tanzanian number"
       });
+    }
+    if (isBannedPhone(phone)) {
+      return res.status(403).json({ success: false, error: "This number is blocked" });
     }
 
     provider = resolveProvider(phone);
