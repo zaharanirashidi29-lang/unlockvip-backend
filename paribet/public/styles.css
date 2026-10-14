@@ -199,7 +199,7 @@ button, input, select { font: inherit; }
   font-weight: 800;
 }
 .btn-ghost { color: var(--text); }
-.bal { font-weight: 800; font-size: 13px; align-self: center; }
+.bal { font-weight: 800; font-size: 13px; align-self: center; white-space: nowrap; }
 .ghost { background: transparent; color: var(--text); }
 
 .hero {
@@ -479,6 +479,7 @@ label.field {
   padding: 8px 12px;
   font-weight: 700;
   font-size: 13px;
+  white-space: nowrap;
 }
 .side-muted { color: var(--muted); font-size: 12px; padding: 0 8px; }
 .market-label { margin-top: 8px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
@@ -1069,7 +1070,7 @@ body[data-page="account"] .main { background: #f3f6f3; }
 .acct-card { margin: 0 16px; background: #fff; border-radius: 16px; box-shadow: 0 1px 2px rgba(14,25,16,.06); }
 .acct-bal { padding: 16px; text-align: center; }
 .acct-bal > p { margin: 0; color: #535e55; font-size: 13px; }
-.acct-bal > b { display: block; margin-top: 4px; font-size: 28px; line-height: 1.15; font-weight: 800; }
+.acct-bal > b { display: block; margin-top: 4px; font-size: 28px; line-height: 1.15; font-weight: 800; white-space: nowrap; }
 .acct-phone { margin-top: 8px; display: flex; align-items: center; justify-content: center; gap: 6px; color: #535e55; font-size: 14px; }
 .acct-badge { width: 20px; height: 20px; border-radius: 999px; background: #97f600; color: #0e1910; display: grid; place-items: center; font-size: 10px; font-weight: 800; }
 .acct-bonus { margin: 8px 0 0; color: #535e55; font-size: 13px; }

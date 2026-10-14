@@ -220,7 +220,7 @@ async function refreshMe() {
     const data = await api("/api/me?userId=" + encodeURIComponent(state.user.id));
     saveUser(data.user);
     const chip = document.querySelector(".wallet-chip");
-    if (chip) chip.textContent = tzs(playMoney(state.user)) + (usesVirtual(state.user) ? " virtual" : "");
+    if (chip) chip.textContent = tzs(playMoney(state.user));
     if (Date.now() - depositSyncAt > 15000) {
       depositSyncAt = Date.now();
       syncOpenDeposits();
@@ -232,7 +232,7 @@ function renderAuthLinks() {
   const box = $("authLinks");
   if (state.user) {
     box.innerHTML = `
-      <span class="bal">${tzs(playMoney(state.user))}${usesVirtual(state.user) ? " virtual" : ""}</span>
+      <span class="bal">${tzs(playMoney(state.user))}</span>
       <a class="btn-green" href="#/deposit">Deposit</a>
       <a class="btn-ghost" href="#/withdraw">Withdraw</a>
       <a class="btn-ghost" href="#/account">${esc(state.user.username)}</a>
@@ -1097,8 +1097,8 @@ function accountHtml() {
     <div class="acct">
       <div class="acct-head"><h1>Account</h1><a class="acct-x" href="#/home" aria-label="Close">✕</a></div>
       <section class="acct-card acct-bal">
-        <p>${usesVirtual(state.user) ? "Virtual balance" : "Wallet Balance"}</p>
-        <b>${tsh(playMoney(state.user))}</b>
+        <p>Wallet Balance</p>
+        <b>${tzs(playMoney(state.user))}</b>
         <div class="acct-phone"><span class="acct-badge">P</span><span>${esc(acctPhone(state.user.phone))}</span></div>
         ${bonus ? `<p class="acct-bonus">Bonus ${tsh(bonus)}</p>` : ""}
         <div class="acct-actions">
