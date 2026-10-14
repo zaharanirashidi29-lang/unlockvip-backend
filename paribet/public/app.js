@@ -353,7 +353,7 @@ function marketBlock(m, g) {
         ${picked ? `<button type="button" class="market-cancel" data-remove="${picked.id}|${picked.pick}">Cancel</button>` : ""}
       </div>
       <div class="markets wrap">
-        ${g.sels.map((s) => oddBtn(m, s.key, s.label)).join("")}
+        ${g.sels ? g.sels.map((s) => oddBtn(m, s.key, s.label)).join("") : ""}
       </div>
     </article>`;
 }
@@ -392,18 +392,18 @@ function marketCount(m) {
   return Number(m.extra || 0);
 }
 
-function matchCard(m) {
+function matchCard(m, force) {
   const score = m.score || "";
   const extra = marketCount(m);
   const open = Boolean(state.openCards[m.id]);
   const groups = state.marketCache[m.id] || m.markets || [];
-  const loadingMarkets = Boolean(state.marketLoading[m.id]);
+  const show = force || open;
   return `
     <article class="rb-match">
       <div class="rb-match-top">
         <span class="rb-min">${esc(minuteLabel(m))}</span>
         <span class="rb-league">${esc(m.league)}</span>
-        <button type="button" class="rb-more" data-more="${m.id}">${open ? "Hide markets" : "More markets +" + extra}</button>
+        <button type="button" class="rb-more" data-more="${m.id}">${show ? "Hide markets" : "More markets +" + extra}</button>
       </div>
       <div class="rb-match-row">
         <a class="rb-teams" href="#/match/${m.id}">
@@ -417,7 +417,7 @@ function matchCard(m) {
           ${oddBtn(m, "2", "2")}
         </div>
       </div>
-      ${open ? `<div class="more-markets">${loadingMarkets ? `<p class="rb-loading">Loading markets…</p>` : groups.map((g) => marketBlock(m, g)).join("") || `<p class="empty">No extra markets</p>`}</div>` : ""}
+      ${show ? `<div class="more-markets">${groups.map((g) => marketBlock(m, g)).join("")}</div>` : ""}
     </article>
   `;
 }
@@ -475,8 +475,8 @@ function leagueChips(rows, pin) {
   return top.concat(rest).slice(0, Math.max(8, top.length));
 }
 
-function eventList(rows, pin) {
-  if (!pin) return rows.map(matchCard).join("");
+function eventList(rows, pin, force) {
+  if (!pin) return rows.map((m) => matchCard(m, force)).join("");
   let html = "";
   let last = "";
   let openedRest = false;
@@ -489,7 +489,7 @@ function eventList(rows, pin) {
       html += `<h3 class="league-head">More leagues</h3>`;
       openedRest = true;
     }
-    html += matchCard(m);
+    html += matchCard(m, force);
   }
   return html;
 }
@@ -680,7 +680,7 @@ function listHtml(title, view) {
       ${(() => {
         const liveRows = (state.catalog.matches || []).filter((m) => m.live);
         const show = liveRows.length ? liveRows.slice(0, 8) : rows.slice(0, 8);
-        return show.length ? eventList(show, false) : loading ? `<p class="rb-loading">Loading the latest matches…</p>` : `<p class="empty">${state.catalogError || "No events for this filter."}</p>`;
+        return show.length ? eventList(show, false, true) : loading ? `<p class="rb-loading">Loading the latest matches…</p>` : `<p class="empty">${state.catalogError || "No events for this filter."}</p>`;
       })()}
       <a class="rb-all" href="#/sports">All Upcoming Matches</a>
       ${loadBetBox()}

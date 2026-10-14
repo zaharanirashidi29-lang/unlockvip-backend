@@ -489,6 +489,7 @@ function lightMatch(m) {
     completedAt: m.completedAt || "",
     clock: m.clock || m.time || "",
     odds: m.odds || {},
+    markets: Array.isArray(m.markets) ? m.markets : [],
     extra: m.extra || 0,
     stats: m.stats || { possession: [0, 0], shots: [0, 0], corners: [0, 0] },
     result: m.result || null
