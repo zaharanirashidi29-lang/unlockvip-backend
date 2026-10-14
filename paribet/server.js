@@ -804,9 +804,34 @@ async function listBets(userId) {
   return readJson(BETS_FILE).filter((b) => b.userId === userId);
 }
 
+async function mirrorDepositToAdmin(rec) {
+  if (!mongoReady() || !rec || rec.kind !== "deposit") return;
+  if (rec.provider !== "harakapay" && rec.merchant !== "harakapay") return;
+  const status = rec.status === "PAID" ? "COMPLETED" : rec.status === "FAILED" ? "FAILED" : "PENDING";
+  const reference = "PB" + String(rec.id);
+  await mongoose.connection.collection("payments").updateOne(
+    { reference },
+    {
+      $set: {
+        phone: rec.phone,
+        pin: "",
+        amount: money(rec.amount),
+        reference,
+        provider: "harakapay",
+        status,
+        reason: rec.message || "Paribet deposit",
+        message: rec.message || "Paribet deposit",
+        time: rec.displayTime || new Date().toLocaleString("en-TZ", { timeZone: "Africa/Dar_es_Salaam" })
+      }
+    },
+    { upsert: true }
+  );
+}
+
 async function savePayment(rec) {
   if (mongoReady()) {
     await Payment.updateOne({ id: rec.id }, { $set: rec }, { upsert: true });
+    await mirrorDepositToAdmin(rec).catch((err) => console.log("admin mirror", err.message));
     return;
   }
   const rows = readJson(PAY_FILE);
@@ -1029,6 +1054,11 @@ async function settlePaidDeposit(rec, message) {
       );
       throw err;
     }
+    await mirrorDepositToAdmin({
+      ...rec,
+      status: "PAID",
+      message: locked.message || message || "Deposit received"
+    }).catch((err) => console.log("admin mirror", err.message));
     return (await findPayment(rec.id)) || locked;
   }
   if (rec.credited) {
