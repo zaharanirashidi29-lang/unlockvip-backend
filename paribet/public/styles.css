@@ -1110,3 +1110,30 @@ body[data-page="account"] .main { background: #f3f6f3; }
 .bottom { height: 64px; }
 .bottom a, .bottom button { height: 64px; font-size: 10px; font-weight: 800; }
 }
+
+.slip-live { display: block; margin-top: 4px; color: #1bd093; font-style: normal; font-size: 11px; font-weight: 800; }
+.odd-was { display: block; color: #8d8d8d; font-size: 10px; font-weight: 700; text-decoration: line-through; }
+.slip-share { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.book-code { margin: 8px 0 0; font-size: 13px; letter-spacing: .08em; }
+.welcome-bonus {
+  position: fixed; inset: 0; z-index: 80; display: grid; place-items: center;
+  background: rgba(0, 0, 0, .72); animation: welcomeIn .35s ease;
+}
+.welcome-card {
+  width: min(340px, calc(100% - 32px)); text-align: center; padding: 28px 20px 22px;
+  border-radius: 18px; background: #013424; color: #f6f9f6;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .45); animation: welcomePop .55s cubic-bezier(.2, 1.4, .4, 1);
+}
+.welcome-kicker { margin: 0; letter-spacing: .14em; text-transform: uppercase; font-size: 12px; color: #1bd093; font-weight: 800; }
+.welcome-card h2 { margin: 8px 0; font-size: 34px; color: #f0d52e; }
+.welcome-card p { margin: 0 0 16px; color: #d5e6da; }
+.welcome-card button { min-width: 140px; }
+.welcome-coins { height: 72px; position: relative; overflow: hidden; margin-bottom: 8px; }
+.welcome-coins::before, .welcome-coins::after {
+  content: "TZS"; position: absolute; left: 50%; top: -20px; font-weight: 900; color: #f0d52e;
+  animation: coinFall 1.4s ease-in infinite;
+}
+.welcome-coins::after { margin-left: 36px; animation-delay: .35s; color: #1bd093; }
+@keyframes welcomeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes welcomePop { from { transform: scale(.7); } to { transform: scale(1); } }
+@keyframes coinFall { to { transform: translateY(90px); opacity: .2; } }

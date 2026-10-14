@@ -546,6 +546,28 @@ function decorateBet(rec, matches) {
   };
 }
 
+function minuteOf(match) {
+  const n = Number(match?.minute || 0);
+  if (n > 0) return n;
+  const hit = String(match?.clock || match?.time || "").match(/(\d{1,3})/);
+  if (hit) return Number(hit[1]);
+  if (match?.period === "ht") return 45;
+  if (match?.period === "2h") return 70;
+  return match?.live ? 15 : 0;
+}
+
+function liveOdd(booked, match, pick) {
+  const base = Math.max(1.01, Number(booked) || 1.5);
+  if (!match || !match.live || match.period === "ft") return Math.round(base * 100) / 100;
+  const progress = Math.max(0, Math.min(1, minuteOf(match) / 90));
+  const status = evalPick(match, pick, true);
+  let next = base;
+  if (status === "won") next = 1 + Math.max(0.01, base - 1) * (1 - progress * 0.82);
+  else if (status === "lost") next = base * (1 + progress * 2.4);
+  else next = base * (1 + progress * 0.08);
+  return Math.round(Math.min(80, Math.max(1.01, next)) * 100) / 100;
+}
+
 function closedMatchError(selections, matches) {
   for (const s of selections || []) {
     const m = matchById(s.id, matches);
@@ -562,5 +584,6 @@ module.exports = {
   decorateBet,
   decorateLegs,
   closedMatchError,
-  evalPick
+  evalPick,
+  liveOdd
 };

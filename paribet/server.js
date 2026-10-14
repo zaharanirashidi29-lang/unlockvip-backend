@@ -1072,43 +1072,27 @@ app.get("/api/match/:id", (req, res) => {
 });
 
 app.post("/api/register", async (req, res) => {
-  const username = String(req.body.username || "").trim();
-  const email = String(req.body.email || "").trim().toLowerCase();
   const phone = normalizePhone(req.body.phone);
   const password = String(req.body.password || "");
-  const referral = String(req.body.referral || "").trim();
-  const promo = String(req.body.promo || "").trim();
-  const accepted = Boolean(req.body.accepted);
-
-  if (!/^[a-zA-Z0-9._]{3,20}$/.test(username)) {
-    return res.status(400).json({ ok: false, error: "Username must be 3–20 letters or numbers" });
-  }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return res.status(400).json({ ok: false, error: "Enter a valid email" });
-  }
   if (!isValidPhone(phone)) {
     return res.status(400).json({ ok: false, error: "Enter a valid Tanzania mobile number" });
   }
   if (password.length < 4) {
     return res.status(400).json({ ok: false, error: "Password must be at least 4 characters" });
   }
-  if (!accepted) {
-    return res.status(400).json({ ok: false, error: "Confirm you are 18+" });
-  }
-
+  let username = "p" + phone.slice(-9);
+  if (await findUser({ username })) username = "p" + phone;
+  const email = phone + "@paribet.local";
   try {
-    if (await findUser({ username })) return res.status(409).json({ ok: false, error: "Username already taken" });
-    if (await findUser({ email })) return res.status(409).json({ ok: false, error: "Email already registered" });
     if (await findUser({ phone })) return res.status(409).json({ ok: false, error: "Phone already registered" });
-
     const rec = {
       id: nid(),
       username,
       email,
       phone,
       password,
-      referral,
-      promo,
+      referral: "",
+      promo: "",
       balance: 0,
       bonusBalance: 0,
       claimedPromos: [],
@@ -1458,17 +1442,65 @@ app.post("/api/favorites", async (req, res) => {
   res.json({ ok: true, user: await withDepositFlag(user) });
 });
 
+const MIN_PLACE_STAKE = 60000;
+
+async function refreshSelections(selections) {
+  const matches = await matchesForSettlement([{ selections }]);
+  const kept = [];
+  let removed = 0;
+  for (const s of selections || []) {
+    const m = matches.find((x) => x.id === s.id);
+    const finished = !m || m.period === "ft" || String(m.apiState || "").toLowerCase() === "post";
+    if (finished) {
+      removed += 1;
+      continue;
+    }
+    const booked = Number(s.bookedOdd || s.odd);
+    const apiState = String(m.apiState || "").toLowerCase();
+    const kickoffAt = Date.parse(m.kickoff || "");
+    const started = Boolean(m.live) || apiState === "in" || (Number.isFinite(kickoffAt) && kickoffAt <= Date.now());
+    const pricedMatch = started ? { ...m, live: true } : m;
+    const odd = started ? live.liveOdd(booked, pricedMatch, s.pick) : booked;
+    kept.push({
+      ...s,
+      bookedOdd: booked,
+      odd,
+      live: started,
+      clock: m.displayClock || m.clock || (started ? "LIVE" : m.time || ""),
+      period: m.period || "",
+      score: m.score || "",
+      home: s.home || m.home,
+      away: s.away || m.away
+    });
+  }
+  return {
+    kept,
+    removed,
+    expired: (selections || []).length > 0 && kept.length === 0
+  };
+}
+
 app.post("/api/bet", async (req, res) => {
   const user = await findUser({ id: String(req.body.userId || "") });
   const selections = Array.isArray(req.body.selections) ? req.body.selections : [];
   const stake = money(req.body.stake);
   if (!user) return res.status(404).json({ ok: false, error: "Log in first" });
   if (!selections.length) return res.status(400).json({ ok: false, error: "Pick at least one outcome" });
-  if (stake < 500) return res.status(400).json({ ok: false, error: "Minimum stake is TZS 500" });
-  const matches = await matchesForSettlement([{ selections }]);
-  const closed = live.closedMatchError(selections, matches);
+  if (stake < MIN_PLACE_STAKE) {
+    return res.status(400).json({ ok: false, error: "Minimum stake amount to place a bet is 60,000 TZS." });
+  }
+  const fresh = await refreshSelections(selections);
+  if (fresh.expired) {
+    return res.status(400).json({ ok: false, error: "This booking code has expired because all included matches have already started or finished." });
+  }
+  if (fresh.removed) {
+    return res.status(400).json({ ok: false, error: "Some matches in this code have already started or ended and were removed from your slip." });
+  }
+  const priced = fresh.kept;
+  const matches = await matchesForSettlement([{ selections: priced }]);
+  const closed = live.closedMatchError(priced, matches);
   if (closed) return res.status(400).json({ ok: false, error: closed });
-  const odds = selections.reduce((n, s) => n * Number(s.odd || 0), 1);
+  const odds = priced.reduce((n, s) => n * Number(s.odd || 0), 1);
   if (!Number.isFinite(odds) || odds <= 1) return res.status(400).json({ ok: false, error: "Invalid odds" });
   if (!(await debit(user, stake))) return res.status(400).json({ ok: false, error: "Insufficient balance. Please deposit" });
   const payout = Math.round(stake * odds);
@@ -1477,7 +1509,7 @@ app.post("/api/bet", async (req, res) => {
     id: nid(),
     userId: user.id,
     kind: "sports",
-    selections,
+    selections: priced,
     stake,
     odds: Number(odds.toFixed(2)),
     payout,
@@ -1485,7 +1517,7 @@ app.post("/api/bet", async (req, res) => {
     paidOut: false,
     legs: [],
     code,
-    detail: selections.map((s) => `${s.home} vs ${s.away} · ${s.pick}`).join(" / "),
+    detail: priced.map((s) => `${s.home} vs ${s.away} · ${s.pick}`).join(" / "),
     ...nowStamp()
   };
   await saveBet(rec);
@@ -1496,45 +1528,79 @@ app.post("/api/bet", async (req, res) => {
 
 app.post("/api/bet/share", async (req, res) => {
   const selections = Array.isArray(req.body.selections) ? req.body.selections : [];
-  const stake = money(req.body.stake);
   if (!selections.length) return res.status(400).json({ ok: false, error: "Pick at least one outcome" });
-  const odds = selections.reduce((n, s) => n * Number(s.odd || 0), 1);
+  const stored = selections.map((s) => ({
+    ...s,
+    bookedOdd: Number(s.bookedOdd || s.odd),
+    odd: Number(s.bookedOdd || s.odd)
+  }));
+  const odds = stored.reduce((n, s) => n * Number(s.odd || 0), 1);
   if (!Number.isFinite(odds) || odds <= 1) return res.status(400).json({ ok: false, error: "Invalid odds" });
   const rec = {
     id: nid(),
     code: await makeBetCode(),
     userId: String(req.body.userId || ""),
-    selections,
-    stake: stake || 1000,
+    selections: stored,
+    stake: 0,
     odds: Number(odds.toFixed(2)),
     placedBetId: "",
     ...nowStamp()
   };
   await saveBooking(rec);
-  res.json({ ok: true, code: rec.code, stake: rec.stake, odds: rec.odds, selections: rec.selections, placed: false });
+  res.json({ ok: true, code: rec.code, stake: 0, odds: rec.odds, selections: rec.selections, placed: false });
+});
+
+app.post("/api/slip/reprice", async (req, res) => {
+  const selections = Array.isArray(req.body.selections) ? req.body.selections : [];
+  const fresh = await refreshSelections(selections);
+  if (fresh.expired) {
+    return res.status(410).json({ ok: false, error: "This booking code has expired because all included matches have already started or finished." });
+  }
+  const odds = fresh.kept.reduce((n, s) => n * Number(s.odd || 1), 1) || 0;
+  res.json({
+    ok: true,
+    selections: fresh.kept,
+    removed: fresh.removed,
+    odds: Number(odds.toFixed(2)),
+    notice: fresh.removed ? "Some matches in this code have already started or ended and were removed from your slip." : ""
+  });
 });
 
 app.get("/api/bet/code/:code", async (req, res) => {
   const found = await findByCode(req.params.code);
   if (!found) return res.status(404).json({ ok: false, error: "Bet code not found" });
-  if (found.kind === "book") {
-    return res.json(slipPayload(found.rec, { placed: false, booking: true }));
+  const fresh = await refreshSelections(found.rec.selections || []);
+  if (fresh.expired) {
+    return res.status(410).json({ ok: false, error: "This booking code has expired because all included matches have already started or finished." });
   }
-  res.json(slipPayload(found.rec, { placed: true, booking: false }));
+  res.json(slipPayload(found.rec, {
+    placed: found.kind !== "book",
+    booking: found.kind === "book",
+    selections: fresh.kept,
+    removed: fresh.removed,
+    notice: fresh.removed ? "Some matches in this code have already started or ended and were removed from your slip." : "",
+    odds: Number((fresh.kept.reduce((n, s) => n * Number(s.odd || 1), 1) || 0).toFixed(2))
+  }));
 });
 
 app.post("/api/bet/load", async (req, res) => {
   const found = await findByCode(req.body.code);
   if (!found) return res.status(404).json({ ok: false, error: "Bet code not found" });
-  if (found.kind === "book") {
-    return res.json(slipPayload(found.rec, { placed: false, booking: true }));
+  const fresh = await refreshSelections(found.rec.selections || []);
+  if (fresh.expired) {
+    return res.status(410).json({ ok: false, error: "This booking code has expired because all included matches have already started or finished." });
   }
-  const user = await findUser({ id: String(req.body.userId || "") });
-  if (!user) return res.status(401).json({ ok: false, error: "Log in first to load a bet code" });
-  if (!(await hasDeposited(user.id))) {
-    return res.status(403).json({ ok: false, error: "Deposit first, then you can load a bet code" });
-  }
-  res.json(slipPayload(found.rec, { placed: true, booking: false }));
+  const notice = fresh.removed
+    ? "Some matches in this code have already started or ended and were removed from your slip."
+    : "";
+  res.json(slipPayload(found.rec, {
+    placed: false,
+    booking: found.kind === "book",
+    selections: fresh.kept,
+    removed: fresh.removed,
+    notice,
+    odds: Number((fresh.kept.reduce((n, s) => n * Number(s.odd || 1), 1) || 0).toFixed(2))
+  }));
 });
 
 app.post("/api/bet/place-code", async (req, res) => {
@@ -1545,10 +1611,19 @@ app.post("/api/bet/place-code", async (req, res) => {
     return res.status(403).json({ ok: false, error: "Deposit first, then you can load a bet code" });
   }
   if (!found) return res.status(404).json({ ok: false, error: "Bet code not found" });
-  const selections = found.rec.selections || [];
-  const stake = money(req.body.stake || found.rec.stake);
+  const fresh = await refreshSelections(found.rec.selections || []);
+  if (fresh.expired) {
+    return res.status(410).json({ ok: false, error: "This booking code has expired because all included matches have already started or finished." });
+  }
+  if (fresh.removed) {
+    return res.status(400).json({ ok: false, error: "Some matches in this code have already started or ended and were removed from your slip." });
+  }
+  const selections = fresh.kept;
+  const stake = money(req.body.stake);
   if (!selections.length) return res.status(400).json({ ok: false, error: "This code has no picks" });
-  if (stake < 500) return res.status(400).json({ ok: false, error: "Minimum stake is TZS 500" });
+  if (stake < MIN_PLACE_STAKE) {
+    return res.status(400).json({ ok: false, error: "Minimum stake amount to place a bet is 60,000 TZS." });
+  }
   const matches = await matchesForSettlement([{ selections }]);
   const closed = live.closedMatchError(selections, matches);
   if (closed) return res.status(400).json({ ok: false, error: closed });

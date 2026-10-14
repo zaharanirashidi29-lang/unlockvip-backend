@@ -14,7 +14,7 @@ const state = {
   leagueFilter: "",
   prevOdds: {},
   placing: false,
-  stake: 1000,
+  stake: 0,
   bets: [],
   showPass: false,
   notice: "",
@@ -57,9 +57,34 @@ function loadUser() {
   catch { state.user = null; }
 }
 function saveUser(user) {
+  const prev = state.user;
   state.user = user;
   if (user) localStorage.setItem("paribet_user", JSON.stringify(user));
   else localStorage.removeItem("paribet_user");
+  if (prev && user && prev.id === user.id) notePromos(prev, user);
+}
+
+function notePromos(prev, next) {
+  const before = new Set(prev.claimedPromos || []);
+  if (!before.has("welcome") && (next.claimedPromos || []).includes("welcome")) showWelcomeBonus(2000);
+}
+
+function showWelcomeBonus(amount) {
+  if (document.getElementById("welcomeBonus")) return;
+  const el = document.createElement("div");
+  el.id = "welcomeBonus";
+  el.className = "welcome-bonus";
+  el.innerHTML = `
+    <div class="welcome-card">
+      <div class="welcome-coins" aria-hidden="true"></div>
+      <p class="welcome-kicker">Welcome bonus</p>
+      <h2>+ ${tzs(amount || 2000)}</h2>
+      <p>Added to your account after your deposit.</p>
+      <button class="wide gold" type="button" id="welcomeClose">Continue</button>
+    </div>`;
+  document.body.appendChild(el);
+  el.querySelector("#welcomeClose").onclick = () => el.remove();
+  setTimeout(() => { if (el.parentNode) el.remove(); }, 7000);
 }
 
 async function api(url, opts) {
@@ -96,6 +121,30 @@ function startLivePoll() {
       checkResults(true);
     }
   }, 30000);
+}
+
+function startSlipPoll() {
+  if (state.slipPoll) return;
+  state.slipPoll = setInterval(() => {
+    if (state.slip.some((s) => s.live) && !state.placing) repriceSlip();
+  }, 15000);
+}
+
+function slipLeg(s) {
+  return {
+    id: s.id,
+    pick: s.pick,
+    label: s.label || s.pick,
+    market: s.market || "",
+    odd: Number(s.odd),
+    bookedOdd: Number(s.bookedOdd || s.odd),
+    home: s.home,
+    away: s.away,
+    live: Boolean(s.live),
+    clock: s.clock || "",
+    period: s.period || "",
+    score: s.score || ""
+  };
 }
 
 function readBooking() {
@@ -582,7 +631,7 @@ function topToolsHtml() {
 }
 
 function slipSheet(t, n) {
-  const chips = [500, 1000, 2000, 5000];
+  const chips = [60000, 100000, 150000, 200000];
   return `
     <section class="slip-sheet" role="dialog" aria-label="Betslip">
       <div class="slip-head">
@@ -593,21 +642,26 @@ function slipSheet(t, n) {
         <button type="button" class="market-cancel" id="slipClear">Clear</button>
       </div>
       <div class="slip-picks">
-        ${state.slip.map((s) => `
+        ${state.slip.map((s) => {
+          const moved = s.bookedOdd && Math.abs(Number(s.bookedOdd) - Number(s.odd)) >= 0.01;
+          const liveLine = s.live ? `<em class="slip-live">LIVE ${esc(s.clock || s.period || "")}${s.score ? " · " + esc(s.score) : ""}</em>` : "";
+          return `
           <div class="slip-pick">
             <button type="button" class="slip-x" data-remove="${s.id}|${s.pick}" aria-label="Remove ${esc(s.label || s.pick)}">✕</button>
             <div class="slip-pick-main">
               <strong>${esc(s.home)} vs ${esc(s.away)}</strong>
               <span>${esc(s.market || "1X2")} · ${esc(s.label || s.pick)}</span>
+              ${liveLine}
             </div>
-            <b class="slip-odd">${Number(s.odd).toFixed(2)}</b>
-          </div>`).join("")}
+            <b class="slip-odd">${Number(s.odd).toFixed(2)}${moved ? `<small class="odd-was">${Number(s.bookedOdd).toFixed(2)}</small>` : ""}</b>
+          </div>`;
+        }).join("")}
       </div>
       <div class="stake-chips">
         ${chips.map((amt) => `<button type="button" data-stake="${amt}" class="${Number(state.stake) === amt ? "on" : ""}">${amt.toLocaleString("en-TZ")}</button>`).join("")}
       </div>
       <div class="stake-row">
-        <input class="input" id="stakeInput" inputmode="numeric" value="${state.stake}" aria-label="Stake">
+        <input class="input" id="stakeInput" inputmode="numeric" value="${state.stake || ""}" placeholder="Stake to place" aria-label="Stake">
         <span>Stake TZS</span>
       </div>
       <div class="win-box">
@@ -616,7 +670,13 @@ function slipSheet(t, n) {
         <div><span>Potential win</span><b id="slipProfit">${tzs(t.profit)}</b></div>
       </div>
       <button class="wide gold" type="button" id="placeBet" ${state.placing ? "disabled" : ""}>${state.placing ? "Placing…" : "Place bet"}</button>
-      <button class="wide" type="button" id="shareCodeBtn">Copy bet code</button>
+      ${state.notice && /stake|booking|code|slip|match|odd|expired|removed/i.test(state.notice) ? `<p class="error">${esc(state.notice)}</p>` : ""}
+      <button class="wide" type="button" id="bookBetBtn">Book bet</button>
+      <div class="slip-share">
+        <button type="button" id="copyCodeBtn">Copy code</button>
+        <button type="button" id="shareLinkBtn">Share link</button>
+      </div>
+      ${state.lastBetCode ? `<p class="book-code">Code <b>${esc(state.lastBetCode)}</b></p>` : ""}
     </section>`;
 }
 
@@ -771,10 +831,6 @@ async function loadCatalog(retries = 3) {
 
 function joinFields() {
   return `
-    <label class="field" for="username">Username</label>
-    <input class="input" id="username" placeholder="yourname" maxlength="20" required>
-    <label class="field" for="email">Email</label>
-    <input class="input" id="email" type="email" placeholder="you@email.com" required>
     <label class="field" for="phone">Mobile number</label>
     <div class="phone-row"><div class="cc">🇹🇿 +255</div>
       <input class="input" id="phone" inputmode="numeric" placeholder="0712 345 678" maxlength="12" required>
@@ -784,28 +840,15 @@ function joinFields() {
       <input class="input" id="password" type="${state.showPass ? "text" : "password"}" placeholder="Min. 4 characters" required>
       <button type="button" id="togglePass">${state.showPass ? "HIDE" : "SHOW"}</button>
     </div>
-    <label class="field" for="referral">Referral code (optional)</label>
-    <input class="input" id="referral" placeholder="PARI-XXXXX">
-    <label class="check"><input type="checkbox" id="accepted"> I am 18+ and accept Paribet terms.</label>
   `;
 }
 
 function loginFields() {
   return `
-    <div class="tabs">
-      <button type="button" class="${state.loginMethod === "phone" ? "on" : ""}" data-method="phone">Phone</button>
-      <button type="button" class="${state.loginMethod === "email" ? "on" : ""}" data-method="email">Email</button>
-      <button type="button" class="${state.loginMethod === "username" ? "on" : ""}" data-method="username">ID</button>
+    <label class="field" for="phone">Mobile number</label>
+    <div class="phone-row"><div class="cc">🇹🇿 +255</div>
+      <input class="input" id="phone" inputmode="numeric" placeholder="0712 345 678" maxlength="12" required>
     </div>
-    ${state.loginMethod === "phone" ? `
-      <label class="field" for="phone">Mobile number</label>
-      <div class="phone-row"><div class="cc">🇹🇿 +255</div>
-        <input class="input" id="phone" inputmode="numeric" placeholder="0712 345 678" maxlength="12" required>
-      </div>` : state.loginMethod === "email" ? `
-      <label class="field" for="email">Email</label>
-      <input class="input" id="email" type="email" placeholder="you@email.com" required>` : `
-      <label class="field" for="username">Username or ID</label>
-      <input class="input" id="username" placeholder="yourname" required>`}
     <label class="field" for="password">Password</label>
     <div class="pass-wrap">
       <input class="input" id="password" type="${state.showPass ? "text" : "password"}" placeholder="••••••" required>
@@ -1222,9 +1265,15 @@ function bindView() {
           label: sel.label,
           market: sel.market,
           odd: Number(odd),
+          bookedOdd: Number(odd),
           home: match.home,
-          away: match.away
+          away: match.away,
+          live: Boolean(match.live),
+          clock: match.clock || match.time || "",
+          period: match.period || "",
+          score: match.score || ""
         });
+        if (match.live) setTimeout(() => repriceSlip(), 0);
       }
       render(true);
     };
@@ -1365,8 +1414,12 @@ function bindView() {
   if (pinSave) pinSave.onclick = saveAccountPin;
   const place = $("placeBet");
   if (place) place.onclick = placeBet;
-  const shareBtn = $("shareCodeBtn");
-  if (shareBtn) shareBtn.onclick = shareBetCode;
+  const bookBtn = $("bookBetBtn");
+  if (bookBtn) bookBtn.onclick = bookBet;
+  const copyCode = $("copyCodeBtn");
+  if (copyCode) copyCode.onclick = copyBookedCode;
+  const shareLink = $("shareLinkBtn");
+  if (shareLink) shareLink.onclick = shareBookedLink;
   const loadBtn = $("loadCodeBtn");
   if (loadBtn) loadBtn.onclick = () => loadBetCode(false);
   const loadPlace = $("loadPlaceBtn");
@@ -1411,23 +1464,10 @@ async function onAuth(e) {
   const err = $("authError");
   err.textContent = "";
   const join = state.authTab === "join";
-  const body = { password: $("password").value };
+  const body = { password: $("password").value, phone: $("phone").value };
   let url = "/api/login";
-  if (join) {
-    url = "/api/register";
-    Object.assign(body, {
-      username: $("username").value.trim(),
-      email: $("email").value.trim(),
-      phone: $("phone").value,
-      referral: ($("referral") || {}).value || "",
-      accepted: $("accepted").checked
-    });
-  } else {
-    body.method = state.loginMethod;
-    if (state.loginMethod === "phone") body.phone = $("phone").value;
-    else if (state.loginMethod === "email") body.email = $("email").value.trim();
-    else body.username = $("username").value.trim();
-  }
+  if (join) url = "/api/register";
+  else body.method = "phone";
   e.target.querySelector("[type=submit]").disabled = true;
   try {
     await api(url, { method: "POST", body: JSON.stringify(body) });
@@ -1476,6 +1516,11 @@ async function placeBet() {
   if (state.placing) return;
   const stakeEl = $("stakeInput");
   if (stakeEl) state.stake = Number(digitsOnly(stakeEl.value, 9) || 0);
+  if (state.stake < 60000) {
+    state.notice = "Minimum stake amount to place a bet is 60,000 TZS.";
+    render();
+    return;
+  }
   state.placing = true;
   const btn = $("placeBet");
   if (btn) { btn.disabled = true; btn.textContent = "Placing…"; }
@@ -1500,7 +1545,8 @@ async function placeBet() {
       return;
     }
     state.notice = err.message;
-    render();
+    if (/removed from your slip|expired/i.test(err.message)) await repriceSlip();
+    else render();
   } finally {
     state.placing = false;
   }
@@ -1519,17 +1565,28 @@ async function copyText(text) {
   }
 }
 
-async function shareBetCode() {
-  const stakeEl = $("stakeInput");
-  if (stakeEl) state.stake = Number(digitsOnly(stakeEl.value, 9) || 0);
+async function ensureBookedCode() {
+  if (!state.slip.length) throw new Error("Pick at least one outcome");
+  const data = await api("/api/bet/share", {
+    method: "POST",
+    body: JSON.stringify({
+      userId: state.user?.id || "",
+      selections: state.slip.map((s) => ({ ...s, bookedOdd: Number(s.bookedOdd || s.odd) }))
+    })
+  });
+  state.lastBetCode = data.code;
+  return data.code;
+}
+
+function bookingUrl(code) {
+  return location.origin + "/?booking=" + encodeURIComponent(code);
+}
+
+async function bookBet() {
   try {
-    const data = await api("/api/bet/share", {
-      method: "POST",
-      body: JSON.stringify({ userId: state.user?.id || "", selections: state.slip, stake: state.stake })
-    });
-    state.lastBetCode = data.code;
-    await copyText(data.code);
-    state.notice = "Bet code copied: " + data.code;
+    const code = await ensureBookedCode();
+    await copyText(code);
+    state.notice = "Booking code " + code + " copied. Share it any time.";
     render();
   } catch (err) {
     state.notice = err.message;
@@ -1537,17 +1594,71 @@ async function shareBetCode() {
   }
 }
 
+async function copyBookedCode() {
+  try {
+    const code = state.lastBetCode || await ensureBookedCode();
+    await copyText(code);
+    state.notice = "Code copied: " + code;
+    render();
+  } catch (err) {
+    state.notice = err.message;
+    render();
+  }
+}
+
+async function shareBookedLink() {
+  try {
+    const code = state.lastBetCode || await ensureBookedCode();
+    const url = bookingUrl(code);
+    const text = "Paribet booking code " + code + "\n" + url;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: "Paribet", text, url });
+        state.notice = "Booking code " + code;
+        render();
+        return;
+      } catch (err) {
+        if (err && err.name === "AbortError") return;
+      }
+    }
+    window.open("https://wa.me/?text=" + encodeURIComponent(text), "_blank", "noopener");
+    state.notice = "WhatsApp share opened · " + code;
+    render();
+  } catch (err) {
+    state.notice = err.message;
+    render();
+  }
+}
+
+async function repriceSlip() {
+  if (!state.slip.length || state.repricing) return;
+  state.repricing = true;
+  const stakeEl = $("stakeInput");
+  if (stakeEl) state.stake = Number(digitsOnly(stakeEl.value, 9) || 0);
+  try {
+    const data = await api("/api/slip/reprice", {
+      method: "POST",
+      body: JSON.stringify({ selections: state.slip })
+    });
+    state.slip = (data.selections || []).map(slipLeg);
+    if (data.notice) state.notice = data.notice;
+    if (!state.slip.length) state.slipOpen = false;
+    render(true);
+  } catch (err) {
+    if (/expired|finished/i.test(err.message || "")) {
+      state.slip = [];
+      state.slipOpen = false;
+      state.notice = err.message;
+      render();
+    }
+  } finally {
+    state.repricing = false;
+  }
+}
+
 function applyLoadedSlip(data) {
-  state.slip = (data.selections || []).map((s) => ({
-    id: s.id,
-    pick: s.pick,
-    label: s.label || s.pick,
-    market: s.market || "",
-    odd: Number(s.odd),
-    home: s.home,
-    away: s.away
-  }));
-  if (data.stake) state.stake = Number(data.stake);
+  state.slip = (data.selections || []).map(slipLeg);
+  state.slipOpen = state.slip.length > 0;
   state.lastBetCode = data.code || state.loadCode;
 }
 
@@ -1585,7 +1696,7 @@ async function loadBetCode(placeToo) {
     }
     const data = await api("/api/bet/load", { method: "POST", body: JSON.stringify({ userId: state.user?.id || "", code }) });
     applyLoadedSlip(data);
-    state.notice = "Bet code loaded. Place it when you are ready.";
+    state.notice = data.notice || "Bet code loaded. Place it when you are ready.";
     if (state.view === "bets") go("sports");
     else render();
   } catch (err) {
@@ -2097,6 +2208,7 @@ window.addEventListener("hashchange", route);
     else location.hash = "#/home";
   }
   readBooking();
+  startSlipPoll();
   route();
   try {
     await loadCatalog(3);
