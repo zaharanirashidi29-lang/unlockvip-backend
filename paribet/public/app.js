@@ -174,7 +174,10 @@ function readBooking() {
   const code = shareCodeFromLocation();
   if (!code) return;
   state.loadCode = code;
-  if (code !== state.loadedShare) state.sharePending = true;
+  if (code !== state.loadedShare) {
+    state.sharePending = true;
+    state.slipOpen = true;
+  }
 }
 
 function route() {
@@ -390,10 +393,8 @@ function updateWinPreview() {
   const t = slipTotals();
   const odds = $("slipOdds");
   const ret = $("slipReturns");
-  const profit = $("slipProfit");
   if (odds) odds.textContent = Number(t.odds || 0).toFixed(2);
   if (ret) ret.textContent = tzs(t.returns);
-  if (profit) profit.textContent = tzs(t.profit);
 }
 
 function findSel(m, key) {
@@ -614,30 +615,42 @@ function loadBetBox() {
     </section>`;
 }
 
+function ticketStatus(b) {
+  const s = String(b.status || "Open");
+  if (s === "Live") return "Live";
+  if (s === "Won") return "Won";
+  if (s === "Lost") return "Lost";
+  if (s === "Cashout") return "Cashed out";
+  if (s === "Void") return "Void";
+  return "Waiting";
+}
+
 function ticketCard(b) {
   const legs = b.legs || b.selections || [];
   const statusClass = String(b.status || "open").toLowerCase();
-  const toReturn = b.toReturn != null ? b.toReturn : b.payout;
-  const toWin = b.toWin != null ? b.toWin : Math.max(0, Number(b.payout || 0) - Number(b.stake || 0));
+  const win = b.status === "Won" || b.status === "Cashout" ? Number(b.payout || 0) : Math.round(Number(b.stake || 0) * Number(b.odds || 0));
   return `
     <article class="ticket ${statusClass}">
-      <div class="meta">
-        <span>Placed bet ${b.code ? "· " + b.code : ""}</span>
-        <span class="st-${statusClass}">${b.status}</span>
+      <div class="ticket-top">
+        <b class="ticket-status st-${statusClass}">${ticketStatus(b)}</b>
+        ${b.code ? `<span class="ticket-code">${esc(b.code)}</span>` : ""}
       </div>
       ${legs.map((l) => `
-        <div class="ticket-leg">
-          <a href="#/match/${l.id}">${l.home} vs ${l.away}</a>
-          <span>${l.live ? '<span class="live-dot">LIVE</span> ' : l.period === "ft" ? "FT " : ""}${l.clock ? esc(l.clock) + " " : ""}${l.score ? "· " + esc(l.score) + " " : ""}${l.result ? " · " + String(l.result).toUpperCase() : ""}</span>
-          <div class="hint">${l.market ? l.market + " / " : ""}${l.label || l.pick} @ ${Number(l.odd || 0).toFixed(2)}</div>
+        <div class="ticket-match">
+          <div>
+            <strong>${esc(l.home)} vs ${esc(l.away)}</strong>
+            <p class="ticket-pick">${esc(l.label || l.pick)} · ${Number(l.odd || 0).toFixed(2)}</p>
+          </div>
+          <div class="ticket-now">
+            <b>${l.score ? esc(l.score) : "–"}</b>
+            <span>${l.period === "ft" ? "FT" : l.live ? esc(l.clock || "LIVE") : esc(l.clock || "Soon")}</span>
+          </div>
         </div>`).join("")}
-      <div class="win-line">
-        <span>Stake ${tzs(b.stake)}</span>
-        <span>To return ${tzs(toReturn || 0)}</span>
-        <span>To win ${tzs(toWin || 0)}</span>
+      <div class="ticket-money">
+        <div><span>Stake</span><b>${tzs(b.stake)}</b></div>
+        <div><span>${b.status === "Won" || b.status === "Cashout" ? "You got" : "Possible win"}</span><b>${tzs(win || 0)}</b></div>
       </div>
-      ${b.cashout != null && (b.status === "Live" || b.status === "Open") ? `<div class="cashout-line"><span>Cashout</span><b>${tzs(b.cashout)}</b>${Number(b.cashout) > 0 ? `<button type="button" data-cashout="${esc(b.id)}">Cash out</button>` : `<em>Not available</em>`}</div>` : ""}
-      ${b.code ? `<div class="code-line"><span>Bet code <b>${b.code}</b></span><button type="button" class="ghost" data-copy="${b.code}">Copy</button></div>` : ""}
+      ${b.cashout != null && Number(b.cashout) > 0 && (b.status === "Live" || b.status === "Open") ? `<button class="wide gold cash-btn" type="button" data-cashout="${esc(b.id)}">Cash out ${tzs(b.cashout)}</button>` : ""}
     </article>`;
 }
 
@@ -662,52 +675,39 @@ function slipSheet(t, n) {
     <section class="slip-sheet" role="dialog" aria-label="Betslip">
       <div class="slip-head">
         <button type="button" class="slip-head-btn" id="slipToggle">
-          <span>Betslip · ${n}</span>
+          <span>Your bet · ${n}</span>
           <b id="slipOdds">${t.odds.toFixed(2)}</b>
         </button>
         <button type="button" class="market-cancel" id="slipClear">Clear</button>
       </div>
       <div class="slip-picks">
-        ${state.slip.map((s) => {
-          const moved = s.bookedOdd && Math.abs(Number(s.bookedOdd) - Number(s.odd)) >= 0.01;
-          const liveLine = s.live ? `<em class="slip-live">LIVE ${esc(s.clock || s.period || "")}${s.score ? " · " + esc(s.score) : ""}</em>` : "";
-          return `
+        ${state.slip.map((s) => `
           <div class="slip-pick">
-            <button type="button" class="slip-x" data-remove="${s.id}|${s.pick}" aria-label="Remove ${esc(s.label || s.pick)}">✕</button>
+            <button type="button" class="slip-x" data-remove="${s.id}|${s.pick}" aria-label="Remove">✕</button>
             <div class="slip-pick-main">
               <strong>${esc(s.home)} vs ${esc(s.away)}</strong>
-              <span>${esc(s.market || "1X2")} · ${esc(s.label || s.pick)}</span>
-              ${liveLine}
+              <span>${esc(s.label || s.pick)}${s.live ? " · LIVE " + esc(s.clock || "") + (s.score ? " " + esc(s.score) : "") : ""}</span>
             </div>
-            <b class="slip-odd">${Number(s.odd).toFixed(2)}${moved ? `<small class="odd-was">${Number(s.bookedOdd).toFixed(2)}</small>` : ""}</b>
-          </div>`;
-        }).join("")}
+            <b class="slip-odd">${Number(s.odd).toFixed(2)}</b>
+          </div>`).join("")}
       </div>
+      <p class="stake-label">Choose stake</p>
       <div class="stake-chips">
         ${chips.map((amt) => `<button type="button" data-stake="${amt}" class="${Number(state.stake) === amt ? "on" : ""}">${amt.toLocaleString("en-TZ")}</button>`).join("")}
       </div>
-      <div class="stake-row">
-        <input class="input stake-input" id="stakeInput" inputmode="numeric" value="${state.stake || ""}" placeholder="${demo ? "Virtual stake" : "Stake to place"}" aria-label="${demo ? "Virtual stake" : "Stake"}">
-        <span>${demo ? "Virtual TZS" : "Stake TZS"}</span>
-      </div>
-      <div class="win-box">
-        <div><span>Total odds</span><b>${t.odds.toFixed(2)}</b></div>
-        <div><span>Potential payout</span><b id="slipReturns">${tzs(t.returns)}</b></div>
-        <div><span>Potential win</span><b id="slipProfit">${tzs(t.profit)}</b></div>
-      </div>
+      <input class="input stake-input" id="stakeInput" inputmode="numeric" value="${state.stake || ""}" placeholder="${demo ? "Or type a virtual stake" : "Or type a stake"}" aria-label="Stake">
+      <div class="payout-line"><span>Possible win</span><b id="slipReturns">${tzs(t.returns)}</b></div>
       <button class="wide gold" type="button" id="placeBet" ${state.placing ? "disabled" : ""}>${state.placing ? "Placing…" : "Place bet"}</button>
-      ${state.notice && /stake|booking|code|slip|match|odd|expired|removed/i.test(state.notice) ? `<p class="error">${esc(state.notice)}</p>` : ""}
-      <button class="wide" type="button" id="bookBetBtn">Book bet</button>
-      <div class="slip-share">
-        <button type="button" id="copyCodeBtn">Copy link</button>
-        <button type="button" id="shareLinkBtn">Share link</button>
-      </div>
-      ${state.lastBetCode ? `<p class="book-code"><a href="${esc(bookingUrl(state.lastBetCode))}">${esc(bookingUrl(state.lastBetCode))}</a></p>` : ""}
+      ${state.notice && /stake|minimum|insufficient|expired|removed/i.test(state.notice) ? `<p class="error">${esc(state.notice)}</p>` : ""}
+      <button class="slip-share-one" type="button" id="shareLinkBtn">Share slip</button>
     </section>`;
 }
 
 function slipDockHtml() {
   const wide = window.matchMedia("(min-width: 1100px)").matches;
+  if (state.sharePending && !state.slip.length) {
+    return `<section class="slip-sheet"><p class="slip-loading">Loading your bet…</p></section>`;
+  }
   if (!state.slip.length) {
     return `<aside class="slip-panel slip-empty"><h3>Betslip</h3><p>Tap a price to add a selection.</p></aside>`;
   }
@@ -727,12 +727,12 @@ function slipDockHtml() {
 function paintSlip() {
   const dock = $("betslipDock");
   if (!dock) return;
-  const on = state.slip.length > 0;
+  const on = state.slip.length > 0 || state.sharePending;
   dock.innerHTML = slipDockHtml();
   dock.classList.toggle("empty", !on);
   dock.hidden = false;
   document.body.classList.toggle("has-slip", on);
-  document.body.classList.toggle("slip-open", on && state.slipOpen);
+  document.body.classList.toggle("slip-open", on && (state.slipOpen || state.sharePending));
 }
 
 function homeFront(matches) {
@@ -746,7 +746,7 @@ function homeFront(matches) {
   const demos = (matches || []).filter((m) => m.source === "demo" && m.period !== "ft");
   let html = "";
   if (demos.length) {
-    html += `<div class="sec-head"><h2>Demo · 11:55</h2></div>${eventList(demos, false, false)}`;
+    html += `<div class="sec-head"><h2>Demo · 12:15</h2></div>${eventList(demos, false, false)}`;
   }
   for (const [title, keys] of leagues) {
     const rows = (matches || []).filter((m) => m.period !== "ft" && keys.some((k) => fold(m.league).includes(fold(k)))).slice(0, 3);
@@ -1207,23 +1207,15 @@ function payHtml(tab) {
 function betsHtml() {
   const liveRows = openTickets();
   const doneRows = settledTickets();
-  const other = (state.bets || []).filter((b) => b.kind !== "sports");
   const show = state.betTab === "results" ? doneRows : liveRows;
   return `
-    ${topToolsHtml()}
-    ${state.notice ? `<p class="notice">${state.notice}</p>` : ""}
+    <h2 class="bets-title">My bets</h2>
+    ${state.notice ? `<p class="notice bet-placed">${esc(state.notice)}</p>` : ""}
     <div class="filters">
-      <button type="button" data-bet-tab="live" class="${state.betTab === "live" ? "on" : ""}">Live tickets</button>
-      <button type="button" data-bet-tab="results" class="${state.betTab === "results" ? "on" : ""}">Won / Lost</button>
-      <button type="button" id="checkResultsBtn" class="gold-lite">Check results</button>
+      <button type="button" data-bet-tab="live" class="${state.betTab === "live" ? "on" : ""}">Open</button>
+      <button type="button" data-bet-tab="results" class="${state.betTab === "results" ? "on" : ""}">Settled</button>
     </div>
-    ${show.map(ticketCard).join("") || `<p class="empty">${state.betTab === "results" ? "No settled sports bets yet." : "No live placed bets. Pick odds and place a ticket."}</p>`}
-    ${state.betTab === "results" && other.length ? other.map((b) => `
-      <article class="ticket ${String(b.status || "").toLowerCase()}">
-        <div class="meta"><span>${b.kind}</span><span class="st-${String(b.status || "").toLowerCase()}">${b.status}</span></div>
-        <div>${b.detail || ""}</div>
-        <div class="win-line"><span>Stake ${tzs(b.stake)}</span><span>${b.status === "Won" ? "Won " + tzs(b.payout || 0) : "Lost"}</span></div>
-      </article>`).join("") : ""}
+    ${show.map(ticketCard).join("") || `<p class="empty">${state.betTab === "results" ? "No settled bets yet." : "No open bets yet."}</p>`}
   `;
 }
 
@@ -1599,14 +1591,14 @@ async function placeBet() {
       body: JSON.stringify({ userId: state.user.id, selections: state.slip, stake: state.stake })
     });
     state.slip = [];
+    state.slipOpen = false;
     state.lastBetCode = data.code || data.bet?.code || "";
-    state.notice = data.bet?.status === "Won"
-      ? "Won · " + tzs(data.bet.payout || 0) + (demo ? " added to virtual balance" : " added to cash")
-      : data.bet?.status === "Lost"
-        ? "Bet placed · already lost, stake deducted"
-        : "Bet placed · code " + state.lastBetCode;
-    await loadBets();
+    state.notice = "Bet placed";
+    state.placing = false;
+    if (data.user) saveUser(data.user);
+    if (data.bet) state.bets = [data.bet, ...(state.bets || []).filter((b) => b.id !== data.bet.id)];
     go("bets");
+    loadBets();
   } catch (err) {
     state.placing = false;
     if (/insufficient|not enough/i.test(err.message)) {
@@ -1751,14 +1743,13 @@ async function loadBetCode(placeToo) {
         body: JSON.stringify({ userId: state.user.id, code, stake: state.stake })
       });
       state.slip = [];
+      state.slipOpen = false;
       state.lastBetCode = data.code || "";
-      state.notice = data.bet?.status === "Won"
-        ? "Bet won · " + tzs(data.bet.payout || 0) + " added"
-        : data.bet?.status === "Lost"
-          ? "Bet placed and already lost"
-          : "Bet placed · code " + state.lastBetCode;
-      await loadBets();
+      state.notice = "Bet placed";
+      if (data.user) saveUser(data.user);
+      if (data.bet) state.bets = [data.bet, ...(state.bets || []).filter((b) => b.id !== data.bet.id)];
       go("bets");
+      loadBets();
       return;
     }
     const data = await api("/api/bet/load", { method: "POST", body: JSON.stringify({ userId: state.user?.id || "", code }) });
@@ -2264,10 +2255,18 @@ function setupInstallBar() {
   }
 }
 
+let shareLoadPromise = null;
+function queueShareLoad() {
+  if (!state.loadCode || state.loadedShare === state.loadCode) return shareLoadPromise;
+  if (shareLoadPromise) return shareLoadPromise;
+  shareLoadPromise = loadBetCode(false).finally(() => { shareLoadPromise = null; });
+  return shareLoadPromise;
+}
+
 window.addEventListener("hashchange", () => {
   readBooking();
   route();
-  if (state.sharePending) loadBetCode(false);
+  if (state.sharePending) queueShareLoad();
 });
 
 (async function boot() {
@@ -2285,8 +2284,9 @@ window.addEventListener("hashchange", () => {
   readBooking();
   startSlipPoll();
   route();
+  const shareJob = queueShareLoad();
   try {
-    await loadCatalog(3);
+    await loadCatalog(2);
     render();
   } catch (_) {
     render();
@@ -2302,7 +2302,7 @@ window.addEventListener("hashchange", () => {
     await loadBets();
     render();
   }
-  if (state.loadCode) {
-    try { await loadBetCode(false); } catch (_) {}
+  if (shareJob) {
+    try { await shareJob; } catch (_) {}
   }
 })();

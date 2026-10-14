@@ -202,8 +202,8 @@ function demoMatch(row, key, odd) {
     score: "",
     stats: blankStats(),
     day: "2026-10-14",
-    time: "11:55",
-    kickMin: 11 * 60 + 55,
+    time: "12:15",
+    kickMin: 12 * 60 + 15,
     ...row
   }, withPrice(footballMarkets(0), key, odd));
 }

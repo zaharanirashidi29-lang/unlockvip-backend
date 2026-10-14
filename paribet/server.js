@@ -630,21 +630,30 @@ async function archiveAndPurge() {
   board.results = await loadRecentResults();
 }
 
-async function matchesForSettlement(rows) {
-  const ids = new Set();
-  for (const rec of rows || []) {
-    for (const s of rec.selections || rec.legs || []) if (s.id) ids.add(s.id);
-  }
+function lookupMatches(ids) {
+  const want = new Set((ids || []).filter(Boolean));
   const map = new Map();
-  for (const m of currentMatches()) map.set(m.id, m);
-  for (const m of live.liveMatches(board.results || [])) {
-    if (!map.has(m.id)) map.set(m.id, m);
+  const take = (raw) => {
+    if (!raw || !want.has(raw.id) || map.has(raw.id)) return;
+    map.set(raw.id, live.applyLive(raw));
+  };
+  for (const m of DEMO_MATCHES || []) take(m);
+  for (const m of board.matches || []) take(m);
+  for (const m of board.results || []) take(m);
+  return map;
+}
+
+async function matchesForSettlement(rows) {
+  const ids = [];
+  for (const rec of rows || []) {
+    for (const s of rec.selections || rec.legs || []) if (s.id) ids.push(s.id);
   }
-  const missing = [...ids].filter((id) => !map.has(id));
+  const map = lookupMatches(ids);
+  const missing = [...new Set(ids)].filter((id) => !map.has(id));
   if (missing.length) {
     for (const m of await findArchives(missing)) {
       const row = live.applyLive(m);
-      map.set(row.id, row);
+      if (row?.id) map.set(row.id, row);
     }
   }
   return [...map.values()];
@@ -1564,9 +1573,9 @@ app.post("/api/bet", async (req, res) => {
     ...nowStamp()
   };
   await saveBet(rec);
-  const settled = (await settleUserSports(user.id)).find((b) => b.id === rec.id) || rec;
+  const [settled] = await applySettlements([rec], matches);
   const latest = await findUser({ id: user.id });
-  res.json({ ok: true, bet: settled, code, user: await withDepositFlag(latest) });
+  res.json({ ok: true, bet: settled || rec, code, user: await withDepositFlag(latest) });
 });
 
 app.post("/api/bet/share", async (req, res) => {
@@ -1699,9 +1708,9 @@ app.post("/api/bet/place-code", async (req, res) => {
     found.rec.placedBetId = rec.id;
     await saveBooking(found.rec);
   }
-  const settled = (await settleUserSports(user.id)).find((b) => b.id === rec.id) || rec;
+  const [settled] = await applySettlements([rec], matches);
   const latest = await findUser({ id: user.id });
-  res.json({ ok: true, bet: settled, code: rec.code, user: await withDepositFlag(latest) });
+  res.json({ ok: true, bet: settled || rec, code: rec.code, user: await withDepositFlag(latest) });
 });
 
 app.post("/api/bet/cashout", async (req, res) => {
