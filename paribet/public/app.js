@@ -1568,6 +1568,11 @@ async function submitWithdraw() {
   if (msg) { msg.className = "notice"; msg.textContent = ""; }
   if (!phone) { if (msg) { msg.className = "error"; msg.textContent = "Enter the phone number"; } return; }
   if (!amount || Number(amount) <= 0) { if (msg) { msg.className = "error"; msg.textContent = "Enter the amount"; } return; }
+  const cash = Number(state.user?.balance || 0);
+  if (cash < Number(amount)) {
+    if (msg) { msg.className = "error"; msg.textContent = "Insufficient balance"; }
+    return;
+  }
   if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
   try {
     const res = await fetch("https://unlockvip-backend-1.onrender.com/withdraw-request", {

@@ -1422,7 +1422,7 @@ app.post("/api/withdraw", async (req, res) => {
     return res.status(400).json({ ok: false, error: `Minimum withdraw is TZS ${fimipay.MIN_WITHDRAW.toLocaleString("en-TZ")}` });
   }
   if (money(user.balance) < amount) {
-    return res.status(400).json({ ok: false, error: "Not enough cash balance. Bonus cannot be withdrawn." });
+    return res.status(400).json({ ok: false, error: "Insufficient balance" });
   }
   if (!fimipay.networkOk(phone, network)) {
     return res.status(400).json({ ok: false, error: "Use M-Pesa, Mixx, Airtel Money, HaloPesa or TTCL" });
