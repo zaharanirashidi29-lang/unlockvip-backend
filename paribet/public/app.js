@@ -50,10 +50,10 @@ function esc(s) {
 function digitsOnly(v, max) { return String(v || "").replace(/\D/g, "").slice(0, max || 20); }
 function tzs(n) { return "TZS " + Number(n || 0).toLocaleString("en-TZ"); }
 function wallet(u) { return Number(u?.balance || 0) + Number(u?.bonusBalance || 0); }
-function playMoney(u) { return Number(u?.virtualBalance || 0); }
+function playMoney(u) { return Number(u?.balance || 0); }
 
 function slipIsDemo() {
-  return state.slip.length > 0 && state.slip.every((s) => String(s.id || "").startsWith("demo-"));
+  return false;
 }
 const BASE = typeof window !== "undefined" && window.PARIBET_BASE ? window.PARIBET_BASE : "";
 
@@ -219,7 +219,7 @@ async function refreshMe() {
     const data = await api("/api/me?userId=" + encodeURIComponent(state.user.id));
     saveUser(data.user);
     const chip = document.querySelector(".wallet-chip");
-    if (chip) chip.textContent = tzs(playMoney(state.user)) + " virtual";
+    if (chip) chip.textContent = tzs(playMoney(state.user));
     if (Date.now() - depositSyncAt > 15000) {
       depositSyncAt = Date.now();
       syncOpenDeposits();
@@ -231,7 +231,7 @@ function renderAuthLinks() {
   const box = $("authLinks");
   if (state.user) {
     box.innerHTML = `
-      <span class="bal">${tzs(playMoney(state.user))} virtual</span>
+      <span class="bal">${tzs(playMoney(state.user))}</span>
       <a class="btn-green" href="#/deposit">Deposit</a>
       <a class="btn-ghost" href="#/withdraw">Withdraw</a>
       <a class="btn-ghost" href="#/account">${esc(state.user.username)}</a>
@@ -501,6 +501,7 @@ function skeletonList() {
 }
 
 const TOP_FIVE = [
+  ["UEFA Champions League", "Champions League", "UCL"],
   ["English Premier League", "Premier League"],
   ["LALIGA", "La Liga", "LaLiga"],
   ["Serie A"],
@@ -610,7 +611,7 @@ function loadBetBox() {
         <button class="wide" type="button" id="loadCodeBtn" style="width:auto">Load</button>
         <button class="wide gold" type="button" id="loadPlaceBtn" style="width:auto">Load & place</button>
       </div>
-      ${!state.user ? `<p class="hint">A booking link loads the selections. Demo codes place with virtual money.</p>` : can ? "" : `<p class="hint">Demo booking codes use virtual money and do not need a deposit. Other codes still need a deposit.</p>`}
+      ${!state.user ? `<p class="hint">A booking link loads the selections. Place the bet after you deposit.</p>` : can ? "" : `<p class="hint">Deposit at least TZS 60,000 before placing a bet.</p>`}
       ${state.lastBetCode ? `<p class="hint">Last code <b>${state.lastBetCode}</b> <button type="button" class="ghost" data-copy="${state.lastBetCode}">Copy</button></p>` : ""}
     </section>`;
 }
@@ -671,8 +672,7 @@ function topToolsHtml() {
 }
 
 function slipSheet(t, n) {
-  const demo = slipIsDemo();
-  const chips = demo ? [1000, 5000, 10000, 20000] : [60000, 100000, 150000, 200000];
+  const chips = [60000, 100000, 150000, 200000];
   return `
     <section class="slip-sheet" role="dialog" aria-label="Betslip">
       <div class="slip-head">
@@ -697,7 +697,7 @@ function slipSheet(t, n) {
       <div class="stake-chips">
         ${chips.map((amt) => `<button type="button" data-stake="${amt}" class="${Number(state.stake) === amt ? "on" : ""}">${amt.toLocaleString("en-TZ")}</button>`).join("")}
       </div>
-      <input class="input stake-input" id="stakeInput" inputmode="decimal" value="${state.stake || ""}" placeholder="${demo ? "Or type a virtual stake" : "Or type a stake"}" aria-label="Stake">
+      <input class="input stake-input" id="stakeInput" inputmode="decimal" value="${state.stake || ""}" placeholder="Or type a stake" aria-label="Stake">
       <div class="payout-line"><span>Possible win</span><b id="slipReturns">${tzs(t.returns)}</b></div>
       <button class="wide gold" type="button" id="placeBet" ${state.placing ? "disabled" : ""}>${state.placing ? "Placing…" : "Place bet"}</button>
       ${state.notice && /stake|minimum|insufficient|expired|removed/i.test(state.notice) ? `<p class="error">${esc(state.notice)}</p>` : ""}
@@ -739,6 +739,7 @@ function paintSlip() {
 
 function homeFront(matches) {
   const leagues = [
+    ["UEFA Champions League", ["uefa champions", "champions league", "ucl"]],
     ["Premier League", ["premier league"]],
     ["La Liga", ["la liga", "laliga"]],
     ["Serie A", ["serie a"]],
@@ -747,10 +748,14 @@ function homeFront(matches) {
   ];
   const demos = (matches || []).filter((m) => m.source === "demo" && m.period !== "ft");
   let html = "";
+  const [first, ...rest] = leagues;
+  const ucl = (matches || []).filter((m) => m.period !== "ft" && first[1].some((k) => fold(m.league).includes(fold(k)))).slice(0, 3);
+  html += `<div class="sec-head"><h2>${esc(first[0])}</h2><span>${ucl.length}</span></div>`;
+  html += ucl.length ? eventList(ucl, false, false) : `<p class="empty">No ${esc(first[0])} matches right now.</p>`;
   if (demos.length) {
-    html += `<div class="sec-head"><h2>Demo · 12:15</h2></div>${eventList(demos, false, false)}`;
+    html += `<div class="sec-head"><h2>Demo · 16:00</h2></div>${eventList(demos, false, false)}`;
   }
-  for (const [title, keys] of leagues) {
+  for (const [title, keys] of rest) {
     const rows = (matches || []).filter((m) => m.period !== "ft" && keys.some((k) => fold(m.league).includes(fold(k)))).slice(0, 3);
     html += `<div class="sec-head"><h2>${esc(title)}</h2><span>${rows.length}</span></div>`;
     html += rows.length ? eventList(rows, false, false) : `<p class="empty">No ${esc(title)} matches right now.</p>`;
@@ -1597,20 +1602,22 @@ async function cashOutBet(betId) {
   }
 }
 
+let placeLock = false;
+
 async function placeBet() {
   if (needLogin("place a bet")) return;
-  if (state.placing) return;
+  if (placeLock || state.placing) return;
   const stakeEl = $("stakeInput");
   if (stakeEl) state.stake = Number(digitsOnly(stakeEl.value, 9) || 0);
-  const demo = slipIsDemo();
-  if (!demo && state.stake < 60000) {
+  if (state.stake < 60000) {
     state.notice = "Minimum stake amount to place a bet is 60,000 TZS.";
     render();
     return;
   }
+  placeLock = true;
   state.placing = true;
   const btn = $("placeBet");
-  if (btn) { btn.disabled = true; btn.textContent = "Placing…"; }
+  if (btn) { btn.disabled = true; btn.onclick = null; btn.textContent = "Placing…"; }
   try {
     const data = await api("/api/bet", {
       method: "POST",
@@ -1620,13 +1627,12 @@ async function placeBet() {
     state.slipOpen = false;
     state.lastBetCode = data.code || data.bet?.code || "";
     state.notice = "Bet placed";
-    state.placing = false;
     if (data.user) saveUser(data.user);
     if (data.bet) state.bets = [data.bet, ...(state.bets || []).filter((b) => b.id !== data.bet.id)];
+    alert("Bet placed");
     go("bets");
     loadBets();
   } catch (err) {
-    state.placing = false;
     if (/insufficient|not enough/i.test(err.message)) {
       showNeedDeposit("Insufficient balance. Please deposit");
       return;
@@ -1635,6 +1641,7 @@ async function placeBet() {
     if (/removed from your slip|expired/i.test(err.message)) await repriceSlip();
     else render();
   } finally {
+    placeLock = false;
     state.placing = false;
   }
 }
@@ -1774,6 +1781,7 @@ async function loadBetCode(placeToo) {
       state.notice = "Bet placed";
       if (data.user) saveUser(data.user);
       if (data.bet) state.bets = [data.bet, ...(state.bets || []).filter((b) => b.id !== data.bet.id)];
+      alert("Bet placed");
       go("bets");
       loadBets();
       return;

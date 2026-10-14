@@ -1517,14 +1517,27 @@ async function refreshSelections(selections) {
   };
 }
 
-function betIsVirtual(rec) {
-  if (rec?.purse === "cash") return false;
-  if (rec?.purse === "virtual") return true;
-  const legs = rec?.selections || [];
-  return legs.length > 0 && legs.every((s) => String(s.id || "").startsWith("demo-") || s.source === "demo");
+function betIsVirtual() {
+  return false;
 }
 
 const MIN_PLACE_STAKE = 60000;
+const recentPlaces = new Map();
+
+function placeSignature(userId, selections, stake) {
+  const legs = (selections || []).map((s) => `${s.id}:${s.pick}`).sort().join("|");
+  return `${userId}|${money(stake)}|${legs}`;
+}
+
+function recentPlace(userId, selections, stake) {
+  const hit = recentPlaces.get(placeSignature(userId, selections, stake));
+  if (hit && Date.now() - hit.at < 20000) return hit.rec;
+  return null;
+}
+
+function rememberPlace(userId, selections, stake, rec) {
+  recentPlaces.set(placeSignature(userId, selections, stake), { at: Date.now(), rec });
+}
 
 app.post("/api/bet", async (req, res) => {
   const user = await findUser({ id: String(req.body.userId || "") });
@@ -1541,17 +1554,19 @@ app.post("/api/bet", async (req, res) => {
   }
   const priced = fresh.kept;
   const matches = await matchesForSettlement([{ selections: priced }]);
-  const virtual = betIsVirtual({ selections: priced });
-  if (!virtual && stake < MIN_PLACE_STAKE) {
+  if (stake < MIN_PLACE_STAKE) {
     return res.status(400).json({ ok: false, error: "Minimum stake amount to place a bet is 60,000 TZS." });
+  }
+  const already = recentPlace(user.id, priced, stake);
+  if (already) {
+    const latest = await findUser({ id: user.id });
+    return res.json({ ok: true, bet: already, code: already.code, user: await withDepositFlag(latest), duplicate: true });
   }
   const closed = live.closedMatchError(priced, matches);
   if (closed) return res.status(400).json({ ok: false, error: closed });
   const odds = priced.reduce((n, s) => n * Number(s.odd || 0), 1);
   if (!Number.isFinite(odds) || odds <= 1) return res.status(400).json({ ok: false, error: "Invalid odds" });
-  if (virtual) {
-    if (stake > 0) await debitVirtual(user, stake);
-  } else if (!(await debit(user, stake))) {
+  if (!(await debit(user, stake))) {
     return res.status(400).json({ ok: false, error: "Insufficient balance. Please deposit" });
   }
   const payout = Math.round(stake * odds);
@@ -1560,7 +1575,7 @@ app.post("/api/bet", async (req, res) => {
     id: nid(),
     userId: user.id,
     kind: "sports",
-    purse: virtual ? "virtual" : "cash",
+    purse: "cash",
     selections: priced,
     stake,
     odds: Number(odds.toFixed(2)),
@@ -1573,6 +1588,7 @@ app.post("/api/bet", async (req, res) => {
     ...nowStamp()
   };
   await saveBet(rec);
+  rememberPlace(user.id, priced, stake, rec);
   const [settled] = await applySettlements([rec], matches);
   const latest = await findUser({ id: user.id });
   res.json({ ok: true, bet: settled || rec, code, user: await withDepositFlag(latest) });
@@ -1669,29 +1685,31 @@ app.post("/api/bet/place-code", async (req, res) => {
   }
   const selections = fresh.kept;
   const stake = money(req.body.stake);
-  const virtual = betIsVirtual({ selections });
   if (!selections.length) return res.status(400).json({ ok: false, error: "This code has no picks" });
-  if (!virtual && !(await hasDeposited(user.id))) {
+  if (!(await hasDeposited(user.id))) {
     return res.status(403).json({ ok: false, error: "Deposit first, then you can load a bet code" });
   }
-  if (!virtual && stake < MIN_PLACE_STAKE) {
+  if (stake < MIN_PLACE_STAKE) {
     return res.status(400).json({ ok: false, error: "Minimum stake amount to place a bet is 60,000 TZS." });
+  }
+  const already = recentPlace(user.id, selections, stake);
+  if (already) {
+    const latest = await findUser({ id: user.id });
+    return res.json({ ok: true, bet: already, code: already.code, user: await withDepositFlag(latest), duplicate: true });
   }
   const matches = await matchesForSettlement([{ selections }]);
   const closed = live.closedMatchError(selections, matches);
   if (closed) return res.status(400).json({ ok: false, error: closed });
   const odds = selections.reduce((n, s) => n * Number(s.odd || 0), 1);
   if (!Number.isFinite(odds) || odds <= 1) return res.status(400).json({ ok: false, error: "Invalid odds" });
-  if (virtual) {
-    if (stake > 0) await debitVirtual(user, stake);
-  } else if (!(await debit(user, stake))) {
+  if (!(await debit(user, stake))) {
     return res.status(400).json({ ok: false, error: "Insufficient balance. Please deposit" });
   }
   const rec = {
     id: nid(),
     userId: user.id,
     kind: "sports",
-    purse: virtual ? "virtual" : "cash",
+    purse: "cash",
     selections,
     stake,
     odds: Number(odds.toFixed(2)),
@@ -1704,6 +1722,7 @@ app.post("/api/bet/place-code", async (req, res) => {
     ...nowStamp()
   };
   await saveBet(rec);
+  rememberPlace(user.id, selections, stake, rec);
   if (found.kind === "book") {
     found.rec.placedBetId = rec.id;
     await saveBooking(found.rec);

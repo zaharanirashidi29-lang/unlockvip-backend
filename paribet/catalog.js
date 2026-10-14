@@ -202,8 +202,8 @@ function demoMatch(row, key, odd) {
     score: "",
     stats: blankStats(),
     day: "2026-10-14",
-    time: "12:15",
-    kickMin: 12 * 60 + 15,
+    time: "16:00",
+    kickMin: 16 * 60,
     ...row
   }, withPrice(footballMarkets(0), key, odd));
 }
@@ -224,8 +224,8 @@ const DEMO_MATCHES = [
     script: {
       home: 3,
       away: 1,
-      htHome: 2,
-      htAway: 0,
+      htHome: 3,
+      htAway: 1,
       times: [
         { min: 3, side: "home" },
         { min: 6, side: "home" },

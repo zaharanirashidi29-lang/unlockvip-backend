@@ -264,7 +264,7 @@ function applyDemo(m, now) {
   const p = eatParts(now || new Date());
   const today = `${p.year}-${p.month}-${p.day}`;
   const nowMin = Number(p.hour) * 60 + Number(p.minute) + Number(p.second || 0) / 60;
-  const kick = Number(row.kickMin ?? (12 * 60 + 15));
+  const kick = Number(row.kickMin ?? (16 * 60));
   let elapsed = nowMin - kick;
   if (row.day && row.day < today) elapsed = 200;
   if (row.day && row.day > today) elapsed = -60;
@@ -273,30 +273,30 @@ function applyDemo(m, now) {
     row.period = "pre";
     row.score = "";
     row.result = emptyResult();
-    row.clock = row.time || "12:15";
+    row.clock = row.time || "16:00";
     row.time = row.clock;
     row.minute = 0;
-    row.demoMinutes = 16;
+    row.demoMinutes = 90;
     return row;
   }
   let period = "1h";
   let minute = 1;
   let label = "1'";
   let finished = false;
-  if (elapsed < 8) {
-    minute = Math.min(8, Math.floor(elapsed) + 1);
+  if (elapsed < 45) {
+    minute = Math.min(45, Math.floor(elapsed) + 1);
     label = minute + "'";
     period = "1h";
-  } else if (elapsed < 10) {
-    minute = 8;
+  } else if (elapsed < 60) {
+    minute = 45;
     label = "HT";
     period = "ht";
-  } else if (elapsed < 18) {
-    minute = Math.min(16, 9 + Math.floor(elapsed - 10));
+  } else if (elapsed < 105) {
+    minute = Math.min(90, 46 + Math.floor(elapsed - 60));
     label = minute + "'";
     period = "2h";
   } else {
-    minute = 16;
+    minute = 90;
     label = "FT";
     period = "ft";
     finished = true;
@@ -306,7 +306,7 @@ function applyDemo(m, now) {
   row.clock = label;
   row.minute = minute;
   row.live = !finished;
-  row.demoMinutes = 16;
+  row.demoMinutes = 90;
   row.result = footballAt(planFor(row), minute, finished);
   row.score = formatScore("football", row.result);
   row.stats = {
