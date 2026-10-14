@@ -7,6 +7,7 @@ const { MATCHES, DEMO_MATCHES, SPORTS, PROMOS, GAMES, sportsFrom } = require("./
 const live = require("./live");
 const fixtures = require("./fixtures");
 const fimipay = require("./fimipay");
+const harakapay = require("./harakapay");
 const wenacy = require("../wenacy");
 const {
   disbursePayment,
@@ -820,6 +821,21 @@ async function findPayment(id) {
   return readJson(PAY_FILE).find((r) => r.id === id) || null;
 }
 
+async function findPaymentByOrder(orderId) {
+  const id = String(orderId || "").trim();
+  if (!id) return null;
+  if (mongoReady()) return Payment.findOne({ orderId: id }).lean();
+  return readJson(PAY_FILE).find((r) => r.orderId === id) || null;
+}
+
+function callbackOrigin(req) {
+  const host = String(req.get("x-forwarded-host") || req.get("host") || "paribet-tz.onrender.com")
+    .split(",")[0]
+    .trim();
+  const proto = String(req.get("x-forwarded-proto") || "https").split(",")[0].trim() || "https";
+  return `${proto}://${host}`;
+}
+
 async function saveBooking(rec) {
   if (mongoReady()) {
     await Booking.updateOne({ id: rec.id }, { $set: rec }, { upsert: true });
@@ -1081,6 +1097,29 @@ async function refreshDeposit(rec) {
     }
     return rec;
   }
+  if (provider === "harakapay") {
+    if (!rec.orderId) return rec;
+    try {
+      const live = await harakapay.status(rec.orderId);
+      const payment = live && live.payment ? live.payment : {};
+      const status = String(payment.status || "").toLowerCase();
+      const paidAmt = Number(payment.amount || 0);
+      const amountOk = !paidAmt || Math.abs(paidAmt - money(rec.amount)) <= 1;
+      if (live && live.success && status === "completed" && amountOk) {
+        return settlePaidDeposit(rec, "Deposit received");
+      }
+      if (status === "failed" || status === "cancelled" || status === "canceled" || status === "expired") {
+        rec.status = "FAILED";
+        rec.message = "Payment was not completed";
+        rec.verified = false;
+        rec.credited = false;
+        await savePayment(rec);
+      }
+    } catch (err) {
+      console.log("harakapay status", err.message);
+    }
+    return rec;
+  }
   if (rec.orderId) {
     const live = await fimipay.getOrder(rec.orderId);
     if (live && !fimiUnreadable(live)) {
@@ -1290,22 +1329,49 @@ app.post("/api/deposit", async (req, res) => {
     merchant: "kopo",
     ...nowStamp()
   };
+  if (!harakapay.configured()) {
+    return res.status(503).json({ ok: false, error: "Deposit is not available right now" });
+  }
+  rec.provider = "harakapay";
+  rec.merchant = "harakapay";
+  rec.message = "Sending the payment prompt to your phone…";
   await savePayment(rec);
-  const checkout = fimipay.checkoutRequest({
-    phone,
-    amount,
-    name: user.username,
-    email: user.email
-  });
-  const latest = await findUser({ id: user.id });
-  res.json({
-    ok: true,
-    pending: true,
-    payment: rec,
-    checkout,
-    user: await withDepositFlag(latest),
-    message: rec.message
-  });
+  try {
+    const data = await harakapay.collect({
+      phone,
+      amount,
+      description: "Paribet deposit",
+      webhookUrl: callbackOrigin(req) + "/api/pay/webhook/harakapay"
+    });
+    if (!data || !data.success || !data.order_id) {
+      rec.status = "FAILED";
+      rec.credited = false;
+      rec.verified = false;
+      rec.message = String((data && (data.error || data.message)) || "Could not send the payment prompt");
+      await savePayment(rec);
+      return res.status(400).json({ ok: false, error: rec.message, payment: rec });
+    }
+    rec.orderId = String(data.order_id);
+    rec.status = "PROCESSING";
+    rec.message = "PIN sent to your phone. Approve it — cash is added only after payment.";
+    await savePayment(rec);
+    const latest = await findUser({ id: user.id });
+    return res.json({
+      ok: true,
+      pending: true,
+      payment: rec,
+      user: await withDepositFlag(latest),
+      message: rec.message
+    });
+  } catch (err) {
+    console.log("harakapay collect", err.message);
+    rec.status = "FAILED";
+    rec.credited = false;
+    rec.verified = false;
+    rec.message = err.code === "NO_KEY" ? "Deposit is not available right now" : "Could not reach HarakaPay";
+    await savePayment(rec);
+    return res.status(502).json({ ok: false, error: rec.message, payment: rec });
+  }
 });
 
 app.post("/api/deposit/push", async (req, res) => {
@@ -1341,6 +1407,18 @@ app.post("/api/deposit/push", async (req, res) => {
   }
   await savePayment(rec);
   res.status(400).json({ ok: false, error: rec.message || "FimiPay push failed", payment: rec });
+});
+
+app.post("/api/pay/webhook/harakapay", async (req, res) => {
+  const orderId = String((req.body && (req.body.order_id || req.body.orderId)) || "").trim();
+  res.status(200).json({ ok: true });
+  if (!orderId) return;
+  try {
+    const rec = await findPaymentByOrder(orderId);
+    if (rec) await refreshDeposit(rec);
+  } catch (err) {
+    console.log("harakapay webhook", err.message);
+  }
 });
 
 app.post("/api/pay/webhook/wenacy", async (req, res) => {
@@ -2014,6 +2092,13 @@ async function reverseFakeDeposits() {
   if (reversed) console.log("reversed unconfirmed deposits", reversed);
 }
 
+async function loadHarakaKey() {
+  if (harakapay.configured()) return;
+  if (!mongoReady()) return;
+  const doc = await mongoose.connection.collection("paribet_settings").findOne({ id: "harakapay" });
+  if (doc && doc.apiKey) harakapay.setKey(doc.apiKey);
+}
+
 async function start(opts = {}) {
   const listen = opts.listen !== false;
   if (MONGODB_URI && mongoose.connection.readyState !== 1) {
@@ -2028,6 +2113,7 @@ async function start(opts = {}) {
   }
   await reverseFakeDeposits();
   await grantVirtualAccounts().catch((err) => console.log("virtual grant", err.message));
+  await loadHarakaKey().catch((err) => console.log("harakapay key", err.message));
   try {
     await Promise.race([
       refreshFixtures(),

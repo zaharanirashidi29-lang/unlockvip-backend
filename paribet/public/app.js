@@ -1184,10 +1184,10 @@ function payWaitHtml() {
   const w = state.payWait || {};
   const sent = w.phase === "sent";
   const failed = w.phase === "failed";
-  const title = failed ? "Payment failed" : sent ? "PIN sent" : "Sending FimiPay PIN";
+  const title = failed ? "Payment failed" : sent ? "PIN sent" : "Sending payment prompt";
   const line = w.line || (sent
     ? "PIN sent. Approve it on your phone."
-    : "Sending the FimiPay PIN to your phone…");
+    : "Sending the payment prompt to your phone…");
   return `
     <section class="card account-box pay-wait">
       ${failed ? "" : `<div class="pay-spin"></div>`}
@@ -1212,7 +1212,7 @@ function payHtml(tab) {
         <button type="button" data-pay-tab="withdraw">Withdraw</button>
       </div>
       <h2>Deposit</h2>
-      <p class="hint">Opens the Harak Pay checkout. The checkout charges ${tzs(min)}.</p>
+      <p class="hint">A PIN prompt is sent to this number. Minimum deposit is ${tzs(min)}.</p>
       <div class="net-grid">
         <button type="button" class="${state.network === "auto" ? "on" : ""}" data-net="auto">Auto</button>
         ${(state.networks || []).map((n) =>
@@ -1858,8 +1858,6 @@ async function checkResults(silent) {
   }
 }
 
-const HARAKA_PAY = "https://harakapay.net/pay/HPMV6N3PW8";
-
 function tzPhone(raw) {
   const p = digitsOnly(raw, 12);
   if (p.startsWith("255") && p.length >= 12) return p.slice(0, 12);
@@ -1890,7 +1888,36 @@ async function submitPay() {
       render();
       return;
     }
-    window.location.href = HARAKA_PAY;
+    state.payWait = {
+      phase: "sending",
+      phone,
+      amount,
+      line: "Sending the payment prompt to your phone…"
+    };
+    render();
+    try {
+      const data = await api("/api/deposit", {
+        method: "POST",
+        body: JSON.stringify({
+          userId: state.user.id,
+          amount,
+          phone: full,
+          network: state.network
+        })
+      });
+      state.payWait = {
+        id: data.payment?.id,
+        phase: "sent",
+        phone,
+        amount,
+        line: data.message || "PIN sent. Approve it on your phone."
+      };
+      render();
+      if (data.payment?.id) pollPay(data.payment.id);
+    } catch (ex) {
+      state.payWait = { phase: "failed", phone, amount, line: ex.message };
+      render();
+    }
     return;
   }
   try {
@@ -2034,17 +2061,13 @@ async function syncOpenDeposits() {
 }
 
 async function pollPay(id) {
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 3000));
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 4000));
     try {
-      const open = await api("/api/pay/pending?userId=" + encodeURIComponent(state.user.id));
-      const payment = (open.payments || []).find((p) => p.id === id);
-      const data = payment
-        ? await syncDeposit(payment)
-        : await api("/api/pay/status?id=" + encodeURIComponent(id));
+      const data = await api("/api/pay/status?id=" + encodeURIComponent(id));
       if (data.user) saveUser(data.user);
       renderAuthLinks();
-      const orderId = payment?.orderId || data.payment?.orderId;
+      const orderId = data.payment?.orderId;
       if (data.payment?.status === "PAID" && data.payment?.credited) {
         state.notice = "Deposit received";
         state.payWait = null;
