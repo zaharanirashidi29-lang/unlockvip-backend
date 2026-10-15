@@ -263,7 +263,30 @@ const DEMO_MATCHES = [
         { min: 84, side: "home" }
       ]
     }
-  }, "cs52", 18)
+  }, "cs52", 18),
+  demoMatch({
+    id: "demo-asec-philipe",
+    league: "Elite Star League",
+    home: "Asec Philipe",
+    away: "Mamec SC",
+    day: "2026-10-15",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 4,
+      away: 2,
+      htHome: 2,
+      htAway: 1,
+      times: [
+        { min: 9, side: "home" },
+        { min: 24, side: "away" },
+        { min: 41, side: "home" },
+        { min: 58, side: "home" },
+        { min: 74, side: "away" },
+        { min: 88, side: "home" }
+      ]
+    }
+  }, "cs42", 117)
 ];
 
 function blankStats() {
