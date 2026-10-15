@@ -286,7 +286,31 @@ const DEMO_MATCHES = [
         { min: 88, side: "home" }
       ]
     }
-  }, "cs42", 117)
+  }, "cs42", 117),
+  demoMatch({
+    id: "demo-black-rock",
+    league: "Elite Star League",
+    home: "Black Rock",
+    away: "Saint SC SC",
+    day: "2026-10-15",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 4,
+      away: 3,
+      htHome: 2,
+      htAway: 2,
+      times: [
+        { min: 8, side: "home" },
+        { min: 18, side: "away" },
+        { min: 34, side: "home" },
+        { min: 43, side: "away" },
+        { min: 59, side: "home" },
+        { min: 72, side: "away" },
+        { min: 85, side: "home" }
+      ]
+    }
+  }, "cs43", 117)
 ];
 
 function blankStats() {
