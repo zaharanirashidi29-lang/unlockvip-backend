@@ -332,7 +332,32 @@ const DEMO_MATCHES = [
         { min: 78, side: "away" }
       ]
     }
-  }, "cs23", 137)
+  }, "cs23", 137),
+  demoMatch({
+    id: "demo-viper-united",
+    league: "Elite Star League",
+    home: "Viper United",
+    away: "Shangai Fox SC",
+    day: "2026-10-16",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 2,
+      away: 6,
+      htHome: 1,
+      htAway: 3,
+      times: [
+        { min: 11, side: "home" },
+        { min: 22, side: "away" },
+        { min: 33, side: "away" },
+        { min: 44, side: "away" },
+        { min: 58, side: "home" },
+        { min: 66, side: "away" },
+        { min: 77, side: "away" },
+        { min: 88, side: "away" }
+      ]
+    }
+  }, "cs26", 90)
 ];
 
 function blankStats() {
