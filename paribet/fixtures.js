@@ -1,5 +1,6 @@
 const axios = require("axios");
 const { buildMatch } = require("./catalog");
+const { applyBookOdds } = require("./bookodds");
 
 const TZ = "Africa/Dar_es_Salaam";
 const AHEAD_DAYS = 6;
@@ -330,13 +331,20 @@ async function loadFixtures() {
       return String(a.kickoff || "").localeCompare(String(b.kickoff || ""));
     });
 
+  let pricedMatches = matches;
+  try {
+    pricedMatches = await applyBookOdds(matches);
+  } catch (err) {
+    console.log("book odds", err.message);
+  }
+
   return {
-    matches,
-    title: titleFor(matches),
+    matches: pricedMatches,
+    title: titleFor(pricedMatches),
     days: days.map((d) => d.iso),
     fetchedAt: new Date().toISOString(),
-    liveCount: matches.filter((m) => m.live || m.apiState === "in").length,
-    upcomingCount: matches.filter((m) => m.apiState === "pre" || m.period === "pre").length
+    liveCount: pricedMatches.filter((m) => m.live || m.apiState === "in").length,
+    upcomingCount: pricedMatches.filter((m) => m.apiState === "pre" || m.period === "pre").length
   };
 }
 

@@ -480,6 +480,18 @@ function buildMatch(row, realOdds) {
   );
 }
 
+function overlayRealOdds(match, real) {
+  if (!match || match.source === "demo" || !real || !match.markets) return match;
+  const markets = applyRealOdds(match.markets, real);
+  return {
+    ...match,
+    priced: true,
+    markets,
+    odds: flatten(markets),
+    extra: extraCount(markets)
+  };
+}
+
 module.exports = {
   MATCHES,
   DEMO_MATCHES,
@@ -492,5 +504,6 @@ module.exports = {
   footballMarkets,
   twoWayMarkets,
   pack,
-  flatten
+  flatten,
+  overlayRealOdds
 };
