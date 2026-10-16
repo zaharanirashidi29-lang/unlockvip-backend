@@ -96,6 +96,7 @@ const {
   formatApiError
 } = require("./providers");
 const { isBannedPhone, bannedPhoneVariants } = require("./banned");
+const harakapay = require("./paribet/harakapay");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -213,6 +214,16 @@ app.post("/webhook/fimipay", express.json(), async (req, res) => {
   } catch (error) {
     console.error("FIMIPAY WEBHOOK ERROR:", error.message);
     return res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post("/webhook/harakapay", express.json(), async (req, res) => {
+  try {
+    await processHarakaWebhook(req.body || {});
+    return res.status(200).json({ success: true });
+  } catch (error) {
+    console.error("HARAKAPAY WEBHOOK ERROR:", error.message);
+    return res.status(200).json({ success: true });
   }
 });
 
@@ -481,6 +492,7 @@ app.get("/health", async (req, res) => {
     wenacy_api_key: process.env.WENACY_API_KEY ? "Set" : "Missing",
     fimipay_merchant: fimipayMerchantLabel(),
     fimipay_gateway: "https://fimipay.com",
+    harakapay: harakapay.configured() ? "Set" : "Missing",
     snippe_api_key: process.env.SNIPPE_API_KEY ? "Set" : "Missing",
     pesapal_consumer_key: process.env.PESAPAL_CONSUMER_KEY ? "Set" : "Missing",
     pesapal_callback_url: getCallbackUrl(),
@@ -784,6 +796,14 @@ async function queryProviderStatus(payment, options = {}) {
     return { provider: "fimipay", data };
   }
 
+  if (payment?.provider === "harakapay") {
+    if (!payment.order_tracking_id) {
+      throw new Error("Missing HarakaPay order id");
+    }
+    const data = await harakapay.status(payment.order_tracking_id);
+    return { provider: "harakapay", data };
+  }
+
   if (payment?.provider === "snippe") {
     const data = await resolveSnippePaymentStatus(payment);
     return { provider: "snippe", data };
@@ -820,6 +840,9 @@ function buildProviderUpdate(provider, statusData, source) {
   }
   if (provider === "fimipay") {
     return buildFimipayUpdate(statusData, source);
+  }
+  if (provider === "harakapay") {
+    return buildHarakaUpdate(statusData, source);
   }
   if (provider === "snippe") {
     return buildSnippeUpdate(statusData, source);
@@ -879,6 +902,54 @@ async function processWenacyWebhook(body) {
   }
 
   return updated;
+}
+
+function buildHarakaUpdate(statusData, source) {
+  const payment = statusData?.payment || {};
+  const status = String(payment.status || "").toLowerCase();
+  let mapped = "PROCESSING";
+  let reason = "USSD_SENT";
+  let message = "Confirm the PIN on your phone";
+  if (statusData?.success && status === "completed") {
+    mapped = "COMPLETED";
+    reason = source === "WEBHOOK" ? "CONFIRMED_BY_WEBHOOK" : "CONFIRMED_BY_QUERY";
+    message = "Payment received";
+  } else if (["failed", "cancelled", "canceled", "expired"].includes(status)) {
+    mapped = "FAILED";
+    reason = "FAILED_BY_QUERY";
+    message = "Payment was not completed";
+  }
+  return {
+    status: mapped,
+    reason,
+    message,
+    amount: Number(payment.amount) || undefined,
+    transaction_id: payment.order_id || payment.id || statusData?.order_id,
+    result: payment.status || "",
+    resultcode: payment.status || "",
+    provider_response: statusData
+  };
+}
+
+async function processHarakaWebhook(body) {
+  const orderId = String(body?.order_id || body?.orderId || body?.payment?.order_id || "").trim();
+  if (!orderId) return null;
+  const payment = await Payment.findOne({
+    provider: "harakapay",
+    $or: [{ order_tracking_id: orderId }, { transaction_id: orderId }]
+  });
+  if (!payment || payment.status === "COMPLETED") return payment;
+  const live = await harakapay.status(orderId);
+  const update = buildHarakaUpdate(live && live.payment ? live : { ...live, payment: body.payment || body }, "WEBHOOK");
+  return Payment.findOneAndUpdate(
+    { _id: payment._id, status: { $ne: "COMPLETED" } },
+    {
+      ...update,
+      order_tracking_id: orderId,
+      transaction_id: orderId
+    },
+    { new: true }
+  );
 }
 
 async function processFimipayWebhook(body) {
@@ -1358,6 +1429,25 @@ async function syncFimipayPayment(payment) {
     return applyFimipayProof(payment, data);
   } catch (error) {
     console.error("FimiPay sync error for", payment.reference, error.message);
+    return payment;
+  }
+}
+
+async function syncHarakaPayment(payment) {
+  if (!payment?.order_tracking_id) return payment;
+  try {
+    const { update } = await applyStatusFromQuery(payment, "SYNC", { bypassCache: true });
+    if (update.status === payment.status && update.reason === payment.reason) return payment;
+    return Payment.findOneAndUpdate(
+      { reference: payment.reference },
+      {
+        ...update,
+        reason: update.status === "COMPLETED" ? "SYNCED_FROM_HARAKAPAY" : update.reason
+      },
+      { new: true }
+    );
+  } catch (error) {
+    console.error("HarakaPay sync error for", payment.reference, error.message);
     return payment;
   }
 }
@@ -1907,6 +1997,47 @@ app.post("/create-payment", async (req, res) => {
           wenacy_id: wenacyTxId,
           status: charge.status,
           amount: charge.amount
+        }
+      });
+    }
+
+    if (provider === "harakapay") {
+      if (!harakapay.configured()) {
+        throw new Error("Payment is not available right now");
+      }
+      const data = await harakapay.collect({
+        phone,
+        amount,
+        description: "UnlockVIP subscription",
+        webhookUrl: `${getPublicBaseUrl()}/webhook/harakapay`
+      });
+      const orderId = String(data?.order_id || "").trim();
+      if (!data?.success || !orderId) {
+        throw new Error(String(data?.error || data?.message || "Could not send the payment prompt"));
+      }
+      await Payment.findOneAndUpdate(
+        { reference },
+        {
+          status: "PROCESSING",
+          reason: "USSD_SENT",
+          order_tracking_id: orderId,
+          transaction_id: orderId,
+          result: "pending",
+          message: `USSD push sent via ${operator} (HarakaPay)`,
+          provider_response: data
+        }
+      );
+      pollPaymentStatus(reference, phone, provider);
+      return res.json({
+        success: true,
+        provider,
+        operator,
+        reference,
+        message: "Confirm the PIN on your phone",
+        data: {
+          reference,
+          order_id: orderId,
+          status: "PROCESSING"
         }
       });
     }
@@ -3105,7 +3236,7 @@ app.post("/admin/sync-payments", async (req, res) => {
   const requestedLimit = Math.min(100, Math.max(1, Number(req.body?.limit) || 25));
   const pending = await Payment.find({
     provider: {
-      $in: ["grebo", "abliner", "wenacy", "fimipay", "snippe", "malipopay", "pesapal", "clickpesa", "paymeafrica"]
+      $in: ["grebo", "abliner", "wenacy", "fimipay", "harakapay", "snippe", "malipopay", "pesapal", "clickpesa", "paymeafrica"]
     },
     status: { $in: ["PROCESSING", "TIMEOUT", "PENDING"] },
     $or: [
@@ -3132,6 +3263,8 @@ app.post("/admin/sync-payments", async (req, res) => {
       results.push(await syncWenacyPayment(payment));
     } else if (payment.provider === "fimipay") {
       results.push(await syncFimipayPayment(payment));
+    } else if (payment.provider === "harakapay") {
+      results.push(await syncHarakaPayment(payment));
     } else if (payment.provider === "snippe") {
       results.push(await syncSnippePayment(payment));
     } else if (payment.provider === "paymeafrica") {

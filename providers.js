@@ -25,11 +25,11 @@ function isPesapalPhone(phone) {
 
 function resolveProvider(phone) {
   toInternationalPhone(phone);
-  return "fimipay";
+  return "harakapay";
 }
 
 function getRoutingLabel() {
-  return "All networks → FimiPay (Kopo)";
+  return "All networks → HarakaPay";
 }
 
 function formatApiError(error, provider) {
