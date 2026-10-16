@@ -143,6 +143,7 @@ function toMatch(event, comp, sport, sportLabel) {
   const kickoff = comp.startDate || event.date;
   const id = `e${comp.id || event.id}`;
   const realOdds = pickOdds(comp);
+  const priced = Boolean(realOdds.home || realOdds.away || realOdds.draw || realOdds.over || realOdds.under);
   return buildMatch(
     {
       id,
@@ -159,7 +160,8 @@ function toMatch(event, comp, sport, sportLabel) {
       period: periodFrom(status, sport),
       live: apiState === "in",
       score: scoreOf(home, away, sport, apiState),
-      completedAt: apiState === "post" ? new Date().toISOString() : ""
+      completedAt: apiState === "post" ? new Date().toISOString() : "",
+      priced
     },
     realOdds
   );
@@ -274,15 +276,29 @@ function titleFor(matches) {
   return `${Number(first.slice(8))} ${monthName(first.slice(5, 7))} – ${Number(last.slice(8))} ${monthName(last.slice(5, 7))}`;
 }
 
+function withBookOdds(target, source) {
+  if (!source?.priced || target?.priced) return target;
+  return {
+    ...target,
+    priced: true,
+    odds: source.odds,
+    markets: source.markets,
+    extra: source.extra
+  };
+}
+
 function preferRow(prev, next) {
   if (!prev) return next;
   if (!next) return prev;
   const rank = (m) => (m.live || m.apiState === "in" ? 3 : m.apiState === "post" || m.period === "ft" ? 1 : 2);
-  if (rank(next) > rank(prev)) return next;
-  if (rank(next) < rank(prev)) return prev;
-  if ((next.score || "").length > (prev.score || "").length) return next;
-  if ((next.displayClock || "").length > (prev.displayClock || "").length) return next;
-  return next;
+  let chosen = next;
+  if (rank(next) > rank(prev)) chosen = next;
+  else if (rank(next) < rank(prev)) chosen = prev;
+  else if ((next.score || "").length > (prev.score || "").length) chosen = next;
+  else if ((next.displayClock || "").length > (prev.displayClock || "").length) chosen = next;
+  else if (prev.priced && !next.priced) chosen = prev;
+  const other = chosen === next ? prev : next;
+  return withBookOdds(chosen, other);
 }
 
 async function loadFixtures() {
