@@ -310,7 +310,29 @@ const DEMO_MATCHES = [
         { min: 85, side: "home" }
       ]
     }
-  }, "cs43", 117)
+  }, "cs43", 117),
+  demoMatch({
+    id: "demo-flavian-bay",
+    league: "Elite Star League",
+    home: "Flavian Bay",
+    away: "Jupiler SC",
+    day: "2026-10-16",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 2,
+      away: 3,
+      htHome: 1,
+      htAway: 2,
+      times: [
+        { min: 11, side: "home" },
+        { min: 24, side: "away" },
+        { min: 39, side: "away" },
+        { min: 62, side: "home" },
+        { min: 78, side: "away" }
+      ]
+    }
+  }, "cs23", 137)
 ];
 
 function blankStats() {
