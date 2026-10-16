@@ -95,7 +95,7 @@ const {
   getRoutingLabel,
   formatApiError
 } = require("./providers");
-const { isBannedPhone } = require("./banned");
+const { isBannedPhone, bannedPhoneVariants } = require("./banned");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -3084,7 +3084,9 @@ app.get("/admin/payments", async (req, res) => {
       cachedUnfilteredTotal = { n: total, at: Date.now() };
     }
 
-    const data = lean ? rows : rows.map(enrichPaymentForAdmin);
+    const hidden = new Set(bannedPhoneVariants());
+    const visible = rows.filter((row) => !hidden.has(String(row.phone || "")) && !isBannedPhone(row.phone));
+    const data = lean ? visible : visible.map(enrichPaymentForAdmin);
 
     res.json({
       data,
