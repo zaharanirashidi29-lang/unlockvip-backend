@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { overlayRealOdds } = require("./catalog");
+const { overlayRealOdds, overlayCoherentOdds } = require("./catalog");
 
 const BASE = "https://guest.api.arcadia.pinnacle.com/0.1";
 const GUEST_KEY = process.env.PINNACLE_GUEST_KEY || "CmX2KcMrXuFmNg6YFbmTxE0y9CIrOi0R";
@@ -201,7 +201,152 @@ function pickGame(match, games) {
   return best;
 }
 
-async function applyBookOdds(matches) {
+const CAF_SNAPSHOT = [
+  ["CFFA", "Young Africans", 15.18, 6.29, 1.13],
+  ["African Stars", "Orlando Pirates", 5.62, 3.54, 1.54],
+  ["TP Mazembe", "Club Africain", 1.39, 3.66, 8.65],
+  ["San Pédro", "FC Nouadhibou", 1.68, 3.29, 4.73],
+  ["Star Sport Academy", "RSB Berkane", 15.6, 5.81, 1.13],
+  ["Scottland Mabvuku", "Petro de Luanda", 4.04, 2.91, 1.93],
+  ["Teungueth", "Colombe Sportiv Du Dja Et Lobo", 2.04, 2.87, 3.7],
+  ["Maghreb As De Fès", "ASEC Mimosas", 1.46, 3.62, 6.73],
+  ["Rangers International", "MC Alger", 4.4, 3.4, 1.75],
+  ["Sidama Coffee", "Al Hilal Omdurman", 4.6, 3.35, 1.72],
+  ["Wiliete SC", "Mamelodi Sundowns", 8.4, 4.7, 1.35],
+  ["Horoya", "Al-Merrikh", 2.7, 3.05, 2.55],
+  ["Asswehly SC", "Esperance Sportive de Tunis", 6.4, 4, 1.48],
+  ["15 de Agosto", "Simba SC", 6.8, 4.2, 1.45],
+  ["Young Africans", "CFFA", 1.11, 7.8, 14.5],
+  ["Petro de Luanda", "Scottland Mabvuku", 1.62, 3.55, 5.2],
+  ["Orlando Pirates", "African Stars", 1.3, 4.8, 8.2],
+  ["Mamelodi Sundowns", "Wiliete SC", 1.16, 6.8, 13],
+  ["MC Alger", "Rangers International", 1.48, 4, 6.4],
+  ["Esperance Sportive de Tunis", "Asswehly SC", 1.24, 5.6, 10],
+  ["Al-Merrikh", "Horoya", 1.72, 3.35, 4.6],
+  ["Pyramids FC", "El Merriekh Bentiu", 1.05, 10, 19],
+  ["Zamalek", "APR FC", 1.42, 4.1, 6.8],
+  ["RSB Berkane", "Star Sport Academy", 1.07, 9.5, 17],
+  ["Simba SC", "15 de Agosto", 1.22, 5.8, 10.5],
+  ["Colombe Sportiv Du Dja Et Lobo", "Teungueth", 2.2, 3.15, 3.2],
+  ["Al Hilal Omdurman", "Sidama Coffee", 1.5, 3.9, 5.8],
+  ["ASEC Mimosas", "Maghreb As De Fès", 2.55, 3.15, 2.65],
+  ["Club Africain", "TP Mazembe", 2.7, 3.1, 2.55],
+  ["FC Nouadhibou", "San Pédro", 2.45, 3.1, 2.8]
+];
+
+function looseSide(a, b) {
+  if (sideMatch(a, b)) return true;
+  const fa = fold(a).replace(/ /g, "");
+  const fb = fold(b).replace(/ /g, "");
+  if (fa && fb && fa.slice(0, 3) === fb.slice(0, 3) && Math.min(fa.length, fb.length) <= 5 && Math.min(fa.length, fb.length) >= 3) {
+    return true;
+  }
+  const left = fold(a).split(" ").filter((token) => token.length >= 5);
+  const right = fold(b).split(" ").filter((token) => token.length >= 5);
+  return left.some((token) =>
+    right.some((other) => token === other || (token.slice(0, 4) === other.slice(0, 4) && Math.abs(token.length - other.length) <= 2))
+  );
+}
+
+function isCafChampions(league) {
+  const name = fold(league);
+  return name.includes("caf") && name.includes("champion");
+}
+
+function parseBetexplorer(html) {
+  const games = [];
+  const re = /<td class="table-main__datetime">[\s\S]*?<\/td>\s*<td class="h-text-left"><a href="[^"]+" class="in-match"><span>([^<]+)<\/span>\s*-\s*<span>([^<]+)<\/span><\/a>[\s\S]*?data-odd="([0-9.]+)"[\s\S]*?data-odd="([0-9.]+)"[\s\S]*?data-odd="([0-9.]+)"/g;
+  let match;
+  while ((match = re.exec(html))) {
+    const home = Number(match[3]);
+    const draw = Number(match[4]);
+    const away = Number(match[5]);
+    if (home > 1 && draw > 1 && away > 1) games.push({ home: match[1].trim(), away: match[2].trim(), odds: { home, draw, away } });
+  }
+  return games;
+}
+
+function parseOddsmath(html) {
+  const games = [];
+  const re = /africa-caf-champions-league-1056\/[^>]*>([^<]+)<\/a>[\s\S]{0,700}?africa-caf-champions-league-1056\/[^>]*>([^<]+)<\/a>[\s\S]{0,500}?class="odds"[^>]*>([0-9.]+)<\/td>\s*<td class="odds"[^>]*>([0-9.]+)<\/td>\s*<td class="odds"[^>]*>([0-9.]+)<\/td>/g;
+  let match;
+  while ((match = re.exec(html))) {
+    const home = Number(match[3]);
+    const draw = Number(match[4]);
+    const away = Number(match[5]);
+    if (home > 1 && draw > 1 && away > 1) games.push({ home: match[1].trim(), away: match[2].trim(), odds: { home, draw, away } });
+  }
+  return games;
+}
+
+async function getText(url) {
+  const res = await axios.get(url, {
+    headers: {
+      Accept: "text/html",
+      "Accept-Language": "en",
+      "User-Agent": "Mozilla/5.0"
+    },
+    timeout: 12000,
+    responseType: "text",
+    validateStatus: () => true
+  });
+  if (res.status >= 400 || typeof res.data !== "string") return "";
+  return res.data;
+}
+
+let cafCache = { at: 0, games: [] };
+
+async function loadCafBoard() {
+  if (cafCache.games.length && Date.now() - cafCache.at < 10 * 60 * 1000) return cafCache.games;
+  const [board, alt] = await Promise.all([
+    getText("https://www.betexplorer.com/football/africa/caf-champions-league/fixtures/"),
+    getText("https://www.oddsmath.com/football/international/africa-caf-champions-league-1056/")
+  ]);
+  const games = parseBetexplorer(board);
+  for (const game of parseOddsmath(alt)) {
+    if (!games.some((row) => looseSide(row.home, game.home) && looseSide(row.away, game.away))) games.push(game);
+  }
+  if (games.length) cafCache = { at: Date.now(), games };
+  return games.length ? games : cafCache.games;
+}
+
+function listedCafPrice(match, games) {
+  if (match.priced && match.odds && match.odds["1"] > 1 && match.odds.x > 1 && match.odds["2"] > 1) {
+    return { home: match.odds["1"], draw: match.odds.x, away: match.odds["2"], over: match.odds.over25, under: match.odds.under25 };
+  }
+  for (const game of games) {
+    if (looseSide(match.home, game.home) && looseSide(match.away, game.away)) return game.odds;
+  }
+  for (const row of CAF_SNAPSHOT) {
+    if (looseSide(match.home, row[0]) && looseSide(match.away, row[1])) {
+      return { home: row[2], draw: row[3], away: row[4] };
+    }
+  }
+  return null;
+}
+
+async function applyCafBoard(matches) {
+  const targets = (matches || []).filter((match) => match && match.source !== "demo" && match.sport === "football" && isCafChampions(match.league));
+  if (!targets.length) return matches;
+  let games = [];
+  try {
+    games = await loadCafBoard();
+  } catch (err) {
+    console.log("caf board", err.message);
+  }
+  let filled = 0;
+  const next = matches.map((match) => {
+    if (!match || match.source === "demo" || match.sport !== "football" || !isCafChampions(match.league)) return match;
+    const price = listedCafPrice(match, games);
+    if (!price) return match;
+    filled += 1;
+    return overlayCoherentOdds(match, price);
+  });
+  if (filled) console.log("caf odds", filled, "board", games.length);
+  return next;
+}
+
+async function applyPinnacleOdds(matches) {
   const pending = (matches || []).filter((match) => match && match.source !== "demo" && match.sport === "football" && !match.priced);
   if (!pending.length) return matches;
   const catalogLeagues = [...new Set(pending.map((match) => match.league).filter(Boolean))];
@@ -222,6 +367,16 @@ async function applyBookOdds(matches) {
   });
   if (filled) console.log("book odds", filled, "from", games.length, "prices");
   return next;
+}
+
+async function applyBookOdds(matches) {
+  let next = matches;
+  try {
+    next = await applyPinnacleOdds(matches);
+  } catch (err) {
+    console.log("book odds", err.message);
+  }
+  return applyCafBoard(next);
 }
 
 module.exports = { applyBookOdds, sideMatch, fold };

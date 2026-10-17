@@ -587,6 +587,209 @@ function overlayRealOdds(match, real) {
   };
 }
 
+function fact(n) {
+  let x = 1;
+  for (let i = 2; i <= n; i += 1) x *= i;
+  return x;
+}
+
+function pois(k, lambda) {
+  if (!(lambda >= 0)) return 0;
+  return (Math.exp(-lambda) * Math.pow(lambda, k)) / fact(k);
+}
+
+function fairProbs(home, draw, away) {
+  const inv = [1 / home, 1 / draw, 1 / away];
+  const sum = inv[0] + inv[1] + inv[2];
+  return { p1: inv[0] / sum, px: inv[1] / sum, p2: inv[2] / sum };
+}
+
+function fitLambdas(p1, px, p2) {
+  let best = { lh: 1.2, la: 1.1 };
+  let bestErr = Infinity;
+  for (let total = 16; total <= 34; total += 1) {
+    for (let share = 15; share <= 85; share += 2) {
+      const lh = (total / 10) * (share / 100);
+      const la = total / 10 - lh;
+      let h = 0;
+      let d = 0;
+      let a = 0;
+      for (let i = 0; i <= 7; i += 1) {
+        for (let j = 0; j <= 7; j += 1) {
+          const p = pois(i, lh) * pois(j, la);
+          if (i > j) h += p;
+          else if (i === j) d += p;
+          else a += p;
+        }
+      }
+      const err = (h - p1) ** 2 + (d - px) ** 2 + (a - p2) ** 2;
+      if (err < bestErr) {
+        bestErr = err;
+        best = { lh, la };
+      }
+    }
+  }
+  return best;
+}
+
+function priceOf(prob) {
+  if (!(prob > 0.004)) return 51;
+  const n = (1 / prob) * 0.93;
+  if (!Number.isFinite(n)) return 51;
+  return o(Math.min(51, Math.max(1.02, n)));
+}
+
+function goalMatrix(lh, la) {
+  const rows = [];
+  for (let i = 0; i <= 7; i += 1) {
+    rows[i] = [];
+    for (let j = 0; j <= 7; j += 1) rows[i][j] = pois(i, lh) * pois(j, la);
+  }
+  return rows;
+}
+
+function sumGoals(rows, pred) {
+  let n = 0;
+  for (let i = 0; i < rows.length; i += 1) {
+    for (let j = 0; j < rows[i].length; j += 1) {
+      if (pred(i, j)) n += rows[i][j];
+    }
+  }
+  return n;
+}
+
+function halfTimeFullTime(lh, la) {
+  const buckets = { 11: 0, x1: 0, 21: 0, "1x": 0, xx: 0, "2x": 0, 12: 0, x2: 0, 22: 0 };
+  const lh1 = lh * 0.45;
+  const la1 = la * 0.45;
+  const lh2 = lh * 0.55;
+  const la2 = la * 0.55;
+  for (let htH = 0; htH <= 4; htH += 1) {
+    for (let htA = 0; htA <= 4; htA += 1) {
+      for (let sh = 0; sh <= 5; sh += 1) {
+        for (let sa = 0; sa <= 5; sa += 1) {
+          const p = pois(htH, lh1) * pois(htA, la1) * pois(sh, lh2) * pois(sa, la2);
+          const ftH = htH + sh;
+          const ftA = htA + sa;
+          const ht = htH > htA ? "1" : htH === htA ? "x" : "2";
+          const ft = ftH > ftA ? "1" : ftH === ftA ? "x" : "2";
+          const key = ht + ft;
+          buckets[key] += p;
+        }
+      }
+    }
+  }
+  return buckets;
+}
+
+function coherentMarkets(real) {
+  const home = Number(real.home);
+  const draw = Number(real.draw);
+  const away = Number(real.away);
+  const markets = footballMarkets(0);
+  if (!(home > 1 && draw > 1 && away > 1)) return markets;
+  const { p1, px, p2 } = fairProbs(home, draw, away);
+  const { lh, la } = fitLambdas(p1, px, p2);
+  const rows = goalMatrix(lh, la);
+  const half = goalMatrix(lh * 0.45, la * 0.45);
+  const both = sumGoals(rows, (i, j) => i > 0 && j > 0);
+  const htft = halfTimeFullTime(lh, la);
+  const goal = lh + la + 0.45;
+  const prices = {
+    1: home,
+    x: draw,
+    2: away,
+    "1x": priceOf(p1 + px),
+    12: priceOf(p1 + p2),
+    x2: priceOf(px + p2),
+    dnb1: priceOf(p1 / (p1 + p2)),
+    dnb2: priceOf(p2 / (p1 + p2)),
+    btts_y: priceOf(both),
+    btts_n: priceOf(1 - both),
+    ng1: priceOf(lh / goal),
+    ng0: priceOf(0.45 / goal),
+    ng2: priceOf(la / goal),
+    over05: priceOf(sumGoals(rows, (i, j) => i + j >= 1)),
+    under05: priceOf(sumGoals(rows, (i, j) => i + j === 0)),
+    over15: priceOf(sumGoals(rows, (i, j) => i + j >= 2)),
+    under15: priceOf(sumGoals(rows, (i, j) => i + j <= 1)),
+    over25: real.over > 1 ? o(real.over) : priceOf(sumGoals(rows, (i, j) => i + j >= 3)),
+    under25: real.under > 1 ? o(real.under) : priceOf(sumGoals(rows, (i, j) => i + j <= 2)),
+    over35: priceOf(sumGoals(rows, (i, j) => i + j >= 4)),
+    under35: priceOf(sumGoals(rows, (i, j) => i + j <= 3)),
+    over45: priceOf(sumGoals(rows, (i, j) => i + j >= 5)),
+    under45: priceOf(sumGoals(rows, (i, j) => i + j <= 4)),
+    over55: priceOf(sumGoals(rows, (i, j) => i + j >= 6)),
+    under55: priceOf(sumGoals(rows, (i, j) => i + j <= 5)),
+    ah_h: o(home),
+    ah_a: priceOf(px + p2),
+    ht1: priceOf(sumGoals(half, (i, j) => i > j)),
+    htx: priceOf(sumGoals(half, (i, j) => i === j)),
+    ht2: priceOf(sumGoals(half, (i, j) => j > i)),
+    eg0: priceOf(sumGoals(rows, (i, j) => i + j === 0)),
+    eg1: priceOf(sumGoals(rows, (i, j) => i + j === 1)),
+    eg2: priceOf(sumGoals(rows, (i, j) => i + j === 2)),
+    eg3: priceOf(sumGoals(rows, (i, j) => i + j === 3)),
+    eg4: priceOf(sumGoals(rows, (i, j) => i + j >= 4)),
+    th15: priceOf(sumGoals(rows, (i) => i >= 2)),
+    ta15: priceOf(sumGoals(rows, (i, j) => j >= 2)),
+    th05: priceOf(sumGoals(rows, (i) => i >= 1)),
+    ta05: priceOf(sumGoals(rows, (i, j) => j >= 1)),
+    wtn1: priceOf(sumGoals(rows, (i, j) => i > 0 && j === 0)),
+    wtn2: priceOf(sumGoals(rows, (i, j) => j > 0 && i === 0)),
+    csy1: priceOf(sumGoals(rows, (i, j) => j === 0)),
+    csy2: priceOf(sumGoals(rows, (i) => i === 0)),
+    h15h: priceOf(sumGoals(rows, (i, j) => i >= j + 2)),
+    h15a: priceOf(1 - sumGoals(rows, (i, j) => i >= j + 2)),
+    h25h: priceOf(sumGoals(rows, (i, j) => i >= j + 3)),
+    h25a: priceOf(1 - sumGoals(rows, (i, j) => i >= j + 3)),
+    hf11: priceOf(htft["11"]),
+    hfx1: priceOf(htft.x1),
+    hf21: priceOf(htft["21"]),
+    hf1x: priceOf(htft["1x"]),
+    hfxx: priceOf(htft.xx),
+    hf2x: priceOf(htft["2x"]),
+    hf12: priceOf(htft["12"]),
+    hfx2: priceOf(htft.x2),
+    hf22: priceOf(htft["22"]),
+    ht_o05: priceOf(sumGoals(half, (i, j) => i + j >= 1)),
+    ht_u05: priceOf(sumGoals(half, (i, j) => i + j === 0)),
+    ht_o15: priceOf(sumGoals(half, (i, j) => i + j >= 2)),
+    ht_u15: priceOf(sumGoals(half, (i, j) => i + j <= 1)),
+    btts1h: priceOf(sumGoals(half, (i, j) => i > 0 && j > 0)),
+    btts1h_n: priceOf(1 - sumGoals(half, (i, j) => i > 0 && j > 0)),
+    "1_gg": priceOf(sumGoals(rows, (i, j) => i > j && j > 0)),
+    x_gg: priceOf(sumGoals(rows, (i, j) => i === j && i > 0)),
+    "2_gg": priceOf(sumGoals(rows, (i, j) => j > i && i > 0)),
+    "1_o25": priceOf(sumGoals(rows, (i, j) => i > j && i + j >= 3)),
+    x_o25: priceOf(sumGoals(rows, (i, j) => i === j && i + j >= 3)),
+    "2_o25": priceOf(sumGoals(rows, (i, j) => j > i && i + j >= 3))
+  };
+  for (const [label] of [
+    ["0-0"], ["1-0"], ["0-1"], ["1-1"], ["2-0"], ["0-2"], ["2-1"], ["1-2"],
+    ["2-2"], ["3-0"], ["0-3"], ["3-1"], ["1-3"], ["3-2"], ["2-3"], ["3-3"]
+  ]) {
+    const [homeGoals, awayGoals] = label.split("-").map(Number);
+    prices["cs" + label.replace("-", "")] = priceOf(rows[homeGoals] && rows[homeGoals][awayGoals] ? rows[homeGoals][awayGoals] : 0);
+  }
+  return markets.map((g) => ({
+    ...g,
+    sels: g.sels.map((s) => (prices[s.key] > 1 ? { ...s, odd: o(prices[s.key]) } : s))
+  }));
+}
+
+function overlayCoherentOdds(match, real) {
+  if (!match || match.source === "demo" || !real) return match;
+  const markets = coherentMarkets(real);
+  return {
+    ...match,
+    priced: true,
+    markets,
+    odds: flatten(markets),
+    extra: extraCount(markets)
+  };
+}
+
 module.exports = {
   MATCHES,
   DEMO_MATCHES,
@@ -600,5 +803,6 @@ module.exports = {
   twoWayMarkets,
   pack,
   flatten,
-  overlayRealOdds
+  overlayRealOdds,
+  overlayCoherentOdds
 };
