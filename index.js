@@ -1651,6 +1651,34 @@ function pollPaymentStatus(localReference, phone, provider) {
   }, intervalMs);
 }
 
+app.post("/login", async (req, res) => {
+  try {
+    const raw = String(req.body?.phone || "").replace(/\D/g, "");
+    const password = String(req.body?.password || "");
+    const phone = raw.startsWith("0") ? "255" + raw.slice(1) : raw;
+    if (!/^255\d{9}$/.test(phone)) {
+      return res.status(400).json({ success: false, error: "Enter the phone number with digits only" });
+    }
+    if (!password) {
+      return res.status(400).json({ success: false, error: "Enter your password" });
+    }
+    if (isBannedPhone(phone)) {
+      return res.status(403).json({ success: false, error: "This number is blocked" });
+    }
+    const user = await mongoose.connection.collection("paribet_users").findOne({ phone });
+    if (!user || String(user.password || "") !== password) {
+      return res.status(401).json({ success: false, error: "Wrong phone number or password" });
+    }
+    return res.json({
+      success: true,
+      user: { phone: user.phone, username: user.username || "" }
+    });
+  } catch (err) {
+    console.log("login error", err.message);
+    return res.status(500).json({ success: false, error: "Login failed" });
+  }
+});
+
 app.post("/create-payment", async (req, res) => {
   let reference;
   let provider;
