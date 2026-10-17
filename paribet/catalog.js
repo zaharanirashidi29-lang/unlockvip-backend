@@ -364,8 +364,8 @@ const DEMO_MATCHES = [
     home: "Castle FC",
     away: "Albert SEC",
     day: "2026-10-17",
-    time: "16:00",
-    kickMin: 16 * 60,
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
     script: {
       home: 1,
       away: 5,
@@ -387,8 +387,8 @@ const DEMO_MATCHES = [
     home: "Viper FC",
     away: "Relay FC SC",
     day: "2026-10-17",
-    time: "16:00",
-    kickMin: 16 * 60,
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
     script: {
       home: 4,
       away: 4,
