@@ -357,7 +357,55 @@ const DEMO_MATCHES = [
         { min: 88, side: "away" }
       ]
     }
-  }, "cs26", 90)
+  }, "cs26", 90),
+  demoMatch({
+    id: "demo-castle-fc",
+    league: "Elite Star League",
+    home: "Castle FC",
+    away: "Albert SEC",
+    day: "2026-10-17",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 1,
+      away: 5,
+      htHome: 1,
+      htAway: 2,
+      times: [
+        { min: 8, side: "home" },
+        { min: 21, side: "away" },
+        { min: 36, side: "away" },
+        { min: 57, side: "away" },
+        { min: 73, side: "away" },
+        { min: 86, side: "away" }
+      ]
+    }
+  }, "cs15", 10),
+  demoMatch({
+    id: "demo-viper-fc",
+    league: "Elite Star League",
+    home: "Viper FC",
+    away: "Relay FC SC",
+    day: "2026-10-17",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 4,
+      away: 4,
+      htHome: 2,
+      htAway: 2,
+      times: [
+        { min: 9, side: "home" },
+        { min: 18, side: "away" },
+        { min: 31, side: "home" },
+        { min: 43, side: "away" },
+        { min: 59, side: "home" },
+        { min: 68, side: "away" },
+        { min: 77, side: "home" },
+        { min: 89, side: "away" }
+      ]
+    }
+  }, "cs44", 15)
 ];
 
 function blankStats() {
