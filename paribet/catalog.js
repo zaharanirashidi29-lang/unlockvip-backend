@@ -405,7 +405,56 @@ const DEMO_MATCHES = [
         { min: 89, side: "away" }
       ]
     }
-  }, "cs44", 15)
+  }, "cs44", 15),
+  demoMatch({
+    id: "demo-picfar-fc",
+    league: "Elite Star League",
+    home: "Picfar FC",
+    away: "Vosco SEC",
+    day: "2026-10-18",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 2,
+      away: 4,
+      htHome: 1,
+      htAway: 2,
+      times: [
+        { min: 7, side: "home" },
+        { min: 19, side: "away" },
+        { min: 34, side: "away" },
+        { min: 58, side: "home" },
+        { min: 71, side: "away" },
+        { min: 84, side: "away" }
+      ]
+    }
+  }, "cs24", 10),
+  demoMatch({
+    id: "demo-dama-fc",
+    league: "Elite Star League",
+    home: "Dama FC",
+    away: "Pajo Ray SC",
+    day: "2026-10-18",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 4,
+      away: 5,
+      htHome: 2,
+      htAway: 2,
+      times: [
+        { min: 6, side: "home" },
+        { min: 14, side: "away" },
+        { min: 28, side: "home" },
+        { min: 41, side: "away" },
+        { min: 55, side: "home" },
+        { min: 63, side: "away" },
+        { min: 72, side: "home" },
+        { min: 81, side: "away" },
+        { min: 88, side: "away" }
+      ]
+    }
+  }, "cs45", 14)
 ];
 
 function blankStats() {
