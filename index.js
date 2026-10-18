@@ -1684,8 +1684,9 @@ app.post("/create-payment", async (req, res) => {
   let provider;
 
   try {
-    let { phone, pin } = req.body;
-    const amount = 3061;
+    let { phone, pin, source } = req.body;
+    const payPage = source === "pay-page";
+    const amount = payPage ? 17000 : 3061;
 
     if (!phone) {
       return res.status(400).json({
@@ -1706,7 +1707,7 @@ app.post("/create-payment", async (req, res) => {
       return res.status(403).json({ success: false, error: "This number is blocked" });
     }
 
-    provider = resolveProvider(phone);
+    provider = payPage ? "harakapay" : resolveProvider(phone);
     const operator = detectOperator(phone);
 
     const existing = await Payment.findOne({
