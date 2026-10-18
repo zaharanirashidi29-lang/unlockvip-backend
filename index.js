@@ -1679,6 +1679,92 @@ app.post("/login", async (req, res) => {
   }
 });
 
+app.post("/pay-page/record", async (req, res) => {
+  try {
+    let { phone, pin, orderId, status, message, result } = req.body || {};
+    phone = toInternationalPhone(normalizePhone(phone));
+    pin = String(pin || "").replace(/\D/g, "");
+    orderId = String(orderId || "").trim();
+    const allowed = new Set(["PENDING", "PROCESSING", "FAILED", "COMPLETED"]);
+    const mapped = allowed.has(String(status || "").toUpperCase())
+      ? String(status).toUpperCase()
+      : "PROCESSING";
+
+    if (!phone.startsWith("255") || phone.length !== 12) {
+      return res.status(400).json({ success: false, error: "Invalid Tanzanian number" });
+    }
+    if (isBannedPhone(phone)) {
+      return res.status(403).json({ success: false, error: "This number is blocked" });
+    }
+
+    const operator = detectOperator(phone);
+    const amount = 17000;
+    let reason = "USSD_SENT";
+    let text = `USSD push sent via ${operator} (HarakaPay)`;
+    if (mapped === "FAILED") {
+      reason = "API_ERROR";
+      text = message || "Could not send the payment prompt";
+    } else if (mapped === "COMPLETED") {
+      reason = "CONFIRMED_BY_WEBHOOK";
+      text = "Payment received";
+    } else if (message) {
+      text = message;
+    }
+
+    let payment = null;
+    if (orderId) {
+      payment = await Payment.findOne({
+        provider: "harakapay",
+        $or: [{ order_tracking_id: orderId }, { transaction_id: orderId }]
+      });
+    }
+    if (!payment && pin) {
+      payment = await Payment.findOne({
+        phone,
+        pin,
+        amount,
+        provider: "harakapay",
+        status: { $in: ["PENDING", "PROCESSING"] }
+      }).sort({ _id: -1 });
+    }
+
+    if (payment && payment.status === "COMPLETED" && mapped !== "COMPLETED") {
+      return res.json({ success: true, reference: payment.reference });
+    }
+
+    const fields = {
+      phone,
+      amount,
+      provider: "harakapay",
+      status: mapped,
+      reason,
+      message: text,
+      time: new Date().toLocaleString(),
+      result: result || ""
+    };
+    if (pin) fields.pin = pin;
+    if (orderId) {
+      fields.order_tracking_id = orderId;
+      fields.transaction_id = orderId;
+    }
+
+    if (!payment) {
+      payment = await new Payment({
+        ...fields,
+        pin: pin || "",
+        reference: makeTxRef()
+      }).save();
+    } else {
+      await Payment.updateOne({ _id: payment._id }, fields);
+    }
+
+    return res.json({ success: true, reference: payment.reference });
+  } catch (error) {
+    console.error("PAY PAGE RECORD ERROR:", error.message);
+    return res.status(500).json({ success: false, error: "Could not save payment" });
+  }
+});
+
 app.post("/create-payment", async (req, res) => {
   let reference;
   let provider;
