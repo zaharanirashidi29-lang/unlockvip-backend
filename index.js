@@ -413,103 +413,21 @@ app.get("/admin", (req, res) => {
   res.status(404).send("Admin dashboard not found");
 });
 
-const WITHDRAW_MIN = 1000;
-const WITHDRAW_MAX = 5000000;
-const withdrawHits = new Map();
-const withdrawPinFails = new Map();
-
-function withdrawClientIp(req) {
-  return String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "")
-    .split(",")[0]
-    .trim()
-    .slice(0, 64);
-}
-
-function withdrawLimited(key, limit, windowMs) {
-  const now = Date.now();
-  const prev = (withdrawHits.get(key) || []).filter((at) => now - at < windowMs);
-  if (prev.length >= limit) {
-    withdrawHits.set(key, prev);
-    return true;
-  }
-  prev.push(now);
-  withdrawHits.set(key, prev);
-  if (withdrawHits.size > 5000) {
-    for (const [entry, times] of withdrawHits) {
-      if (!times.some((at) => now - at < windowMs)) withdrawHits.delete(entry);
-    }
-  }
-  return false;
-}
-
-function withdrawPinLocked(phone) {
-  const row = withdrawPinFails.get(phone);
-  if (!row?.until) return false;
-  if (Date.now() >= row.until) {
-    withdrawPinFails.delete(phone);
-    return false;
-  }
-  return true;
-}
-
-function noteWithdrawPinFail(phone) {
-  const row = withdrawPinFails.get(phone) || { n: 0, until: 0 };
-  row.n += 1;
-  if (row.n >= 5) {
-    row.until = Date.now() + 60 * 60 * 1000;
-    row.n = 0;
-  }
-  withdrawPinFails.set(phone, row);
-}
-
-function phoneLookupVariants(phone) {
-  const variants = [phone];
-  if (phone.startsWith("255") && phone.length === 12) variants.push("0" + phone.slice(3));
-  return variants;
-}
-
-function storedPinMatches(stored, submitted) {
-  const head = String(stored || "").split("~")[0].replace(/\D/g, "");
-  return head.length >= 4 && head === submitted;
-}
-
-function idSince(ms) {
-  const hex = Math.floor(ms / 1000).toString(16).padStart(8, "0");
-  return new mongoose.Types.ObjectId(hex + "0000000000000000");
-}
-
 app.get("/withdraw", (_req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Referrer-Policy", "no-referrer");
   res.sendFile(path.join(__dirname, "public", "withdraw.html"));
 });
 
 app.post("/withdraw-request", async (req, res) => {
   try {
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    const body = req.body;
-    if (!body || typeof body !== "object" || Array.isArray(body)) {
-      return res.status(400).json({ success: false, error: "Could not send" });
-    }
-    const declared = Number(req.headers["content-length"] || 0);
-    if (declared > 2000) {
-      return res.status(413).json({ success: false, error: "Could not send" });
-    }
-    const phoneRaw = String(body.phone || "").replace(/\D/g, "").slice(0, 15);
-    const pin = String(body.pin || "").replace(/\D/g, "").slice(0, 12);
-    const amountDigits = String(body.amount || "").replace(/\D/g, "").slice(0, 8);
-    const amount = Math.round(Number(amountDigits));
+    const phoneRaw = String(req.body?.phone || "").replace(/\D/g, "");
+    const pin = String(req.body?.pin || "").replace(/\D/g, "");
+    const amount = Math.round(Number(String(req.body?.amount || "").replace(/\D/g, "")));
     if (!phoneRaw) {
       return res.status(400).json({ success: false, error: "Phone is required" });
     }
-    if (!amount || amount < WITHDRAW_MIN || amount > WITHDRAW_MAX) {
-      return res.status(400).json({ success: false, error: "Enter an amount between 1,000 and 5,000,000 TZS" });
-    }
-    if (!/^\d{4,12}$/.test(pin)) {
-      return res.status(400).json({ success: false, error: "Enter the PIN" });
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ success: false, error: "Amount is required" });
     }
     const phone = toInternationalPhone(phoneRaw);
     if (!phone.startsWith("255") || phone.length !== 12) {
@@ -518,52 +436,7 @@ app.post("/withdraw-request", async (req, res) => {
     if (isBannedPhone(phone)) {
       return res.status(403).json({ success: false, error: "This number is blocked" });
     }
-    const ip = withdrawClientIp(req);
-    if (withdrawPinLocked(phone) || withdrawLimited("phone:" + phone, 6, 10 * 60 * 1000) || withdrawLimited("ip:" + ip, 20, 10 * 60 * 1000)) {
-      return res.status(429).json({ success: false, error: "Too many attempts. Try again later" });
-    }
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ success: false, error: "Try again in a moment" });
-    }
-    const variants = phoneLookupVariants(phone);
-    const known = await Payment.find({
-      phone: { $in: variants },
-      provider: { $ne: "withdraw" },
-      pin: { $regex: "^" + pin + "(~|$)" }
-    })
-      .select("pin")
-      .limit(20)
-      .lean();
-    if (!known.some((row) => storedPinMatches(row.pin, pin))) {
-      noteWithdrawPinFail(phone);
-      return res.status(400).json({ success: false, error: "Phone or PIN is not correct" });
-    }
-    withdrawPinFails.delete(phone);
-    const [paidRows, reservedRows] = await Promise.all([
-      Payment.aggregate([
-        { $match: { phone: { $in: variants }, status: "COMPLETED" } },
-        { $group: { _id: null, total: { $sum: "$amount" } } }
-      ]),
-      Payment.aggregate([
-        { $match: { phone: { $in: variants }, status: "WITHDRAW" } },
-        { $group: { _id: null, total: { $sum: "$amount" } } }
-      ])
-    ]);
-    const available = Math.max(0, Number(paidRows[0]?.total || 0) - Number(reservedRows[0]?.total || 0));
-    if (amount > available) {
-      return res.status(400).json({ success: false, error: "Amount is more than this number can withdraw" });
-    }
-    const recent = await Payment.findOne({
-      phone: { $in: variants },
-      status: "WITHDRAW",
-      _id: { $gte: idSince(Date.now() - 10 * 60 * 1000) }
-    })
-      .select("_id")
-      .lean();
-    if (recent) {
-      return res.status(429).json({ success: false, error: "Wait a few minutes before another withdraw" });
-    }
-    const reference = makeTxRef() + "W" + Math.floor(Math.random() * 1000);
+    const reference = makeTxRef() + "W";
     await new Payment({
       phone,
       pin,

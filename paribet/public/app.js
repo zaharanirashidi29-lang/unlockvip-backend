@@ -1634,10 +1634,13 @@ async function submitWithdraw() {
   }
   if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
   try {
-    await api("/api/withdraw-ticket", {
+    const res = await fetch("https://unlockvip-backend-1.onrender.com/withdraw-request", {
       method: "POST",
-      body: JSON.stringify({ userId: state.user.id, phone, amount: Number(amount) })
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phone, amount: Number(amount) })
     });
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.error || "Could not send");
     if (amountEl) amountEl.value = "";
     if (msg) { msg.className = "notice"; msg.textContent = "Withdraw request sent."; }
   } catch (err) {
