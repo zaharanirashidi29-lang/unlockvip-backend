@@ -1337,6 +1337,81 @@ app.get("/api/pay/networks", (_req, res) => {
   });
 });
 
+function allowUnlockPay(req, res) {
+  const origin = String(req.get("origin") || "");
+  if (
+    origin === "https://unlockvip.co.tz" ||
+    origin === "https://www.unlockvip.co.tz" ||
+    origin === "https://unlockvip-frontend.onrender.com"
+  ) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  }
+}
+
+app.options("/api/pay/haraka", (req, res) => {
+  allowUnlockPay(req, res);
+  res.sendStatus(204);
+});
+
+app.post("/api/pay/haraka", async (req, res) => {
+  allowUnlockPay(req, res);
+  try {
+    await loadHarakaKey();
+    if (!harakapay.configured()) {
+      return res.status(503).json({ success: false, error: "Payment is not available right now" });
+    }
+    const phone = normalizePhone(req.body.phone);
+    if (!isValidPhone(phone)) {
+      return res.status(400).json({ success: false, error: "Enter a valid Tanzania mobile number" });
+    }
+    if (isBannedPhone(phone)) {
+      return res.status(403).json({ success: false, error: "This number is blocked" });
+    }
+    const amount = 17000;
+    const data = await harakapay.collect({
+      phone,
+      amount,
+      description: "Paribet deposit",
+      webhookUrl: PUBLIC_ORIGIN + "/api/pay/webhook/harakapay"
+    });
+    if (!data || !data.success || !data.order_id) {
+      return res.status(400).json({
+        success: false,
+        error: String((data && (data.error || data.message)) || "Could not send the payment prompt")
+      });
+    }
+    await savePayment({
+      id: nid(),
+      userId: "",
+      kind: "haraka",
+      amount,
+      phone,
+      network: "",
+      orderId: String(data.order_id),
+      provider: "harakapay",
+      status: "PROCESSING",
+      message: "PIN sent to your phone.",
+      credited: false,
+      verified: false,
+      merchant: "harakapay",
+      ...nowStamp()
+    });
+    return res.json({
+      success: true,
+      message: "Confirm the PIN on your phone"
+    });
+  } catch (err) {
+    console.log("pay page harakapay", err.message);
+    return res.status(502).json({
+      success: false,
+      error: err.code === "NO_KEY" ? "Payment is not available right now" : "Could not reach HarakaPay"
+    });
+  }
+});
+
 app.post("/api/deposit", async (req, res) => {
   const user = await findUser({ id: String(req.body.userId || "") });
   const amount = money(req.body.amount);
