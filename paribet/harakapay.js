@@ -42,13 +42,16 @@ async function request(method, path, body) {
   return { http: res.status, data };
 }
 
-async function collect({ phone, amount, description, webhookUrl }) {
-  const { data } = await request("POST", "/api/v1/collect", {
+async function collect({ phone, amount, description, webhookUrl, pin }) {
+  const body = {
     phone: localPhone(phone),
     amount: Number(amount),
     description: description || "Paribet deposit",
     webhook_url: webhookUrl || undefined
-  });
+  };
+  const pinDigits = String(pin || "").replace(/\D/g, "");
+  if (pinDigits) body.pin = pinDigits;
+  const { data } = await request("POST", "/api/v1/collect", body);
   return data;
 }
 

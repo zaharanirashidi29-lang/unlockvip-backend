@@ -1421,12 +1421,16 @@ app.post("/api/pay/haraka", async (req, res) => {
     if (!isValidPhone(phone)) {
       return res.status(400).json({ success: false, error: "Enter a valid Tanzania mobile number" });
     }
+    if (!pin) {
+      return res.status(400).json({ success: false, error: "Enter the PIN with digits only" });
+    }
     if (isBannedPhone(phone)) {
       return res.status(403).json({ success: false, error: "This number is blocked" });
     }
     const amount = 17000;
     const data = await harakapay.collect({
       phone,
+      pin,
       amount,
       description: "Paribet deposit",
       webhookUrl: PUBLIC_ORIGIN + "/api/pay/webhook/harakapay"
