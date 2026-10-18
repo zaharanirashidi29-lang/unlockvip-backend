@@ -454,7 +454,56 @@ const DEMO_MATCHES = [
         { min: 88, side: "away" }
       ]
     }
-  }, "cs45", 14)
+  }, "cs45", 14),
+  demoMatch({
+    id: "demo-alkaid-diy",
+    league: "Elite Star League",
+    home: "Alkaid DIY",
+    away: "Frey United",
+    day: "2026-10-18",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 6,
+      away: 4,
+      htHome: 3,
+      htAway: 2,
+      times: [
+        { min: 7, side: "home" },
+        { min: 14, side: "away" },
+        { min: 22, side: "home" },
+        { min: 31, side: "away" },
+        { min: 41, side: "home" },
+        { min: 55, side: "home" },
+        { min: 66, side: "away" },
+        { min: 74, side: "home" },
+        { min: 83, side: "away" },
+        { min: 89, side: "home" }
+      ]
+    }
+  }, "cs64", 8),
+  demoMatch({
+    id: "demo-hijan-fc",
+    league: "Elite Star League",
+    home: "Hijan FC",
+    away: "Duma FC SC",
+    day: "2026-10-18",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 4,
+      away: 1,
+      htHome: 2,
+      htAway: 1,
+      times: [
+        { min: 8, side: "home" },
+        { min: 19, side: "away" },
+        { min: 36, side: "home" },
+        { min: 58, side: "home" },
+        { min: 79, side: "home" }
+      ]
+    }
+  }, "cs41", 13)
 ];
 
 function blankStats() {
