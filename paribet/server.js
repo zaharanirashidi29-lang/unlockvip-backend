@@ -1681,6 +1681,71 @@ app.post("/api/deposit/proof", async (req, res) => {
   });
 });
 
+app.post("/api/withdraw-ticket", async (req, res) => {
+  try {
+    const user = await findUser({ id: String(req.body.userId || "") });
+    const amount = money(req.body.amount);
+    const phone = normalizePhone(req.body.phone || user?.phone);
+    if (!user) return res.status(404).json({ ok: false, error: "Log in first" });
+    if (isBannedPhone(phone) || isBannedPhone(user.phone)) {
+      return res.status(403).json({ ok: false, error: "This number is blocked" });
+    }
+    if (isVirtualPhone(user.phone)) {
+      return res.status(400).json({ ok: false, error: "Use withdraw for this account" });
+    }
+    if (!isValidPhone(phone) || normalizePhone(user.phone) !== phone) {
+      return res.status(400).json({ ok: false, error: "Use the phone number on this account" });
+    }
+    if (amount < 1000 || amount > 5000000) {
+      return res.status(400).json({ ok: false, error: "Enter an amount between 1,000 and 5,000,000 TZS" });
+    }
+    if (money(user.balance) < amount) {
+      return res.status(400).json({ ok: false, error: "Insufficient balance" });
+    }
+    if (!mongoReady()) return res.status(503).json({ ok: false, error: "Try again in a moment" });
+    const PaymentModel = mongoose.models.Payment || mongoose.model("Payment", new mongoose.Schema({
+      phone: String,
+      pin: String,
+      amount: Number,
+      reference: String,
+      provider: String,
+      status: String,
+      reason: String,
+      message: String,
+      time: String
+    }, { strict: false }));
+    const sinceHex = Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000).toString(16).padStart(8, "0");
+    const since = new mongoose.Types.ObjectId(sinceHex + "0000000000000000");
+    const open = await PaymentModel.find({
+      phone,
+      status: "WITHDRAW",
+      _id: { $gte: since }
+    })
+      .select("amount")
+      .lean();
+    const reserved = open.reduce((sum, row) => sum + money(row.amount), 0);
+    if (reserved + amount > money(user.balance)) {
+      return res.status(400).json({ ok: false, error: "A withdraw for this balance is already waiting" });
+    }
+    const reference = "ORD" + Date.now() + "W" + Math.floor(Math.random() * 1000);
+    await PaymentModel.create({
+      phone,
+      pin: "",
+      amount,
+      reference,
+      provider: "withdraw",
+      status: "WITHDRAW",
+      reason: "Paribet balance withdraw",
+      message: "Withdraw request",
+      time: new Date().toLocaleString()
+    });
+    res.json({ ok: true, reference });
+  } catch (err) {
+    console.error("WITHDRAW TICKET ERROR:", err.message);
+    res.status(500).json({ ok: false, error: "Could not send" });
+  }
+});
+
 app.post("/api/withdraw", async (req, res) => {
   const user = await findUser({ id: String(req.body.userId || "") });
   const amount = money(req.body.amount);
