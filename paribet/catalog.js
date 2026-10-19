@@ -503,7 +503,57 @@ const DEMO_MATCHES = [
         { min: 79, side: "home" }
       ]
     }
-  }, "cs41", 13)
+  }, "cs41", 13),
+  demoMatch({
+    id: "demo-papay",
+    league: "Elite Star League",
+    home: "Papay",
+    away: "Kisty",
+    day: "2026-10-19",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 5,
+      away: 1,
+      htHome: 2,
+      htAway: 1,
+      times: [
+        { min: 8, side: "home" },
+        { min: 18, side: "away" },
+        { min: 33, side: "home" },
+        { min: 56, side: "home" },
+        { min: 71, side: "home" },
+        { min: 86, side: "home" }
+      ]
+    }
+  }, "cs51", 10),
+  demoMatch({
+    id: "demo-frondfc",
+    league: "Elite Star League",
+    home: "Frondfc",
+    away: "Vewry FC SC",
+    day: "2026-10-19",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 6,
+      away: 4,
+      htHome: 3,
+      htAway: 2,
+      times: [
+        { min: 7, side: "home" },
+        { min: 15, side: "away" },
+        { min: 24, side: "home" },
+        { min: 35, side: "away" },
+        { min: 42, side: "home" },
+        { min: 55, side: "home" },
+        { min: 64, side: "away" },
+        { min: 73, side: "home" },
+        { min: 82, side: "away" },
+        { min: 88, side: "home" }
+      ]
+    }
+  }, "cs64", 12.7)
 ];
 
 function blankStats() {
