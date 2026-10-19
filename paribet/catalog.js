@@ -553,7 +553,54 @@ const DEMO_MATCHES = [
         { min: 88, side: "home" }
       ]
     }
-  }, "cs64", 12.7)
+  }, "cs64", 12.7),
+  demoMatch({
+    id: "demo-yustey-fc",
+    league: "Elite Star League",
+    home: "Yustey FC",
+    away: "Filbert Bay",
+    day: "2026-10-19",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 4,
+      away: 5,
+      htHome: 2,
+      htAway: 2,
+      times: [
+        { min: 8, side: "home" },
+        { min: 16, side: "away" },
+        { min: 29, side: "home" },
+        { min: 41, side: "away" },
+        { min: 56, side: "home" },
+        { min: 67, side: "away" },
+        { min: 74, side: "home" },
+        { min: 83, side: "away" },
+        { min: 89, side: "away" }
+      ]
+    }
+  }, "cs45", 10),
+  demoMatch({
+    id: "demo-frezee",
+    league: "Elite Star League",
+    home: "Frezee",
+    away: "Banca FC SC",
+    day: "2026-10-19",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 3,
+      away: 1,
+      htHome: 2,
+      htAway: 1,
+      times: [
+        { min: 7, side: "home" },
+        { min: 19, side: "away" },
+        { min: 38, side: "home" },
+        { min: 71, side: "home" }
+      ]
+    }
+  }, "cs31", 17)
 ];
 
 function blankStats() {
