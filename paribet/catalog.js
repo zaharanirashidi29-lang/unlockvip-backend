@@ -600,7 +600,56 @@ const DEMO_MATCHES = [
         { min: 71, side: "home" }
       ]
     }
-  }, "cs31", 17)
+  }, "cs31", 17),
+  demoMatch({
+    id: "demo-atletico-athetic",
+    league: "Crown Football League",
+    home: "Atletico Athetic",
+    away: "Santa Eadles",
+    day: "2026-10-20",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 6,
+      away: 1,
+      htHome: 3,
+      htAway: 1,
+      times: [
+        { min: 8, side: "home" },
+        { min: 18, side: "away" },
+        { min: 29, side: "home" },
+        { min: 41, side: "home" },
+        { min: 56, side: "home" },
+        { min: 72, side: "home" },
+        { min: 86, side: "home" }
+      ]
+    }
+  }, "cs61", 10),
+  demoMatch({
+    id: "demo-millbrook",
+    league: "Crown Football League",
+    home: "Millbrook",
+    away: "Eastvale Town SC",
+    day: "2026-10-20",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 4,
+      away: 4,
+      htHome: 2,
+      htAway: 2,
+      times: [
+        { min: 7, side: "home" },
+        { min: 16, side: "away" },
+        { min: 31, side: "home" },
+        { min: 43, side: "away" },
+        { min: 58, side: "home" },
+        { min: 67, side: "away" },
+        { min: 76, side: "home" },
+        { min: 88, side: "away" }
+      ]
+    }
+  }, "cs44", 23)
 ];
 
 function blankStats() {
