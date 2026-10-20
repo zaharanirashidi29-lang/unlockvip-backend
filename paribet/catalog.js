@@ -649,7 +649,57 @@ const DEMO_MATCHES = [
         { min: 88, side: "away" }
       ]
     }
-  }, "cs44", 23)
+  }, "cs44", 23),
+  demoMatch({
+    id: "demo-emerald-fc",
+    league: "Frontier Football League",
+    home: "Emerald FC",
+    away: "Eastvale Hawks",
+    day: "2026-10-20",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 2,
+      away: 4,
+      htHome: 1,
+      htAway: 2,
+      times: [
+        { min: 9, side: "home" },
+        { min: 18, side: "away" },
+        { min: 34, side: "away" },
+        { min: 58, side: "home" },
+        { min: 71, side: "away" },
+        { min: 84, side: "away" }
+      ]
+    }
+  }, "cs24", 10),
+  demoMatch({
+    id: "demo-greenfield-hawks",
+    league: "Frontier Football League",
+    home: "Greenfield Hawks",
+    away: "Whitecrest Athletic SC",
+    day: "2026-10-20",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 3,
+      away: 7,
+      htHome: 2,
+      htAway: 3,
+      times: [
+        { min: 7, side: "home" },
+        { min: 15, side: "away" },
+        { min: 26, side: "home" },
+        { min: 37, side: "away" },
+        { min: 44, side: "away" },
+        { min: 55, side: "home" },
+        { min: 63, side: "away" },
+        { min: 72, side: "away" },
+        { min: 81, side: "away" },
+        { min: 88, side: "away" }
+      ]
+    }
+  }, "cs37", 13)
 ];
 
 function blankStats() {
