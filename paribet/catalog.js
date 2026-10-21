@@ -747,7 +747,54 @@ const DEMO_MATCHES = [
         { min: 81, side: "away" }
       ]
     }
-  }, "cs25", 16)
+  }, "cs25", 16),
+  demoMatch({
+    id: "demo-lus-eagles",
+    league: "Liga Primera Football League",
+    home: "Lus Eagles",
+    away: "US Royals",
+    day: "2026-10-21",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 5,
+      away: 3,
+      htHome: 2,
+      htAway: 2,
+      times: [
+        { min: 8, side: "home" },
+        { min: 16, side: "away" },
+        { min: 29, side: "home" },
+        { min: 41, side: "away" },
+        { min: 55, side: "home" },
+        { min: 67, side: "home" },
+        { min: 78, side: "away" },
+        { min: 88, side: "home" }
+      ]
+    }
+  }, "cs53", 10),
+  demoMatch({
+    id: "demo-serie-ouro",
+    league: "Liga Primera Football League",
+    home: "Serie Ouro",
+    away: "Palmeras Titans",
+    day: "2026-10-21",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 4,
+      away: 1,
+      htHome: 2,
+      htAway: 1,
+      times: [
+        { min: 7, side: "home" },
+        { min: 19, side: "away" },
+        { min: 36, side: "home" },
+        { min: 58, side: "home" },
+        { min: 74, side: "home" }
+      ]
+    }
+  }, "cs41", 11.6)
 ];
 
 function blankStats() {
