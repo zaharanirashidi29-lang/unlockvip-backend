@@ -699,7 +699,55 @@ const DEMO_MATCHES = [
         { min: 88, side: "away" }
       ]
     }
-  }, "cs37", 13)
+  }, "cs37", 13),
+  demoMatch({
+    id: "demo-lazio-city",
+    league: "Liga Primera Football League",
+    home: "Lazio City",
+    away: "Lazio Nuova",
+    day: "2026-10-21",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 3,
+      away: 4,
+      htHome: 2,
+      htAway: 2,
+      times: [
+        { min: 8, side: "home" },
+        { min: 16, side: "away" },
+        { min: 29, side: "home" },
+        { min: 41, side: "away" },
+        { min: 58, side: "home" },
+        { min: 71, side: "away" },
+        { min: 84, side: "away" }
+      ]
+    }
+  }, "cs34", 10),
+  demoMatch({
+    id: "demo-real-lions",
+    league: "Liga Primera Football League",
+    home: "Real Lions",
+    away: "Sporting Athletic",
+    day: "2026-10-21",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 2,
+      away: 5,
+      htHome: 1,
+      htAway: 3,
+      times: [
+        { min: 7, side: "home" },
+        { min: 15, side: "away" },
+        { min: 28, side: "away" },
+        { min: 42, side: "away" },
+        { min: 56, side: "home" },
+        { min: 67, side: "away" },
+        { min: 81, side: "away" }
+      ]
+    }
+  }, "cs25", 16)
 ];
 
 function blankStats() {
