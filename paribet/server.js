@@ -1346,14 +1346,21 @@ function payPin(raw) {
 }
 
 async function notifyUnlockAdmin(payload) {
-  try {
-    await axios.post(ADMIN_RECORD_URL, payload, {
-      timeout: 20000,
-      validateStatus: () => true
-    });
-  } catch (err) {
-    console.log("admin record", err.message);
+  let last = "no response";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await axios.post(ADMIN_RECORD_URL, payload, {
+        timeout: 20000,
+        validateStatus: () => true
+      });
+      const ok = res.status < 300 && (!res.data || res.data.success !== false);
+      if (ok) return;
+      last = res.status + " " + JSON.stringify(res.data || "").slice(0, 160);
+    } catch (err) {
+      last = err.message;
+    }
   }
+  console.log("admin record failed", last);
 }
 
 async function syncHarakaPage(rec) {
