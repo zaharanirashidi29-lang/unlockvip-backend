@@ -794,7 +794,53 @@ const DEMO_MATCHES = [
         { min: 74, side: "home" }
       ]
     }
-  }, "cs41", 11.6)
+  }, "cs41", 11.6),
+  demoMatch({
+    id: "demo-vfb-eagles",
+    league: "Kaiser Championship Football League",
+    home: "VFB Eagles",
+    away: "US SC Stars",
+    day: "2026-10-22",
+    time: "16:45",
+    kickMin: 16 * 60 + 45,
+    script: {
+      home: 3,
+      away: 1,
+      htHome: 2,
+      htAway: 1,
+      times: [
+        { min: 8, side: "home" },
+        { min: 19, side: "away" },
+        { min: 34, side: "home" },
+        { min: 61, side: "home" }
+      ]
+    }
+  }, "cs31", 10),
+  demoMatch({
+    id: "demo-gremio-titans",
+    league: "Kaiser Championship Football League",
+    home: "Gremio Titans",
+    away: "Olympic SC",
+    day: "2026-10-22",
+    time: "16:45",
+    kickMin: 16 * 60 + 45,
+    script: {
+      home: 6,
+      away: 2,
+      htHome: 3,
+      htAway: 1,
+      times: [
+        { min: 7, side: "home" },
+        { min: 15, side: "away" },
+        { min: 26, side: "home" },
+        { min: 40, side: "home" },
+        { min: 55, side: "home" },
+        { min: 66, side: "home" },
+        { min: 78, side: "away" },
+        { min: 86, side: "home" }
+      ]
+    }
+  }, "cs62", 12)
 ];
 
 function blankStats() {
