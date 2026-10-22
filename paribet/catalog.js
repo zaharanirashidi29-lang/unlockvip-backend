@@ -840,7 +840,135 @@ const DEMO_MATCHES = [
         { min: 86, side: "home" }
       ]
     }
-  }, "cs62", 12)
+  }, "cs62", 12),
+  demoMatch({
+    id: "demo-pingin",
+    league: "Brasielra Championship Football League",
+    home: "Pingin",
+    away: "US Memisa",
+    day: "2026-10-22",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 4, away: 3, htHome: 2, htAway: 2,
+      times: [
+        { min: 8, side: "home" }, { min: 16, side: "away" }, { min: 29, side: "home" },
+        { min: 41, side: "away" }, { min: 58, side: "home" }, { min: 71, side: "away" },
+        { min: 84, side: "home" }
+      ]
+    }
+  }, "cs43", 10),
+  demoMatch({
+    id: "demo-vesca-city",
+    league: "Brasielra Championship Football League",
+    home: "Vesca City",
+    away: "Fendi SC",
+    day: "2026-10-22",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 3, away: 1, htHome: 2, htAway: 1,
+      times: [
+        { min: 7, side: "home" }, { min: 18, side: "away" },
+        { min: 35, side: "home" }, { min: 62, side: "home" }
+      ]
+    }
+  }, "cs31", 13),
+  demoMatch({
+    id: "demo-vegas",
+    league: "Brasielra Championship Football League",
+    home: "Vegas",
+    away: "Pawapaw SC",
+    day: "2026-10-23",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 3, away: 6, htHome: 1, htAway: 3,
+      times: [
+        { min: 8, side: "home" }, { min: 14, side: "away" }, { min: 25, side: "away" },
+        { min: 39, side: "away" }, { min: 55, side: "home" }, { min: 64, side: "away" },
+        { min: 73, side: "home" }, { min: 82, side: "away" }, { min: 88, side: "away" }
+      ]
+    }
+  }, "cs36", 10),
+  demoMatch({
+    id: "demo-city-sk",
+    league: "Brasielra Championship Football League",
+    home: "City SK",
+    away: "Cent Sky",
+    day: "2026-10-23",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 2, away: 1, htHome: 1, htAway: 1,
+      times: [
+        { min: 11, side: "home" }, { min: 33, side: "away" }, { min: 68, side: "home" }
+      ]
+    }
+  }, "cs21", 10),
+  demoMatch({
+    id: "demo-eagles",
+    league: "Brasielra Championship Football League",
+    home: "Eagles",
+    away: "Sky Hero",
+    day: "2026-10-23",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 3, away: 1, htHome: 1, htAway: 1,
+      times: [
+        { min: 9, side: "home" }, { min: 27, side: "away" },
+        { min: 58, side: "home" }, { min: 77, side: "home" }
+      ]
+    }
+  }, "cs31", 10),
+  demoMatch({
+    id: "demo-zesc",
+    league: "Brasielra Championship Football League",
+    home: "Zesc",
+    away: "Palmay",
+    day: "2026-10-23",
+    time: "22:45",
+    kickMin: 22 * 60 + 45,
+    script: {
+      home: 2, away: 4, htHome: 1, htAway: 2,
+      times: [
+        { min: 7, side: "home" }, { min: 16, side: "away" }, { min: 38, side: "away" },
+        { min: 61, side: "home" }, { min: 74, side: "away" }, { min: 86, side: "away" }
+      ]
+    }
+  }, "cs24", 10),
+  demoMatch({
+    id: "demo-kili",
+    league: "Brasielra Championship Football League",
+    home: "Kili",
+    away: "Frend",
+    day: "2026-10-24",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 2, away: 1, htHome: 1, htAway: 1,
+      times: [
+        { min: 10, side: "home" }, { min: 29, side: "away" }, { min: 64, side: "home" }
+      ]
+    }
+  }, "cs21", 10),
+  demoMatch({
+    id: "demo-ipsky",
+    league: "Brasielra Championship Football League",
+    home: "Ipsky",
+    away: "Zeco United",
+    day: "2026-10-24",
+    time: "16:00",
+    kickMin: 16 * 60,
+    script: {
+      home: 4, away: 1, htHome: 2, htAway: 1,
+      times: [
+        { min: 8, side: "home" }, { min: 21, side: "away" },
+        { min: 36, side: "home" }, { min: 59, side: "home" }, { min: 80, side: "home" }
+      ]
+    }
+  }, "cs41", 10)
 ];
 
 function blankStats() {
